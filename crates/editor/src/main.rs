@@ -32,6 +32,7 @@ OPTIONS:
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
         --window            Open the scene in a window with a live viewport
+        --testscene         Load the engine's all-features test scene
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
 
@@ -103,6 +104,7 @@ struct Options {
     command: Option<String>,
     out: Option<String>,
     window: bool,
+    testscene: bool,
     print_schema: bool,
     help: bool,
 }
@@ -119,9 +121,23 @@ fn run(args: &[String]) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to render schema: {e}")));
     }
 
+    let editor = build_editor(&options)?;
+    let entities = editor.list_entities();
+    serde_json::to_string_pretty(&entities)
+        .map_err(|e| CliError::Message(format!("failed to serialize entities: {e}")))
+}
+
+/// Build the editor for the options: a `--testscene`, a `--scene` file (or a
+/// new scene), then any command batch, saving when `--out` is given.
+fn build_editor(options: &Options) -> Result<Editor, CliError> {
     let mut editor = Editor::new();
 
-    if let Some(scene) = &options.scene {
+    if options.testscene {
+        let (scene, assets) = testscene::build();
+        *editor.scene_mut() = scene;
+        *editor.assets_mut() = assets;
+        editor.scene_mut().update_transforms();
+    } else if let Some(scene) = &options.scene {
         editor
             .open_or_new(scene)
             .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
@@ -144,9 +160,7 @@ fn run(args: &[String]) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
     }
 
-    let entities = editor.list_entities();
-    serde_json::to_string_pretty(&entities)
-        .map_err(|e| CliError::Message(format!("failed to serialize entities: {e}")))
+    Ok(editor)
 }
 
 fn parse_args(args: &[String]) -> Result<Options, CliError> {
@@ -172,6 +186,10 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
             "--window" => {
                 reject_inline(&inline, &flag)?;
                 options.window = true;
+            }
+            "--testscene" => {
+                reject_inline(&inline, &flag)?;
+                options.testscene = true;
             }
             "--scene" | "-s" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
@@ -241,28 +259,7 @@ fn wants_window(args: &[String]) -> bool {
 
 /// Build the scene from the options, then run it in a window until closed.
 fn run_windowed(options: &Options) -> Result<(), CliError> {
-    let mut editor = Editor::new();
-    if let Some(scene) = &options.scene {
-        editor
-            .open_or_new(scene)
-            .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
-    }
-    if let Some(source) = &options.command {
-        let json = read_commands(source)?;
-        let commands = parse_commands(&json)
-            .map_err(|e| CliError::Message(format!("invalid command batch: {e}")))?;
-        for (index, command) in commands.into_iter().enumerate() {
-            editor
-                .apply(command)
-                .map_err(|e| CliError::Message(format!("command #{} failed: {e}", index + 1)))?;
-        }
-    }
-    if let Some(out) = &options.out {
-        editor
-            .save(out)
-            .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
-    }
-
+    let editor = build_editor(options)?;
     let config = WindowConfig {
         title: "Noctis Editor".to_string(),
         width: 1280,

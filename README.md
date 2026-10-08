@@ -27,6 +27,7 @@ to work in this repository.
 cargo test --workspace        # run everything
 cargo run -p runtime          # run the sample scene headlessly
 cargo run -p runtime -- --window --demo   # open the demo scene in a window
+cargo run -p editor -- --testscene --window   # open the all-features test scene
 cargo run -p editor -- --help # drive the editor from the CLI / scripts
 ```
 
@@ -44,4 +45,6 @@ presents to a real window (`noctis-runtime --window`, `noctis-editor --window`),
 and the editor draws an [egui](https://github.com/emilk/egui) interface (outliner,
 inspector, live transform editing) over the viewport. The whole engine also runs
 headlessly for CI. Click-to-select viewport picking is implemented (a ray vs.
-mesh bounds); gizmo/handle dragging is the next milestone.
+mesh bounds); the editor can spawn primitive objects (cube/sphere/plane/light/
+camera) with the Outliner's **Add** buttons, and `--testscene` loads the
+all-features test scene. Gizmo/handle dragging is the next milestone.

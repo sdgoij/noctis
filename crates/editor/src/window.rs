@@ -9,6 +9,17 @@ use math::{Quat, vec3};
 use platform::{AppDriver, PlatformError, WindowConfig, egui};
 
 use crate::editor::Editor;
+use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams};
+
+/// The kind of object the "Add" buttons create.
+#[derive(Clone, Copy, Debug)]
+enum NewObject {
+    Cube,
+    Sphere,
+    Plane,
+    Light,
+    Camera,
+}
 
 // `Key::Letter` indices for the WASD keys (A = 0).
 const KEY_A: Key = Key::Letter(0);
@@ -64,8 +75,94 @@ impl EditorDriver {
         (self.input.key_down(positive) as i32 - self.input.key_down(negative) as i32) as f32
     }
 
+    /// Spawn a new object into the scene and select it.
+    fn add_object(&mut self, kind: NewObject) {
+        // Lay new objects out on a loose grid so they do not overlap at origin.
+        let count = self.editor.list_entities().len() as f32;
+        let column = count % 5.0;
+        let row = (count / 5.0).floor();
+        let offset = vec3((column - 2.0) * 2.0, 0.5, row * 2.0);
+
+        match kind {
+            NewObject::Cube => self.add_mesh_object(
+                "Cube",
+                "primitives/cube",
+                testscene::primitives::cube(1.0),
+                offset,
+            ),
+            NewObject::Sphere => self.add_mesh_object(
+                "Sphere",
+                "primitives/sphere",
+                testscene::primitives::sphere(0.5, 16, 24),
+                offset,
+            ),
+            NewObject::Plane => self.add_mesh_object(
+                "Plane",
+                "primitives/plane",
+                testscene::primitives::plane(5.0, 2),
+                offset,
+            ),
+            NewObject::Light => {
+                let entity = self.editor.spawn("Sun", None);
+                let _ = self.editor.set_translation(entity, vec3(0.0, 6.0, 0.0));
+                let _ = self.editor.add_light(entity, LightParams::default());
+                self.selected = Some(entity);
+            }
+            NewObject::Camera => {
+                let entity = self.editor.spawn("Camera", None);
+                let _ = self.editor.set_translation(entity, vec3(0.0, 2.0, 6.0));
+                let _ = self.editor.add_camera(entity, CameraParams::default());
+                self.selected = Some(entity);
+            }
+        }
+        self.editor.scene_mut().update_transforms();
+    }
+
+    fn add_mesh_object(
+        &mut self,
+        label: &str,
+        path: &str,
+        mesh: ecs::assets::Mesh,
+        position: math::Vec3,
+    ) {
+        // Register the primitive once; later objects reuse the same mesh asset.
+        if self.editor.assets().meshes.handle(path).is_none() {
+            self.editor.register_mesh(path, mesh);
+        }
+        let name = format!("{label} {}", self.editor.list_entities().len() + 1);
+        let entity = self.editor.spawn(name, None);
+        let _ = self.editor.set_translation(entity, position);
+        let _ = self.editor.set_mesh_renderer(
+            entity,
+            MeshRendererParams {
+                mesh: Some(AssetRef::path(path)),
+                material: Some(AssetRef::path("$default")),
+                ..Default::default()
+            },
+        );
+        self.selected = Some(entity);
+    }
+
     fn outliner(&mut self, ui: &mut egui::Ui) {
         ui.heading("Outliner");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Add:");
+            if ui.button("Cube").clicked() {
+                self.add_object(NewObject::Cube);
+            }
+            if ui.button("Sphere").clicked() {
+                self.add_object(NewObject::Sphere);
+            }
+            if ui.button("Plane").clicked() {
+                self.add_object(NewObject::Plane);
+            }
+            if ui.button("Light").clicked() {
+                self.add_object(NewObject::Light);
+            }
+            if ui.button("Camera").clicked() {
+                self.add_object(NewObject::Camera);
+            }
+        });
         ui.separator();
         let entities = self.editor.list_entities();
         egui::ScrollArea::vertical().show(ui, |ui| {

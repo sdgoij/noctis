@@ -77,10 +77,12 @@ cargo build -p script --features slag   # enable the real JavaScript backend
 - `script`: the real Slag backend is the optional `slag` feature (its build
   fetches a large `test262` submodule); the default build uses a testable host.
 - `editor`/`runtime` open a live windowed viewport (`--window`). The editor draws
-  egui panels (outliner, inspector, transform editing) and supports
-  click-to-select viewport picking (a ray vs. mesh AABBs); there is no
-  gizmo/handle dragging yet, and the windowed loop is not unit-tested (it blocks
-  and needs a display).
+  egui panels (outliner, inspector, transform editing), supports click-to-select
+  viewport picking (a ray vs. mesh AABBs), and spawns primitive objects
+  (cube/sphere/plane/light/camera) from the Outliner's **Add** buttons;
+  `--testscene` loads the all-features test scene. There is no gizmo/handle
+  dragging yet, and the windowed loop is not unit-tested (it blocks and needs a
+  display).
 
 ## Commit messages
 
