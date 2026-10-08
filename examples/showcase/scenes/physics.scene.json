@@ -1,0 +1,460 @@
+{
+  "name": "Physics Playground",
+  "format_version": 1,
+  "mode": "3d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Physics Root",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": []
+    },
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 7.0, 15.0], "rotation": [-0.1891, 0.0, 0.0, 0.982], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "camera",
+          "projection": { "kind": "perspective", "fov_y": 0.95, "near": 0.1, "far": 200.0 },
+          "is_active": true,
+          "priority": 0,
+          "clear_color": [0.06, 0.07, 0.1, 1.0],
+          "hdr": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Sun",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 10.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "light",
+          "kind": { "kind": "directional", "direction": [-0.3, -1.0, -0.5] },
+          "color": [1.0, 0.97, 0.92],
+          "intensity": 3.4,
+          "cast_shadows": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [30.0, 1.0, 30.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "fixed",
+          "mass": 0.0,
+          "restitution": 0.1,
+          "friction": 0.9,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [15.0, 0.05, 15.0] },
+          "offset": [0.0, -0.05, 0.0],
+          "is_sensor": false,
+          "friction": 0.9,
+          "restitution": 0.1
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Ramp",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-3.0, 1.2, 2.0], "rotation": [0.0, 0.0, -0.1741, 0.9847], "scale": [4.0, 0.2, 3.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "fixed",
+          "mass": 0.0,
+          "restitution": 0.1,
+          "friction": 0.7,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [2.0, 0.1, 1.5] },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.7,
+          "restitution": 0.1
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Drop Cube",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 6.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "dynamic",
+          "mass": 1.0,
+          "restitution": 0.1,
+          "friction": 0.8,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [0.5, 0.5, 0.5] },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.8,
+          "restitution": 0.1
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Drop Cube Stack",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.7, 8.0, 0.4], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "dynamic",
+          "mass": 0.6,
+          "restitution": 0.15,
+          "friction": 0.8,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.3, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [0.4, 0.4, 0.4] },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.8,
+          "restitution": 0.15
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Bouncy Ball",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-1.5, 7.0, 1.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [0.8, 0.8, 0.8] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/sphere",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "dynamic",
+          "mass": 1.0,
+          "restitution": 0.92,
+          "friction": 0.3,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "ball", "radius": 0.4 },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.3,
+          "restitution": 0.92
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Heavy Ball",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [1.6, 9.0, 0.5], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.2, 1.2, 1.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/sphere",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "dynamic",
+          "mass": 8.0,
+          "restitution": 0.2,
+          "friction": 0.5,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "ball", "radius": 0.6 },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.5,
+          "restitution": 0.2
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Capsule Drop",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-2.5, 5.0, -1.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/capsule",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "dynamic",
+          "mass": 1.2,
+          "restitution": 0.25,
+          "friction": 0.6,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "capsule", "half_height": 0.5, "radius": 0.4 },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.6,
+          "restitution": 0.25
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Pillar",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-5.0, 1.5, -2.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 3.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cylinder",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "fixed",
+          "mass": 0.0,
+          "restitution": 0.2,
+          "friction": 0.8,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cylinder", "half_height": 1.5, "radius": 0.5 },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.8,
+          "restitution": 0.2
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Moving Platform",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [3.0, 1.0, -1.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [2.0, 0.2, 2.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "kinematic",
+          "mass": 0.0,
+          "restitution": 0.0,
+          "friction": 0.9,
+          "gravity_scale": 0.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [1.0, 0.1, 1.0] },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.9,
+          "restitution": 0.0
+        },
+        {
+          "type": "script",
+          "source": null,
+          "path": "scripts/bobber.js",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Sensor Zone",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 1.5, -4.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [3.0, 3.0, 3.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        },
+        {
+          "type": "rigid_body",
+          "body_type": "fixed",
+          "mass": 0.0,
+          "restitution": 0.0,
+          "friction": 0.5,
+          "gravity_scale": 1.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "cuboid", "half_extents": [1.5, 1.5, 1.5] },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": true,
+          "friction": 0.5,
+          "restitution": 0.0
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Guide Text",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 5.5, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "text",
+          "text": "PHYSICS PLAYGROUND",
+          "font": "assets/fonts/NoctisSans.ttf",
+          "size": 0.5,
+          "color": [0.6, 0.9, 1.0, 1.0],
+          "anchor": "center",
+          "depth_test": false
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Disabled Marker",
+      "parent": 0,
+      "active": false,
+      "visible": true,
+      "transform": { "translation": [0.0, 1.0, -8.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "Hidden Marker",
+      "parent": 0,
+      "active": true,
+      "visible": false,
+      "transform": { "translation": [-8.0, 1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/sphere",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        }
+      ]
+    }
+  ]
+}

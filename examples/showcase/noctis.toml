@@ -1,0 +1,54 @@
+# The Noctis Showcase — an example project demonstrating every engine feature.
+#
+# See README.md for how to open, run, edit, and build it. The manifest is parsed
+# strictly: a typo here is an error, not silent forward compatibility.
+
+[project]
+name = "Noctis Showcase"
+version = "0.1.0"
+description = "An example project exercising every Noctis engine feature."
+
+[project.settings]
+default_scene = "scenes/showcase.scene.json"
+mode = "3d"
+gravity = [0.0, -9.81, 0.0]
+
+# The conventional directories, written out explicitly (they are the defaults).
+[paths]
+assets = "assets"
+scenes = "scenes"
+prefabs = "prefabs"
+scripts = "scripts"
+
+[window]
+title = "Noctis Showcase"
+width = 1600
+height = 900
+
+[render]
+hdr = true
+sample_count = 1
+
+# Explicit scene list: controls the editor's ordering and the display names.
+[[scene]]
+path = "scenes/showcase.scene.json"
+name = "Showcase"
+
+[[scene]]
+path = "scenes/physics.scene.json"
+name = "Physics Playground"
+
+[[scene]]
+path = "scenes/menu.scene.json"
+name = "2D Menu"
+
+# Build targets: each produces a self-contained folder under dist/.
+[[build]]
+name = "showcase"
+scene = "scenes/showcase.scene.json"
+output = "dist/showcase"
+
+[[build]]
+name = "showcase-physics"
+scene = "scenes/physics.scene.json"
+output = "dist/showcase-physics"

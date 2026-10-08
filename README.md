@@ -33,7 +33,13 @@ cargo run -p runtime -- --window --demo   # open the demo scene in a window
 cargo run -p editor  -- --testscene --window   # open the all-features test scene
 cargo run -p editor  -- --help            # drive the editor from the CLI / scripts
 cargo run -p runtime --bin noctis -- --help    # the project build/rename tool
+
+cargo run -p runtime -- --project examples/showcase --window   # the example project
 ```
+
+[`examples/showcase`](examples/showcase) is a complete example project — scenes,
+prefabs, scripts, and generated assets exercising every engine feature. See its
+[README](examples/showcase/README.md).
 
 Enable the real JavaScript backend:
 

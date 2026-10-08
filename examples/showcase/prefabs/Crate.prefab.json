@@ -1,0 +1,51 @@
+{
+  "name": "Crate",
+  "scene": {
+    "name": "Crate",
+    "format_version": 1,
+    "mode": "3d",
+    "entities": [
+      {
+        "id": 0,
+        "name": "Crate",
+        "parent": null,
+        "active": true,
+        "visible": true,
+        "transform": { "translation": [0.0, 0.5, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+        "components": [
+          {
+            "type": "mesh_renderer",
+            "mesh": "primitives/cube",
+            "material": "$default",
+            "cast_shadows": true,
+            "receive_shadows": true
+          },
+          {
+            "type": "rigid_body",
+            "body_type": "dynamic",
+            "mass": 1.0,
+            "restitution": 0.2,
+            "friction": 0.7,
+            "gravity_scale": 1.0,
+            "linear_velocity": [0.0, 0.0, 0.0],
+            "angular_velocity": [0.0, 0.5, 0.0]
+          },
+          {
+            "type": "collider",
+            "shape": { "kind": "cuboid", "half_extents": [0.5, 0.5, 0.5] },
+            "offset": [0.0, 0.0, 0.0],
+            "is_sensor": false,
+            "friction": 0.7,
+            "restitution": 0.2
+          },
+          {
+            "type": "script",
+            "source": null,
+            "path": "scripts/spinner.js",
+            "enabled": true
+          }
+        ]
+      }
+    ]
+  }
+}

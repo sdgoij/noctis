@@ -1,0 +1,220 @@
+{
+  "name": "2D Menu",
+  "format_version": 1,
+  "mode": "2d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Menu Root",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": []
+    },
+    {
+      "id": 1,
+      "name": "Menu Camera",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 10.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "camera",
+          "projection": { "kind": "orthographic", "height": 10.0, "near": 0.1, "far": 100.0 },
+          "is_active": true,
+          "priority": 0,
+          "clear_color": [0.03, 0.04, 0.07, 1.0],
+          "hdr": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Fill Light",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 5.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "light",
+          "kind": { "kind": "directional", "direction": [0.0, 0.0, -1.0] },
+          "color": [1.0, 1.0, 1.0],
+          "intensity": 2.5,
+          "cast_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Backdrop",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, -2.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [20.0, 12.0, 0.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Title",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 2.4, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "text",
+          "text": "NOCTIS",
+          "font": "assets/fonts/NoctisSans.ttf",
+          "size": 1.4,
+          "color": [1.0, 0.92, 0.45, 1.0],
+          "anchor": "center",
+          "depth_test": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Subtitle",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.7, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "text",
+          "text": "A GAME ENGINE",
+          "font": "assets/fonts/NoctisSans.ttf",
+          "size": 0.45,
+          "color": [0.6, 0.72, 0.9, 1.0],
+          "anchor": "center",
+          "depth_test": false
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Spinner",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-4.5, -3.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.2, 1.2, 0.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        },
+        {
+          "type": "script",
+          "source": null,
+          "path": "scripts/spin2d.js",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Play Button",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, -2.2, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [4.5, 1.2, 0.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Play Label",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, -2.2, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "text",
+          "text": "PLAY",
+          "font": "assets/fonts/NoctisSans.ttf",
+          "size": 0.7,
+          "color": [0.05, 0.05, 0.1, 1.0],
+          "anchor": "center",
+          "depth_test": false
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Menu Music",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "audio_source",
+          "clip": "assets/audio/chime.wav",
+          "volume": 0.6,
+          "pitch": 1.0,
+          "looped": false,
+          "playing": true,
+          "spatial": false,
+          "max_distance": 20.0,
+          "rolloff": 1.0
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Disabled Marker",
+      "parent": 0,
+      "active": false,
+      "visible": true,
+      "transform": { "translation": [4.5, -3.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 0.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Hidden Marker",
+      "parent": 0,
+      "active": true,
+      "visible": false,
+      "transform": { "translation": [0.0, -4.5, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 0.2] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/sphere",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+# Noctis Showcase
+
+An example **project** for Noctis: a real directory with a `noctis.toml`, several
+scenes, prefabs, scripts, and assets, chosen to exercise every part of the
+engine — all thirteen components, glTF models with PBR textures, sounds, fonts,
+physics, 3D and 2D scenes, and the whole JavaScript scripting API.
+
+It is both a demo to open and a working reference for how a Noctis project is
+put together (see [`docs/project.md`](../../docs/project.md) for the design).
+
+## Layout
+
+```
+showcase/
+  noctis.toml                    # the manifest: settings, scene list, build targets
+  scenes/
+    showcase.scene.json          # the broad scene — every component kind
+    physics.scene.json           # a physics playground (all collider shapes)
+    menu.scene.json              # a 2D (orthographic) menu
+  prefabs/
+    Crate.prefab.json            # a spinning, physical crate
+    Lamp.prefab.json             # a post with a light on a child entity
+  scripts/
+    spinner.js  bobber.js  spin2d.js  orbit_player.js  spawner.js
+  assets/
+    models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
+    textures/panel_normal.png    # a loose normal map (+ a `srgb = false` sidecar)
+    audio/chime.wav              # a one-shot bell arpeggio (non-spatial)
+    audio/engine_hum.wav         # a looping drone (spatial)
+    fonts/NoctisSans.ttf         # a font, generated from scratch (see below)
+  tools/                         # the generators that produced the assets
+```
+
+## Run it
+
+```sh
+# The default scene, in a window (Esc closes it).
+cargo run -p runtime -- --project examples/showcase --window
+
+# Headless: import the assets, run 120 physics/script frames, print a summary.
+cargo run -p runtime -- --project examples/showcase --frames 120 --print-summary
+
+# Headless with the GPU on a dummy surface (needs a graphics adapter).
+cargo run -p runtime -- --project examples/showcase --render --frames 4
+```
+
+Run a different scene with `--scene`, project-relative:
+
+```sh
+cargo run -p runtime -- --project examples/showcase --scene scenes/physics.scene.json --window
+cargo run -p runtime -- --project examples/showcase --scene scenes/menu.scene.json --window
+```
+
+**To actually execute the JavaScript**, build the runtime with the off-by-default
+`slag` feature (it pulls in the JS engine, so the build is heavier):
+
+```sh
+cargo run --manifest-path crates/runtime/Cargo.toml --features slag \
+    -- --project examples/showcase --window
+```
+
+Without it, scripts are discovered and attached but not run.
+
+## Edit it
+
+The editor opens the project, imports its assets and prefabs, and shows a live
+viewport (WASD/QE to fly, middle-mouse to orbit/pan, wheel to dolly):
+
+```sh
+cargo run -p editor -- --project examples/showcase --window
+```
+
+The editor is fully drivable by an agent through its JSON command API — spawn
+entities, set transforms, add components, import a glTF, save a prefab, and write
+the scene back:
+
+```sh
+cargo run -p editor -- --print-schema
+cargo run -p editor -- --project examples/showcase \
+    --command '[{ "op": "spawn", "name": "Box" }, { "op": "add_rigid_body" }]' \
+    --out scenes/new.scene.json
+```
+
+## Build it
+
+```sh
+# Bundle the default scene. With no --target the game takes the project's name,
+# so this writes showcase/dist/Noctis Showcase/.
+cargo run -p runtime -- --bin noctis -- build --project examples/showcase
+
+# A named [[build]] target supplies its own name and output dir, e.g. dist/showcase/.
+cargo run -p runtime -- --bin noctis -- build --project examples/showcase --target showcase
+```
+
+A build copies the runtime executable, the scene, every asset the scene
+references, and a generated `noctis.toml`; run the executable in its folder with
+no arguments to play the bundled scene.
+
+`noctis rename` moves an asset and rewrites every reference to it:
+
+```sh
+cargo run -p runtime -- --bin noctis -- rename --project examples/showcase \
+    assets/textures/panel_normal.png assets/textures/panel_data.png
+```
+
+## What each scene shows
+
+**`scenes/showcase.scene.json`** (the default) — the broad one. A parented
+hierarchy, two cameras (one active, one inactive with a higher render priority),
+the three light kinds (one shadow-casting directional plus a point and a spot),
+every built-in primitive mesh, a glTF mesh with its imported material and
+textures, rigid bodies and all four collider shapes (including a sensor), spatial
+and non-spatial audio, and a billboarded `Text` label drawn from the generated
+font. It also carries entities an editor would toggle: one `active: false`, one
+`visible: false` — the only way `Active` and `Visible` appear in a scene
+document.
+
+**`scenes/physics.scene.json`** — a playground: a ground plane, a tilted ramp, a
+stack of dropping cubes, a bouncy and a heavy ball, a capsule, a fixed pillar, a
+**kinematic** platform driven by `bobber.js`, and a sensor volume.
+
+**`scenes/menu.scene.json`** — a 2D scene (`"mode": "2d"`) with an orthographic
+camera, a backdrop, a title and subtitle, a `PLAY` button, and a spinning
+prompt driven by `spin2d.js` (rotation about Z).
+
+## Scripting
+
+Behaviours are plain globals — **no `api` object, no `export`**:
+
+```js
+function on_start(entity, dt)  {}   // once, when the script first runs
+function on_update(entity, dt) {}   // every frame
+function on_destroy(entity, dt) {}  // when the entity is removed
+```
+
+`entity` is a numeric handle and `dt` is the frame time in seconds. Vector
+getters (`get_position`, `get_rotation_euler`, `get_scale`) return a
+`"[x,y,z]"` **string**; the scripts here parse it with a small `vec3` helper.
+The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
+`set_position`/`translate`, `set_rotation_euler`, `set_scale`, `time_delta`,
+`time_elapsed`, `key_down` (winit key names such as `KeyW`, `Space`,
+`ArrowUp`), `mouse_down` (`left`/`right`/`middle`), `add_script`, `log`, and
+`instantiate_prefab`.
+
+- `spinner.js` — spins an entity about Y (attach it to see it turn).
+- `bobber.js` — floats an entity up and down around its start height.
+- `spin2d.js` — spins about Z, for a 2D scene.
+- `orbit_player.js` — moves the "Player" with WASD / arrows (Shift to sprint).
+- `spawner.js` — **Space** spawns a spinning crate (via `spawn` + `add_script`),
+  **R** instantiates a prefab from inline JSON, **X** destroys everything it
+  created (`destroy` and `destroy_by_name`).
+
+`bobber.js` and the other scripts are also covered by an integration test that
+runs them in the real engine:
+
+```sh
+cargo test -p script --features slag --test showcase_scripts
+```
+
+## Prefabs
+
+`prefabs/*.prefab.json` are reusable subtrees. The editor loads the library on
+open (so `instantiate_prefab` resolves a name) and writes it back with
+`--save-prefabs`. At runtime a script instantiates a prefab from inline JSON (see
+`spawner.js`), which is why the verbatim prefab document travels inside the
+script.
+
+## Assets are generated, not committed as art
+
+Everything under `assets/` is produced by the two scripts in `tools/`, so the
+project is reproducible from a clean checkout with only Python's standard library
+and no third-party art:
+
+```sh
+python tools/make_font.py        # assets/fonts/NoctisSans.ttf
+python tools/generate_assets.py  # the model, textures, and audio
+```
+
+`make_font.py` builds a small TrueType font from scratch (a 5×7 pixel bitmap,
+emitted as a well-formed sfnt with `head`/`glyf`/`cmap`/`hmtx`/… and a real
+`head.checkSumAdjustment`) — shipping a system font would mean committing a font
+we do not have the rights to redistribute. It is a caps-style font, so text is
+readable in uppercase.
+
+The model's PBR textures ride **inside** `drone.glb`: the engine imports a loose
+`.png` as a texture, but a scene references *materials*, and only a glTF carries
+a material — so the base-colour and metallic/roughness maps are embedded in the
+model. `assets/textures/panel_normal.png` is a loose data map instead, with a
+`panel_normal.png.import.toml` sidecar (`srgb = false`); it is the kind of file
+you assign in the editor's material editor, and it demonstrates the texture
+importer, per-asset import settings, and the `.noctis/` decode cache.
+
+## Notes and limitations
+
+- **IBL/HDRI** is not wired to the project importer yet, so this project does not
+  ship an environment map; the renderer falls back to its built-in lighting.
+- **Prefabs are not bundled by `noctis build`** — only assets a scene references
+  are. The runtime path (`instantiate_prefab` with inline JSON) still works in an
+  exported game.
+- Only **one shadow-casting** directional/spot light is used, and `sample_count`
+  (MSAA) is clamped to 1.
+- `.noctis/` (the import cache) and `dist/` (build output) are generated and
+  gitignored.
+- The characters the generated font covers are `A–Z`, `a–z` (folding to caps),
+  the digits, and `. : - !`; other characters render blank.

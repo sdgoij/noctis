@@ -2,4 +2,6 @@
 **/*.rs.bk
 *.pdb
 /dist
+**/dist/
+**/.noctis/
 /assets/imported
