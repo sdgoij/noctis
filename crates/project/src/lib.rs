@@ -21,11 +21,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+mod assets;
 mod error;
 mod manifest;
 mod path;
 mod project;
 
+pub use assets::{AssetImportError, AssetMap, AssetMapEntry, ImportedAssets, fragment_path};
 pub use error::ProjectError;
 pub use manifest::{
     BuildTarget, InputSettings, Mode, Paths, Platform, Profile, ProjectInfo, ProjectManifest,

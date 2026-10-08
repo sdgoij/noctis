@@ -195,7 +195,30 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
         config.gravity = vec3(gravity[0], gravity[1], gravity[2]);
     }
 
-    let mut assets = AssetRegistry::with_defaults();
+    // A project owns one shared asset registry: import every asset file so the
+    // scene's references resolve. Without a project, start from the engine's
+    // placeholder defaults.
+    let mut assets = match project {
+        Some(project) => {
+            let imported = project
+                .import_assets()
+                .map_err(|error| format!("failed to import project assets: {error}"))?;
+            for error in &imported.errors {
+                log::warn!(
+                    "asset '{}' failed to import: {}",
+                    error.path.as_str(),
+                    error.message
+                );
+            }
+            log::info!(
+                "imported {} asset file(s) from the project ({} failed)",
+                imported.files,
+                imported.errors.len()
+            );
+            imported.registry
+        }
+        None => AssetRegistry::with_defaults(),
+    };
     register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, project, &mut assets)?;
     let host = make_host()?;

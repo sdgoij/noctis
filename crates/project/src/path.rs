@@ -140,6 +140,19 @@ pub enum AssetKind {
 }
 
 impl AssetKind {
+    /// Whether this kind is an asset (as opposed to a scene, a prefab, or an
+    /// unrecognised file).
+    pub fn is_asset(self) -> bool {
+        matches!(
+            self,
+            AssetKind::Model
+                | AssetKind::Texture
+                | AssetKind::Audio
+                | AssetKind::Font
+                | AssetKind::Script
+        )
+    }
+
     /// The conventional project-relative directory for this kind, per
     /// `docs/project.md`. `None` for [`AssetKind::Unknown`].
     ///
@@ -273,5 +286,17 @@ mod tests {
         assert_eq!(AssetKind::Scene.default_dir(), Some("scenes"));
         assert_eq!(AssetKind::Prefab.default_dir(), Some("prefabs"));
         assert_eq!(AssetKind::Unknown.default_dir(), None);
+    }
+
+    #[test]
+    fn only_asset_kinds_are_assets() {
+        assert!(AssetKind::Model.is_asset());
+        assert!(AssetKind::Texture.is_asset());
+        assert!(AssetKind::Audio.is_asset());
+        assert!(AssetKind::Font.is_asset());
+        assert!(AssetKind::Script.is_asset());
+        assert!(!AssetKind::Scene.is_asset());
+        assert!(!AssetKind::Prefab.is_asset());
+        assert!(!AssetKind::Unknown.is_asset());
     }
 }

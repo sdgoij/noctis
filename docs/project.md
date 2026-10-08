@@ -1,9 +1,6 @@
 # Noctis projects
 
-**Status: design.** This document defines what a Noctis *project* is and how the
-engine will resolve it. It is not implemented yet; the "What already exists"
-section lists the pieces it builds on. Treat this as the contract to implement
-against and update deliberately.
+**Status: partly implemented.** This document defines what a Noctis *project* is and how the engine resolves it. The manifest, canonical asset paths, and the asset importer are implemented in the `project` crate and wired into both CLIs; the rest (rename-rewrite, drag & drop, the `.noctis/` cache, build targets, per-scene `mode`, the `fonts` store, the UI picker) is design only. Treat this as the contract to implement against and update deliberately.
 
 A project is a **directory with a `noctis.toml` manifest**. It owns one shared
 asset registry, zero or more scenes, prefabs, and scripts, and it defines how the
@@ -132,6 +129,12 @@ Scene and prefab documents reference assets by asset path (this is already how
 registry on load). A reference resolves to a registry handle at load time. A
 missing reference is a load error that names the path, never a silent blank.
 
+*Gap*: today `apply_component` (in `ecs::scene`) silently falls back to
+`AssetHandle::NONE` when a `MeshRenderer`'s mesh or material path is absent from
+the registry. Making a missing reference a load error that names the path — as
+this doc requires — is pending work; until then, import every referenced asset
+(the project's `import_assets` does) so the fallback is not hit.
+
 ### Rename and move: rewrite references
 
 Renaming or moving an asset:
@@ -172,6 +175,16 @@ Importing decodes a source file into engine assets and records how. Because
 decoding can be expensive (a glTF with textures), the results are cached under
 `.noctis/` keyed by the source file's content hash plus import settings. The cache
 is generated and gitignored.
+
+*Implemented today without the cache*: `Project::asset_map` scans `assets/` and
+`scripts/`, classifies each file by extension, and `Project::import_assets`
+decodes models (via `render::load_gltf`, registering each sub-asset under both its
+in-file name and its `file#kind/name` fragment path) and scripts, into a registry
+seeded with the engine defaults. A file that fails to import is recorded in
+`ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset does
+ot stop a project from opening. Audio and fonts are classified but not yet
+decoded. Both `noctis-editor` and `noctis-runtime` build their registry from
+`import_assets()` when `--project` is given.
 
 Per-asset **import settings** (persisted, not in the gitignored cache) control
 decoding: a texture is sRGB (color) or linear (data) — the inspector already has
@@ -308,18 +321,20 @@ Built on (reuse, do not reinvent):
 - `render::load_gltf` / `load_gltf_bytes`, `render::load_texture` — importers.
 - `editor --controls <file>` — camera bindings (to move under the project).
 
-New work this design implies:
+New work this design implies (✔ = implemented):
 
-- A `project` crate depending on `ecs`/`render`: manifest parsing, asset-path
-  canonicalization, a resolver (logical path + fragment → handle), import (with
-  cache), type detection, and build.
+- ✔ A `project` crate depending on `ecs`/`render`: manifest parsing, asset-path
+  canonicalization, discovery, and asset import. Remaining: the resolver as a
+  public API (path + fragment → handle is currently done by registering assets
+  under both names), the `.noctis/` cache, and build.
 - Rename-rewrite across scene/prefab documents.
 - Drag & drop in the editor, wired to project import.
 - A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
   importer that bakes a glyph atlas into the cache.
 - A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
-- `--project` in `noctis-editor` / `noctis-runtime`, and a `noctis` build CLI.
+- ✔ `--project` in `noctis-editor` / `noctis-runtime` (both now import the
+  project's assets). Remaining: a `noctis` build CLI and the UI project picker.
 
 Deterministic serialization already holds for `SceneDesc`/`Prefab` and is locked
 by tests; keep it that way as the project model is added.

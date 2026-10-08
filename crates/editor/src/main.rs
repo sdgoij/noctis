@@ -141,6 +141,28 @@ fn run(args: &[String]) -> Result<String, CliError> {
 fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, CliError> {
     let mut editor = Editor::new();
 
+    // A project owns one shared asset registry: import every asset file up front
+    // so the scene's references resolve. Without a project the editor keeps the
+    // registry's placeholder defaults.
+    if let Some(project) = project {
+        let imported = project
+            .import_assets()
+            .map_err(|e| CliError::Message(format!("failed to import project assets: {e}")))?;
+        for error in &imported.errors {
+            eprintln!(
+                "noctis-editor: warning: asset '{}' failed to import: {}",
+                error.path.as_str(),
+                error.message
+            );
+        }
+        eprintln!(
+            "noctis-editor: imported {} asset file(s) ({} failed)",
+            imported.files,
+            imported.errors.len()
+        );
+        *editor.assets_mut() = imported.registry;
+    }
+
     if options.testscene {
         let (scene, assets) = testscene::build();
         *editor.scene_mut() = scene;

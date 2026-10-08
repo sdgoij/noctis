@@ -203,6 +203,21 @@ impl<T> Assets<T> {
         self.entries.get(&handle.id).and_then(|e| e.path.as_deref())
     }
 
+    /// Point an additional `path` at an existing asset, without copying it.
+    ///
+    /// Returns `false` if the path is already registered or the handle is
+    /// unknown. This exposes one asset under several logical paths: a project
+    /// registers a glTF sub-asset under both its in-file name and its
+    /// `file#fragment` path.
+    pub fn insert_alias(&mut self, path: impl Into<String>, handle: AssetHandle<T>) -> bool {
+        let path = path.into();
+        if !self.entries.contains_key(&handle.id) || self.paths.contains_key(&path) {
+            return false;
+        }
+        self.paths.insert(path, handle.id);
+        true
+    }
+
     /// Remove an asset, returning whether it existed.
     pub fn remove(&mut self, handle: AssetHandle<T>) -> bool {
         match self.entries.remove(&handle.id) {
@@ -531,6 +546,26 @@ mod tests {
         materials.get_mut(h).expect("present").roughness = 0.9;
         assert_eq!(materials.get(h).unwrap().roughness, 0.9);
         assert_eq!(materials.path_of(h), Some("m"));
+    }
+
+    #[test]
+    fn insert_alias_points_extra_paths_at_one_asset() {
+        let mut textures: Assets<Texture> = Assets::new();
+        let h = textures.insert_named(
+            "assets/models/robot.glb#texture/0",
+            Texture::solid("t", [1, 2, 3, 4], TextureFormat::Rgba8Srgb),
+        );
+        assert!(textures.insert_alias("0", h));
+        assert_eq!(textures.handle("0"), Some(h));
+        assert_eq!(
+            textures.handle("assets/models/robot.glb#texture/0"),
+            Some(h)
+        );
+        assert_eq!(textures.len(), 1, "an alias does not copy the asset");
+
+        // Aliasing an unknown handle, or a path already taken, is rejected.
+        assert!(!textures.insert_alias("c", AssetHandle::NONE));
+        assert!(!textures.insert_alias("0", h));
     }
 
     #[test]

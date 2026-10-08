@@ -156,14 +156,14 @@ fn has_suffix(path: &Path, suffix: &str) -> bool {
 }
 
 /// A project-relative asset path for an absolute `path` under `root`.
-fn relative_asset_path(root: &Path, path: &Path) -> Option<AssetPath> {
+pub(crate) fn relative_asset_path(root: &Path, path: &Path) -> Option<AssetPath> {
     let relative = path.strip_prefix(root).ok()?;
     let text = relative.to_string_lossy().replace('\\', "/");
     AssetPath::parse(text).ok()
 }
 
 /// Recursively collect files under `dir`. A missing directory is not an error.
-fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
+pub(crate) fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
