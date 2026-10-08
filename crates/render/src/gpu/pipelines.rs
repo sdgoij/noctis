@@ -1,10 +1,11 @@
 //! Pipeline layouts, render pipelines, and the persistent per-frame bind groups.
 //!
-//! Eight pipelines cover the frame: a depth-only pipeline (shared by the shadow
+//! Nine pipelines cover the frame: a depth-only pipeline (shared by the shadow
 //! pass and the camera depth prepass), SSAO, opaque and transparent PBR, gizmo
-//! lines and triangles, and the tonemap resolve. Bind groups are split into
-//! group 0 (frame: camera, lights, IBL, shadow, SSAO), group 1 (per-object,
-//! dynamic offset) and group 2 (per-material textures).
+//! lines and triangles, two world-space text pipelines (depth-tested and
+//! depth-ignoring), and the tonemap resolve. Bind groups are split into group 0
+//! (frame: camera, lights, IBL, shadow, SSAO), group 1 (per-object, dynamic
+//! offset) and group 2 (per-material textures).
 
 use crate::gpu::ibl_gpu::IblGpu;
 use crate::gpu::resources::GpuVertex;
@@ -207,8 +208,12 @@ pub struct Pipelines {
     pub gizmo_line: wgpu::RenderPipeline,
     /// Gizmo triangle list.
     pub gizmo_triangle: wgpu::RenderPipeline,
-    /// World-space text glyph quads.
+    /// World-space text glyph quads, depth-tested against the scene
+    /// ([`ecs::components::Text::depth_test`]).
     pub text: wgpu::RenderPipeline,
+    /// World-space text glyph quads that ignore depth, drawn over the scene
+    /// ([`ecs::components::Text::depth_test`] `== false`).
+    pub text_no_depth: wgpu::RenderPipeline,
     /// HDR -> LDR tonemap.
     pub tonemap: wgpu::RenderPipeline,
 }
@@ -232,8 +237,8 @@ fn pipeline_layout(
 /// The depth-only, SSAO and tonemap pipelines stay single-sampled whatever the
 /// setting: they render into single-sampled targets (the shadow map, the SSAO
 /// term, the LDR image). The pipelines that draw into the multisampled HDR target
-/// — opaque, transparent, gizmo and text — declare the same sample count as that
-/// target, or the device rejects the pipeline/pass pairing.
+/// — opaque, transparent, gizmo and both text pipelines — declare the same
+/// sample count as that target, or the device rejects the pipeline/pass pairing.
 pub fn create_pipelines(
     device: &wgpu::Device,
     layouts: &BindGroupLayouts,
@@ -426,11 +431,18 @@ pub fn create_pipelines(
     let gizmo_line = gizmo("gizmo.line", wgpu::PrimitiveTopology::LineList);
     let gizmo_triangle = gizmo("gizmo.triangle", wgpu::PrimitiveTopology::TriangleList);
 
-    let text = {
-        let text_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/text.wgsl"));
-        let layout = pipeline_layout(device, "text.layout", &[&layouts.view, &layouts.text]);
+    // Text is built twice: a label behind geometry is hidden (`depth_test`), or
+    // always drawn on top of it. The two pipelines differ only in the depth
+    // comparison, so a device does not pay for a second shader.
+    let text_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/text.wgsl"));
+    let make_text = |label: &str, depth_compare: wgpu::CompareFunction| {
+        let layout = pipeline_layout(
+            device,
+            &format!("{label}.layout"),
+            &[&layouts.view, &layouts.text],
+        );
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("text"),
+            label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &text_shader,
@@ -443,11 +455,12 @@ pub fn create_pipelines(
                 cull_mode: None,
                 ..Default::default()
             },
-            // Depth-tested against the scene, but never writes depth.
+            // Tested against the scene but never writing depth, so a translucent
+            // glyph does not occlude the next one. Only the comparison differs.
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(depth_compare),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -466,6 +479,8 @@ pub fn create_pipelines(
             cache: None,
         })
     };
+    let text = make_text("text", wgpu::CompareFunction::LessEqual);
+    let text_no_depth = make_text("text.no_depth", wgpu::CompareFunction::Always);
 
     let tonemap = {
         let layout = pipeline_layout(device, "tonemap.layout", &[&layouts.tonemap]);
@@ -508,6 +523,7 @@ pub fn create_pipelines(
         gizmo_line,
         gizmo_triangle,
         text,
+        text_no_depth,
         tonemap,
     }
 }

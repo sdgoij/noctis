@@ -134,11 +134,11 @@ in the editor (`--window`, then pick it in the outliner) or run it directly:
 cargo run -p runtime -- --project examples/showcase --scene scenes/board.scene.json --window
 ```
 
-`Text` is the one exception here: the command API has no `add_text` op (and
-`Text` is missing from the `component_name` list `remove_component` takes), so a
-title is added by selecting an entity and using the inspector's **Add component
-→ Text**, or by copying the `text` component out of `scenes/menu.scene.json`.
-Everything else in this walkthrough is CLI-only.
+`Text` is a first-class command now. Appending
+`{ "op": "add_text", "entity": { "name": "Title" }, "params": { "text":
+"Tic-Tac-Toe", "size": 0.6, "font": { "path": "assets/fonts/NoctisSans.ttf" } } }`
+(after a `spawn`) schedules a label, and `Text` is in the `component_name` list
+`remove_component` accepts — so the whole walkthrough is CLI-only.
 
 ## Build it
 
@@ -277,23 +277,15 @@ environment, which is flat but usable.
 the `[render] environment` the manifest names; there is no GPU precompute and no
 run-time re-bake, so changing the environment means restarting. An `.exr`
 environment is not decodable yet (only `.hdr`).
-- **`Text.depth_test` is currently ignored** by the renderer: the text pass uses
-  a single depth-test-against-the-scene pipeline, so a label *behind* geometry is
-  hidden no matter what the flag says. Labels over geometry are placed slightly
-  toward the camera here (see `Play Label` in `menu.scene.json`) rather than
-  relying on the flag.
-- **The command API cannot add `Text`** (no `add_text` op, and `Text` is absent
-  from the `component_name` list `remove_component` accepts), so agent-authored
-  menus add text through the inspector or by editing the JSON.
-- **Prefabs are not bundled by `noctis build`** — only assets a scene references
-  are. The runtime path (`instantiate_prefab` with inline JSON) still works in an
-  exported game.
 - **Anti-aliasing** is MSAA: `[render] sample_count = 4` here. It smooths
   geometry silhouettes — the sphere, capsule, cylinder and torus edges — but not
   shader detail: a hard texel edge (the drone's checker) or a glyph's coverage
   still steps. That needs alpha-to-coverage or a post-process AA pass, neither of
   which exists yet. A device that cannot do 4x degrades to 2x or 1x rather than
   failing.
+- **Prefabs are not bundled by `noctis build`** — only assets a scene references
+  are. The runtime path (`instantiate_prefab` with inline JSON) still works in an
+  exported game.
 - Only **one shadow-casting** directional/spot light is used.
 - `.noctis/` (the import cache) and `dist/` (build output) are generated and
   gitignored.

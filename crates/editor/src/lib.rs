@@ -60,7 +60,8 @@ pub use camera::{
 pub use command::{
     AlphaModeSpec, AssetRef, AudioSourceParams, BodyTypeSpec, CameraParams, ColliderParams,
     ColliderShapeSpec, CommandOutcome, ComponentName, EditorCommand, EntityRef, LightParams,
-    LightSpec, MaterialParams, MeshRendererParams, ProjectionSpec, RigidBodyParams, schema,
+    LightSpec, MaterialParams, MeshRendererParams, ProjectionSpec, RigidBodyParams, TextAnchorSpec,
+    TextParams, schema,
 };
 pub use editor::{Editor, parse_commands};
 pub use error::EditorError;

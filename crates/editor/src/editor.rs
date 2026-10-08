@@ -35,8 +35,9 @@ use math::{Quat, Transform, Vec3, degrees, radians, vec3, zero3};
 
 use crate::command::{
     AssetRef, AudioSourceParams, CameraParams, ColliderParams, CommandOutcome, ComponentName,
-    EditorCommand, EntityRef, LightParams, MeshRendererParams, RigidBodyParams, arr3, arr4,
-    material_from_params, mesh_from_positions, normalized_or, solid_texture, to_arr3, to_arr4,
+    EditorCommand, EntityRef, LightParams, MeshRendererParams, RigidBodyParams, TextParams, arr3,
+    arr4, material_from_params, mesh_from_positions, normalized_or, solid_texture, to_arr3,
+    to_arr4,
 };
 use crate::error::EditorError;
 use crate::info::{EntityDto, EntityInfo};
@@ -62,6 +63,7 @@ struct Bundle {
     collider: Option<Collider>,
     audio: Option<AudioSource>,
     script: Option<Script>,
+    text: Option<Text>,
     children: Vec<Entity>,
 }
 
@@ -86,6 +88,7 @@ impl Bundle {
             collider: world.get::<Collider>(entity).copied(),
             audio: world.get::<AudioSource>(entity).copied(),
             script: world.get::<Script>(entity).cloned(),
+            text: world.get::<Text>(entity).cloned(),
             children: world
                 .get::<Children>(entity)
                 .map(|c| c.0.clone())
@@ -125,6 +128,9 @@ impl Bundle {
         }
         if let Some(script) = &self.script {
             world.insert(destination, script.clone());
+        }
+        if let Some(text) = &self.text {
+            world.insert(destination, text.clone());
         }
     }
 }
@@ -628,6 +634,22 @@ impl Editor {
                 );
                 Ok(CommandOutcome::None)
             }
+            EditorCommand::AddText { entity, params } => {
+                let entity = self.resolve(entity)?;
+                let font = self.resolve_font(&params.font)?;
+                self.scene.world.insert(
+                    entity,
+                    Text {
+                        text: params.text.clone(),
+                        font,
+                        size: params.size,
+                        color: params.color,
+                        anchor: params.anchor.into(),
+                        depth_test: params.depth_test,
+                    },
+                );
+                Ok(CommandOutcome::None)
+            }
             EditorCommand::AttachScriptSource { entity, source } => {
                 let entity = self.resolve(entity)?;
                 self.scene
@@ -963,6 +985,15 @@ impl Editor {
         params: AudioSourceParams,
     ) -> Result<(), EditorError> {
         self.apply(EditorCommand::AddAudioSource {
+            entity: entity.into(),
+            params,
+        })
+        .map(|_| ())
+    }
+
+    /// Add or replace a text label component.
+    pub fn add_text(&mut self, entity: Entity, params: TextParams) -> Result<(), EditorError> {
+        self.apply(EditorCommand::AddText {
             entity: entity.into(),
             params,
         })
@@ -1362,6 +1393,9 @@ impl Editor {
         if world.has::<Script>(entity) {
             out.push("Script");
         }
+        if world.has::<Text>(entity) {
+            out.push("Text");
+        }
         out
     }
 
@@ -1466,6 +1500,19 @@ impl Editor {
                     "source": script.source,
                     "path": script.path,
                     "enabled": script.enabled,
+                }),
+            );
+        }
+        if let Some(text) = world.get::<Text>(entity) {
+            components.insert(
+                "Text".into(),
+                json!({
+                    "text": text.text,
+                    "font": text.font.id().0,
+                    "size": text.size,
+                    "color": text.color,
+                    "anchor": format!("{:?}", text.anchor),
+                    "depth_test": text.depth_test,
                 }),
             );
         }
@@ -1675,6 +1722,21 @@ impl Editor {
             Some(AssetRef::Path { path }) => self
                 .assets
                 .audio
+                .handle(path)
+                .ok_or_else(|| EditorError::MissingAsset(path.clone())),
+            Some(AssetRef::Id { id }) => Ok(AssetHandle::from_raw(*id)),
+        }
+    }
+
+    fn resolve_font(
+        &self,
+        reference: &Option<AssetRef>,
+    ) -> Result<AssetHandle<ecs::assets::FontAsset>, EditorError> {
+        match reference {
+            None => Ok(AssetHandle::NONE),
+            Some(AssetRef::Path { path }) => self
+                .assets
+                .fonts
                 .handle(path)
                 .ok_or_else(|| EditorError::MissingAsset(path.clone())),
             Some(AssetRef::Id { id }) => Ok(AssetHandle::from_raw(*id)),
@@ -1904,6 +1966,7 @@ mod tests {
         ed.add_audio_source(e, AudioSourceParams::default())
             .unwrap();
         ed.attach_script_source(e, "function update() {}").unwrap();
+        ed.add_text(e, TextParams::default()).unwrap();
 
         let info = ed
             .list_entities()
@@ -1918,6 +1981,7 @@ mod tests {
             "Collider",
             "AudioSource",
             "Script",
+            "Text",
         ] {
             assert!(info.components.contains(&expected), "missing {expected}");
         }
@@ -2168,6 +2232,56 @@ mod tests {
             vec!["Ace".to_string(), "Zed".to_string()]
         );
         assert!(ed.prefab("Zed").unwrap().scene.entities.is_empty());
+    }
+
+    #[test]
+    fn add_text_command_sets_the_component_and_undoes() {
+        use ecs::components::TextAnchor;
+
+        let mut ed = editor();
+        ed.spawn("Title", None);
+        ed.apply_json(
+            r#"[{ "op": "add_text", "entity": { "name": "Title" },
+               "params": { "text": "Hello", "anchor": "BottomCenter", "depth_test": false } }]"#,
+        )
+        .unwrap();
+
+        let e = ed.find_by_name("Title").expect("entity");
+        let text = ed.component::<Text>(e).expect("text added");
+        assert_eq!(text.text, "Hello");
+        assert_eq!(text.anchor, TextAnchor::BottomCenter);
+        assert!(!text.depth_test);
+        assert!(ed.has_component(e, ComponentName::Text));
+
+        ed.undo();
+        let e = ed.find_by_name("Title").expect("still present after undo");
+        assert!(!ed.has_component(e, ComponentName::Text));
+    }
+
+    #[test]
+    fn duplicate_and_prefabs_carry_text() {
+        let mut ed = editor();
+        let e = ed.spawn("Label", None);
+        ed.add_text(
+            e,
+            TextParams {
+                text: "Play".into(),
+                depth_test: false,
+                ..TextParams::default()
+            },
+        )
+        .unwrap();
+
+        let copy = ed.duplicate(e).unwrap();
+        let text = ed
+            .component::<Text>(copy)
+            .expect("duplicated label keeps its text");
+        assert_eq!(text.text, "Play");
+        assert!(!text.depth_test);
+
+        let name = ed.store_prefab("Label", &[e]).unwrap();
+        let instances = ed.instantiate_stored_prefab(&name, None).unwrap();
+        assert!(ed.component::<Text>(instances[0]).is_some());
     }
 
     #[test]

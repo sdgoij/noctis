@@ -9,7 +9,7 @@
 //! so the two entry points stay in lockstep.
 
 use ecs::assets::{AlphaMode, AssetId, Material, Mesh, Texture, TextureFormat, Vertex};
-use ecs::components::{BodyType, ColliderShape, LightKind, Projection};
+use ecs::components::{BodyType, ColliderShape, LightKind, Projection, TextAnchor};
 use math::{Quat, Vec3, radians, vec3, zero3};
 use serde::{Deserialize, Serialize};
 
@@ -687,6 +687,86 @@ impl Default for AudioSourceParams {
 }
 
 // ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
+
+/// A serializable text anchor, mirroring [`ecs::components::TextAnchor`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextAnchorSpec {
+    /// Centred on the entity (the default).
+    #[default]
+    Center,
+    /// The top-left corner at the entity.
+    TopLeft,
+    /// The top edge centred horizontally.
+    TopCenter,
+    /// The top-right corner at the entity.
+    TopRight,
+    /// The middle of the left edge at the entity.
+    MiddleLeft,
+    /// The middle of the right edge at the entity.
+    MiddleRight,
+    /// The bottom-left corner at the entity.
+    BottomLeft,
+    /// The bottom edge centred horizontally.
+    BottomCenter,
+    /// The bottom-right corner at the entity.
+    BottomRight,
+}
+
+impl From<TextAnchorSpec> for TextAnchor {
+    fn from(spec: TextAnchorSpec) -> Self {
+        match spec {
+            TextAnchorSpec::Center => TextAnchor::Center,
+            TextAnchorSpec::TopLeft => TextAnchor::TopLeft,
+            TextAnchorSpec::TopCenter => TextAnchor::TopCenter,
+            TextAnchorSpec::TopRight => TextAnchor::TopRight,
+            TextAnchorSpec::MiddleLeft => TextAnchor::MiddleLeft,
+            TextAnchorSpec::MiddleRight => TextAnchor::MiddleRight,
+            TextAnchorSpec::BottomLeft => TextAnchor::BottomLeft,
+            TextAnchorSpec::BottomCenter => TextAnchor::BottomCenter,
+            TextAnchorSpec::BottomRight => TextAnchor::BottomRight,
+        }
+    }
+}
+
+/// Parameters for [`EditorCommand::AddText`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TextParams {
+    /// The string to draw (`\n` starts a new line).
+    #[serde(default)]
+    pub text: String,
+    /// The font to draw it with.
+    #[serde(default)]
+    pub font: Option<AssetRef>,
+    /// The height of one line, in world units.
+    #[serde(default = "default_one")]
+    pub size: f32,
+    /// The linear RGBA colour.
+    #[serde(default = "default_white4")]
+    pub color: [f32; 4],
+    /// Where the text sits relative to the entity's position.
+    #[serde(default)]
+    pub anchor: TextAnchorSpec,
+    /// Whether geometry in front of the text hides it.
+    #[serde(default = "default_true")]
+    pub depth_test: bool,
+}
+
+impl Default for TextParams {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font: None,
+            size: 1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            anchor: TextAnchorSpec::Center,
+            depth_test: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Materials
 // ---------------------------------------------------------------------------
 
@@ -912,6 +992,14 @@ pub enum EditorCommand {
         #[serde(default)]
         params: AudioSourceParams,
     },
+    /// Add or replace a text label component.
+    AddText {
+        /// The entity.
+        entity: EntityRef,
+        /// Text parameters.
+        #[serde(default)]
+        params: TextParams,
+    },
     /// Attach a script component from inline source.
     AttachScriptSource {
         /// The entity.
@@ -1014,6 +1102,7 @@ impl EditorCommand {
             AddRigidBody { .. } => "add_rigid_body",
             AddCollider { .. } => "add_collider",
             AddAudioSource { .. } => "add_audio_source",
+            AddText { .. } => "add_text",
             AttachScriptSource { .. } => "attach_script_source",
             AttachScriptPath { .. } => "attach_script_path",
             RemoveComponent { .. } => "remove_component",
@@ -1057,6 +1146,7 @@ impl EditorCommand {
                 | AddRigidBody { .. }
                 | AddCollider { .. }
                 | AddAudioSource { .. }
+                | AddText { .. }
                 | AttachScriptSource { .. }
                 | AttachScriptPath { .. }
                 | RemoveComponent { .. }
@@ -1230,6 +1320,7 @@ pub fn schema() -> serde_json::Value {
         json!({"op": "add_rigid_body", "fields": {"entity": "EntityRef", "params?": "RigidBodyParams"}, "desc": "Add/replace a rigid body."}),
         json!({"op": "add_collider", "fields": {"entity": "EntityRef", "params?": "ColliderParams"}, "desc": "Add/replace a collider."}),
         json!({"op": "add_audio_source", "fields": {"entity": "EntityRef", "params?": "AudioSourceParams"}, "desc": "Add/replace an audio source."}),
+        json!({"op": "add_text", "fields": {"entity": "EntityRef", "params?": "TextParams"}, "desc": "Add/replace a text label."}),
         json!({"op": "attach_script_source", "fields": {"entity": "EntityRef", "source": "string"}, "desc": "Attach a script from inline source."}),
         json!({"op": "attach_script_path", "fields": {"entity": "EntityRef", "path": "string"}, "desc": "Attach a script from a path."}),
         json!({"op": "remove_component", "fields": {"entity": "EntityRef", "component": "ComponentName"}, "desc": "Remove a component."}),
@@ -1262,7 +1353,7 @@ pub fn schema() -> serde_json::Value {
         "component_name": [
             "LocalTransform", "GlobalTransform", "Name", "Active", "Visible",
             "Camera", "Light", "MeshRenderer", "RigidBody", "Collider",
-            "AudioSource", "Script"
+            "AudioSource", "Script", "Text"
         ],
         "commands": commands,
     })
@@ -1355,6 +1446,7 @@ mod tests {
             "Collider",
             "AudioSource",
             "Script",
+            "Text",
         ] {
             let cn = ComponentName::from_str_name(name).expect("known name");
             assert_eq!(cn.as_str(), name);
@@ -1383,6 +1475,36 @@ mod tests {
     }
 
     #[test]
+    fn add_text_command_parses_and_defaults() {
+        let cmd: EditorCommand = serde_json::from_str(
+            r#"{ "op": "add_text", "entity": { "name": "Menu" }, "params": { "text": "Play" } }"#,
+        )
+        .unwrap();
+        assert_eq!(cmd.op_name(), "add_text");
+        assert!(cmd.records_history());
+        match cmd {
+            EditorCommand::AddText { params, .. } => {
+                assert_eq!(params.text, "Play");
+                assert_eq!(params.anchor, TextAnchorSpec::Center);
+                assert!(params.depth_test);
+            }
+            other => panic!("expected add_text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_anchor_spec_maps_to_the_engine_anchor() {
+        assert_eq!(
+            TextAnchor::from(TextAnchorSpec::TopLeft),
+            TextAnchor::TopLeft
+        );
+        assert_eq!(
+            TextAnchor::from(TextAnchorSpec::default()),
+            TextAnchor::Center
+        );
+    }
+
+    #[test]
     fn schema_lists_every_op() {
         let schema = schema();
         let ops: Vec<&str> = schema["commands"]
@@ -1395,6 +1517,7 @@ mod tests {
             "spawn",
             "add_camera",
             "add_light",
+            "add_text",
             "import_gltf",
             "remove_component",
             "clear_selection",

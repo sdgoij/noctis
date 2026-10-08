@@ -12,9 +12,11 @@
 //! 4. **Forward PBR** — opaque then transparent draws into the HDR target using
 //!    the Cook–Torrance GGX shader with IBL, PCF shadows and SSAO.
 //! 5. **Gizmo** — optional editor gizmo lines and triangles.
-//! 6. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
-//!
-//! The LDR result is copied into a mappable buffer and returned as a [`Frame`].
+//! 6. **Text** — world-space labels, depth-tested or drawn on top
+//!    ([`ecs::components::Text::depth_test`]).
+//! 7. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
+//! 8. **Present** — the LDR target is blitted to the surface, or copied into the
+//!    readback buffer for a headless [`Frame`].
 //!
 //! ## MSAA
 //!
@@ -215,8 +217,9 @@ pub struct Renderer {
     text_sampler: wgpu::Sampler,
     /// Baked font atlases, uploaded on first use and keyed by font asset id.
     text_atlases: HashMap<AssetId, TextAtlas>,
-    /// One vertex buffer per font used this frame.
-    text_batches: Vec<(AssetId, wgpu::Buffer, u32)>,
+    /// One vertex buffer per font and depth-test setting used this frame:
+    /// `(font, buffer, vertex count, depth-tested)`.
+    text_batches: Vec<(AssetId, wgpu::Buffer, u32, bool)>,
     ambient: [f32; 4],
     exposure: f32,
     tonemap_mode: Tonemap,
@@ -588,8 +591,9 @@ impl Renderer {
             }
         }
 
-        // Build each label's billboarded quads, grouped by font.
-        let mut by_font: HashMap<AssetId, Vec<crate::text::TextVertex>> = HashMap::new();
+        // Build each label's billboarded quads, grouped by font and depth-test
+        // setting (the two settings draw with different pipelines).
+        let mut by_font: HashMap<(AssetId, bool), Vec<crate::text::TextVertex>> = HashMap::new();
         for entity in world.entities_with::<Text>() {
             let Some(text) = world.get::<Text>(entity) else {
                 continue;
@@ -616,10 +620,13 @@ impl Renderer {
                 text.size,
                 text.color,
             );
-            by_font.entry(text.font.id()).or_default().extend(vertices);
+            by_font
+                .entry((text.font.id(), text.depth_test))
+                .or_default()
+                .extend(vertices);
         }
 
-        for (id, vertices) in by_font {
+        for ((id, depth_test), vertices) in by_font {
             if vertices.is_empty() {
                 continue;
             }
@@ -630,7 +637,8 @@ impl Renderer {
                     contents: bytemuck::cast_slice(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-            self.text_batches.push((id, buffer, vertices.len() as u32));
+            self.text_batches
+                .push((id, buffer, vertices.len() as u32, depth_test));
         }
     }
 
@@ -990,7 +998,8 @@ impl Renderer {
             }
         }
 
-        // 6. World-space text (depth-tested, alpha-blended, one pass per font).
+        // 6. World-space text (alpha-blended, one batch per font and
+        // depth-test setting).
         if !self.text_batches.is_empty() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("text.pass"),
@@ -1015,9 +1024,20 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.text);
-            pass.set_bind_group(0, &self.gizmo_view_bind_group, &[]);
-            for (font, buffer, count) in &self.text_batches {
+            let mut bound: Option<bool> = None;
+            for (font, buffer, count, depth_test) in &self.text_batches {
+                // Batches are grouped by (font, depth_test); swap the pipeline and
+                // re-bind group 0 only when that setting changes.
+                if bound != Some(*depth_test) {
+                    let pipeline = if *depth_test {
+                        &self.pipelines.text
+                    } else {
+                        &self.pipelines.text_no_depth
+                    };
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &self.gizmo_view_bind_group, &[]);
+                    bound = Some(*depth_test);
+                }
                 let Some(atlas) = self.text_atlases.get(font) else {
                     continue;
                 };
@@ -1050,7 +1070,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // 7. Present to the surface, or copy into the readback buffer.
+        // 8. Present to the surface, or copy into the readback buffer.
         match present_view {
             Some(view) => {
                 let pipeline = self.present_pipeline.as_ref().ok_or_else(|| {
@@ -1827,6 +1847,116 @@ mod tests {
             "the text drawn must be visibly brighter: {} vs {}",
             brightest(&with_text),
             brightest(&without_text)
+        );
+    }
+
+    /// `Text::depth_test` must actually hide a label behind geometry, while the
+    /// depth-ignoring pipeline draws over it. Skips without an adapter or font.
+    #[test]
+    fn text_depth_test_hides_a_label_behind_geometry_or_reports_no_adapter() {
+        use ecs::assets::Material;
+        use ecs::components::{Camera, MeshRenderer, Text, TextAnchor};
+        use math::vec3;
+
+        let Some(font_data) = system_font() else {
+            eprintln!("skipping text depth-test render test: no font on this host");
+            return;
+        };
+        let config = RendererConfig {
+            width: 96,
+            height: 96,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let font = assets.fonts.insert_named(
+            "fonts/body",
+            ecs::assets::FontAsset {
+                name: "body".into(),
+                data: font_data,
+            },
+        );
+        // A matte black cube in front of the label, so only the label is bright.
+        let cube_mesh = assets
+            .meshes
+            .insert_named("cube", ecs::primitives::cube(3.0));
+        let black = assets.materials.insert_named(
+            "black",
+            Material {
+                name: "black".into(),
+                base_color: [0.0, 0.0, 0.0, 1.0],
+                metallic: 0.0,
+                roughness: 1.0,
+                ..Material::default()
+            },
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera {
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            ..Camera::default()
+        });
+        let cube = world.spawn_with(MeshRenderer {
+            mesh: cube_mesh,
+            material: black,
+            ..MeshRenderer::default()
+        });
+        world.insert(
+            cube,
+            math::Transform::from_translation(vec3(0.0, 0.0, -2.2)),
+        );
+
+        // The label sits inside the cube's volume; only the flag decides whether
+        // the cube's near face hides it.
+        let label = world.spawn_with(Text {
+            text: "Hello".into(),
+            font,
+            size: 1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            anchor: TextAnchor::Center,
+            depth_test: true,
+        });
+        world.insert(
+            label,
+            math::Transform::from_translation(vec3(0.0, 0.0, -3.0)),
+        );
+
+        let brightest = |frame: &Frame| {
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .max()
+                .unwrap_or(0)
+        };
+
+        let hidden = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render with depth test");
+        // Clear the flag: the same label must now draw over the cube.
+        world
+            .get_mut::<Text>(label)
+            .expect("label alive")
+            .depth_test = false;
+        let shown = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render without depth test");
+
+        assert!(
+            brightest(&shown) > brightest(&hidden) + 32,
+            "depth_test=false must draw the label over the cube: {} vs {}",
+            brightest(&shown),
+            brightest(&hidden)
         );
     }
 
