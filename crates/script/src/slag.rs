@@ -327,17 +327,14 @@ impl SlagHost {
             "instantiate_prefab",
             2,
             Box::new(move |call| {
-                if let Some(json) = arg_string(call, 0) {
-                    let parent = arg_entity(call, 1);
-                    b.borrow_mut()
-                        .commands
-                        .push(ScriptCommand::InstantiatePrefab {
-                            json,
-                            parent,
-                            spawned: Vec::new(),
-                        });
-                }
-                Ok(slag::JsValue::undefined())
+                // Return a handle for the prefab's root so the script can address
+                // it immediately (see `Bridge::instantiate_prefab`).
+                let root = arg_string(call, 0)
+                    .map(|json| b.borrow_mut().instantiate_prefab(json, arg_entity(call, 1)));
+                Ok(match root {
+                    Some(id) => slag::JsValue::number(id as f64),
+                    None => slag::JsValue::undefined(),
+                })
             }),
         )?;
 

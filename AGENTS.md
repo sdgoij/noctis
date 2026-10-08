@@ -83,7 +83,9 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   cost), **native WebAssembly scripts** (`wasm_host::WasmHost`, a `.wasm` module
   driven through a documented import ABI covering transforms (read and write),
   spawning, `destroy`/`destroy_by_name`, `log`, `find_entity`, `add_script`,
-  `instantiate_prefab`, `key_down`/`mouse_down`, and timing), and
+  `instantiate_prefab` (which returns a handle for the prefab's root entity, so
+  a script can position or inspect what it just instantiated),
+  `key_down`/`mouse_down`, and timing), and
   `engine_host::EngineHost`, which runs both languages in one runtime. A
   WebAssembly module travels as a `wasm:`-prefixed hex descriptor (the script
   channel is text); `wasm_host::load`/`register` read a `.wasm` file into that

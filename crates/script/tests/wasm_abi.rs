@@ -303,6 +303,85 @@ fn input_module() -> Vec<u8> {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// A module that instantiates a prefab by JSON held in its data segment, then
+/// moves its root through the returned handle.
+///
+/// The embedded document's first entity ("WasmRoot", id 0) is the prefab root.
+fn prefab_module() -> Vec<u8> {
+    const JSON: &str = concat!(
+        "{\"name\":\"Blob\",\"scene\":{\"name\":\"Blob\",\"entities\":[",
+        "{\"id\":0,\"name\":\"WasmRoot\",\"transform\":{\"translation\":[0,0,0],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}},",
+        "{\"id\":1,\"name\":\"WasmChild\",\"parent\":0,\"transform\":{\"translation\":[1,1,1],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}}",
+        "]}}"
+    );
+    let json = JSON.as_bytes();
+    let mut out = header();
+
+    // types: 0 (i32,i32,i32)->i32, 1 (i32,f32,f32,f32)->(), 2 (i32,f32)->()
+    let mut types = Vec::new();
+    leb(3, &mut types);
+    func_type(&[I32, I32, I32], &[I32], &mut types);
+    func_type(&[I32, F32, F32, F32], &[], &mut types);
+    func_type(&[I32, F32], &[], &mut types);
+    section(1, &types, &mut out);
+
+    let mut imports = Vec::new();
+    leb(2, &mut imports);
+    import("noctis", "instantiate_prefab", 0, &mut imports);
+    import("noctis", "set_position", 1, &mut imports);
+    section(2, &imports, &mut out);
+
+    let mut functions = Vec::new();
+    leb(1, &mut functions);
+    leb(2, &mut functions);
+    section(3, &functions, &mut out);
+
+    let mut memory = Vec::new();
+    leb(1, &mut memory);
+    memory.push(0x00);
+    leb(1, &mut memory);
+    section(5, &memory, &mut out);
+
+    let mut exports = Vec::new();
+    leb(2, &mut exports);
+    name("memory", &mut exports);
+    exports.push(0x02);
+    leb(0, &mut exports);
+    name("on_update", &mut exports);
+    exports.push(0x00);
+    leb(2, &mut exports);
+    section(7, &exports, &mut out);
+
+    // body: root = instantiate_prefab(json, len, -1); set_position(root, 7, 8, 9)
+    let mut body = Vec::new();
+    leb(0, &mut body); // no locals
+    body.extend_from_slice(&[0x41, 0x00]); // i32.const 0 (json ptr)
+    body.push(0x41);
+    leb(json.len() as u32, &mut body); // i32.const len
+    body.extend_from_slice(&[0x41, 0x7f]); // i32.const -1 (no parent)
+    body.extend_from_slice(&[0x10, 0x00]); // call instantiate_prefab -> root
+    body.extend_from_slice(&[0x43, 0x00, 0x00, 0xe0, 0x40]); // f32.const 7
+    body.extend_from_slice(&[0x43, 0x00, 0x00, 0x00, 0x41]); // f32.const 8
+    body.extend_from_slice(&[0x43, 0x00, 0x00, 0x10, 0x41]); // f32.const 9
+    body.extend_from_slice(&[0x10, 0x01]); // call set_position
+    body.push(0x0b); // end
+    let mut code = Vec::new();
+    leb(1, &mut code);
+    leb(body.len() as u32, &mut code);
+    code.extend_from_slice(&body);
+    section(10, &code, &mut out);
+
+    let mut data = Vec::new();
+    leb(1, &mut data);
+    data.push(0x00);
+    data.extend_from_slice(&[0x41, 0x00, 0x0b]); // i32.const 0
+    leb(json.len() as u32, &mut data);
+    data.extend_from_slice(json);
+    section(11, &data, &mut out);
+
+    out
+}
+
 fn world_with(source: String) -> (World, Entity) {
     let mut world = World::new();
     let entity = world.spawn();
@@ -470,6 +549,35 @@ fn a_wasm_script_reads_input() {
     assert!(vec3_approx_eq(
         translation(&world, entity),
         vec3(0.0, 5.0, 0.0),
+        1e-4
+    ));
+}
+
+#[test]
+fn a_wasm_script_instantiates_a_prefab_by_root_handle() {
+    let (mut world, _) = world_with(wasm_host::encode(&prefab_module()));
+    let assets = AssetRegistry::new();
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+
+    runtime.run_update(&mut world, &assets, 0.016);
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+
+    // `instantiate_prefab` returned the root's handle; `set_position` through it
+    // must land on the real prefab root, while the child is left in place.
+    let root = named(&world, "WasmRoot");
+    assert!(vec3_approx_eq(
+        translation(&world, root),
+        vec3(7.0, 8.0, 9.0),
+        1e-4
+    ));
+    let child = named(&world, "WasmChild");
+    assert!(vec3_approx_eq(
+        translation(&world, child),
+        vec3(1.0, 1.0, 1.0),
         1e-4
     ));
 }

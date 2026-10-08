@@ -180,7 +180,10 @@ impl Abi {
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             AddScript => (vec![ValType::I32, ValType::I32, ValType::I32], vec![]),
-            InstantiatePrefab => (vec![ValType::I32, ValType::I32, ValType::I32], vec![]),
+            InstantiatePrefab => (
+                vec![ValType::I32, ValType::I32, ValType::I32],
+                vec![ValType::I32],
+            ),
             TimeDelta | TimeElapsed => (vec![], vec![ValType::F32]),
         };
         FuncType { params, results }
@@ -287,14 +290,13 @@ impl Abi {
                 Vec::new()
             }
             InstantiatePrefab => {
-                if let Some(json) = memory_string_at(args, memory, 0) {
-                    bridge.commands.push(ScriptCommand::InstantiatePrefab {
-                        json,
-                        parent: handle(2),
-                        spawned: Vec::new(),
-                    });
-                }
-                Vec::new()
+                let Some(json) = memory_string_at(args, memory, 0) else {
+                    return Vec::new();
+                };
+                // Return a handle for the prefab's root so the module can address
+                // it immediately (resolved to the real entity at replay).
+                let root = bridge.instantiate_prefab(json, handle(2));
+                vec![Value::I32(handle_of(handles, root))]
             }
             KeyDown => {
                 let down = memory_string_at(args, memory, 0)
@@ -642,6 +644,11 @@ mod tests {
         assert_eq!(
             Abi::InstantiatePrefab.func_type().params,
             vec![ValType::I32, ValType::I32, ValType::I32]
+        );
+        // Instantiation hands back the prefab root.
+        assert_eq!(
+            Abi::InstantiatePrefab.func_type().results,
+            vec![ValType::I32]
         );
     }
 

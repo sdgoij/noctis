@@ -112,6 +112,11 @@ pub enum ScriptCommand {
         parent: Option<EntityId>,
         /// The entities that were created, in document order.
         spawned: Vec<EntityId>,
+        /// The handle the caller was handed for the prefab's root entity, when
+        /// the command was queued by a host (a sandboxed engine cannot know the
+        /// real id until it is replayed, so it names a placeholder). `None` when
+        /// the command was produced by a direct, eager call.
+        root: Option<EntityId>,
     },
 }
 
@@ -388,6 +393,7 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
             json: json.to_string(),
             parent: parent.map(entity_id),
             spawned: spawned.clone(),
+            root: None,
         });
         spawned
     }

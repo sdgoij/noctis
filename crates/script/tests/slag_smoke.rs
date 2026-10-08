@@ -137,6 +137,43 @@ fn find_entity_resolves_to_the_real_entity_after_replay() {
     );
 }
 
+/// A prefab document the script instantiates; its first entity ("JsRoot", id 0)
+/// is the prefab root the call should hand back.
+const PREFAB_SCRIPT: &str = r#"
+    var PREFAB = '{"name":"Blob","scene":{"name":"Blob","entities":[' +
+        '{"id":0,"name":"JsRoot","transform":{"translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}},' +
+        '{"id":1,"name":"JsChild","parent":0,"transform":{"translation":[1,1,1],"rotation":[0,0,0,1],"scale":[1,1,1]}}' +
+        ']}}';
+    function on_start(entity, dt) {
+        var root = instantiate_prefab(PREFAB, undefined);
+        set_position(root, 7, 8, 9);
+        set_scale(root, 4, 4, 4);
+    }
+"#;
+
+#[test]
+fn instantiate_prefab_returns_the_root_handle() {
+    let (mut world, _) = scene(PREFAB_SCRIPT);
+    let mut runtime = ScriptRuntime::with_host(SlagHost::new().expect("slag engine starts"));
+    let assets = AssetRegistry::new();
+
+    runtime.run_start(&mut world, &assets);
+
+    // `instantiate_prefab` handed back the root's handle; the writes through it
+    // must land on the real, named prefab root (not the child).
+    let root = transform(&world, named(&world, "JsRoot"));
+    assert!(vec3_approx_eq(root.translation, vec3(7.0, 8.0, 9.0), 1e-4));
+    assert!(vec3_approx_eq(root.scale, vec3(4.0, 4.0, 4.0), 1e-4));
+
+    let child = transform(&world, named(&world, "JsChild"));
+    assert!(vec3_approx_eq(child.translation, vec3(1.0, 1.0, 1.0), 1e-4));
+    assert!(
+        runtime.host().errors().is_empty(),
+        "unexpected script errors: {:?}",
+        runtime.host().errors()
+    );
+}
+
 /// A hot counting loop. With the `jit` feature on (which this crate's `slag`
 /// feature enables) `SlagHost::new` installs the Cranelift hook, so this drives
 /// the compiled path; the result also guards correctness.

@@ -165,6 +165,25 @@ impl Bridge {
             .push(ScriptCommand::SetScale { entity: id, scale });
     }
 
+    /// Queue a prefab instantiation, returning a placeholder for the prefab's
+    /// root entity so the caller can address it immediately (the real entities
+    /// appear at replay).
+    pub(crate) fn instantiate_prefab(
+        &mut self,
+        json: String,
+        parent: Option<EntityId>,
+    ) -> EntityId {
+        let root = placeholder_id(self.next_placeholder);
+        self.next_placeholder += 1;
+        self.commands.push(ScriptCommand::InstantiatePrefab {
+            json,
+            parent,
+            spawned: Vec::new(),
+            root: Some(root),
+        });
+        root
+    }
+
     /// The handle of the entity named `name`, if the snapshot has one.
     pub(crate) fn find(&self, name: &str) -> Option<EntityId> {
         self.names.get(name).copied()
@@ -204,9 +223,16 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
             ScriptCommand::AddScript { entity, source } => {
                 api.add_script(resolve(&map, entity), source);
             }
-            ScriptCommand::InstantiatePrefab { json, parent, .. } => {
+            ScriptCommand::InstantiatePrefab {
+                json, parent, root, ..
+            } => {
                 let parent = parent.map(|p| resolve(&map, p));
-                api.instantiate_prefab(&json, parent);
+                let created = api.instantiate_prefab(&json, parent);
+                // The caller was handed `root` as the prefab's root entity; bind
+                // it now that the real entities exist.
+                if let (Some(placeholder), Some(first)) = (root, created.first()) {
+                    map.insert(placeholder, *first);
+                }
             }
         }
     }
