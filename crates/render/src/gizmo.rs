@@ -163,6 +163,9 @@ fn push_circle(
     }
 }
 
+// A cone is fully described by its base frame, radius, height and colour; the
+// flat parameter list is deliberate and there is only one call site.
+#[allow(clippy::too_many_arguments)]
 fn push_cone(
     triangles: &mut Vec<GizmoVertex>,
     indices: &mut Vec<u32>,

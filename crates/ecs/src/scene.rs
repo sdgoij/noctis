@@ -23,10 +23,10 @@ pub fn set_parent(world: &mut World, child: Entity, parent: Option<Entity>) {
         return;
     }
     // Detach from the previous parent.
-    if let Some(Parent(old)) = world.get::<Parent>(child).copied() {
-        if let Some(children) = world.get_mut::<Children>(old) {
-            children.0.retain(|c| *c != child);
-        }
+    if let Some(Parent(old)) = world.get::<Parent>(child).copied()
+        && let Some(children) = world.get_mut::<Children>(old)
+    {
+        children.0.retain(|c| *c != child);
     }
     match parent {
         Some(p) if world.is_alive(p) && p != child => {
@@ -165,8 +165,8 @@ impl Scene {
                 .get::<Parent>(*entity)
                 .and_then(|p| id_of.get(&p.0).copied());
             let name = self.world.get::<Name>(*entity).map(|n| n.0.clone());
-            let active = self.world.get::<Active>(*entity).map_or(true, |a| a.0);
-            let visible = self.world.get::<Visible>(*entity).map_or(true, |v| v.0);
+            let active = self.world.get::<Active>(*entity).is_none_or(|a| a.0);
+            let visible = self.world.get::<Visible>(*entity).is_none_or(|v| v.0);
             let components = component_descs(&self.world, *entity, assets);
             descs.push(EntityDesc {
                 id: id as u32,

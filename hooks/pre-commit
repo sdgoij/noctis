@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-commit gate: refuse commits that do not pass formatting and lints.
+#
+# Wired up via `git config core.hooksPath hooks` (see README / repo setup).
+# Bypass once with `git commit --no-verify` when you really mean it.
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH; skipping fmt/clippy checks." >&2
+    exit 0
+fi
+
+set -e
+
+echo "pre-commit: cargo fmt --all -- --check"
+cargo fmt --all -- --check
+
+echo "pre-commit: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-commit: ok"

@@ -281,10 +281,10 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
         match &event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    if let Err(err) = renderer.resize(size.width, size.height) {
-                        log::warn!("resize failed: {err}");
-                    }
+                if let Some(renderer) = self.renderer.as_mut()
+                    && let Err(err) = renderer.resize(size.width, size.height)
+                {
+                    log::warn!("resize failed: {err}");
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -296,14 +296,13 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
             WindowEvent::KeyboardInput {
                 event: key_event, ..
             } => {
-                if let PhysicalKey::Code(code) = key_event.physical_key {
-                    if let Some(key) = map_key(code) {
-                        if let Some(input) = self.driver.input_mut() {
-                            match key_event.state {
-                                ElementState::Pressed => input.press_key(key),
-                                ElementState::Released => input.release_key(key),
-                            }
-                        }
+                if let PhysicalKey::Code(code) = key_event.physical_key
+                    && let Some(key) = map_key(code)
+                    && let Some(input) = self.driver.input_mut()
+                {
+                    match key_event.state {
+                        ElementState::Pressed => input.press_key(key),
+                        ElementState::Released => input.release_key(key),
                     }
                 }
                 self.forward_to_egui(&event);

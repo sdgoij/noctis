@@ -280,7 +280,11 @@ mod tests {
         let composed = parent * child;
         // child's origin in parent space: rotate (1,0,0) by 90y -> (0,0,-1),
         // then translate -> (5,0,-1).
-        assert!(vec3_approx_eq(composed.translation, vec3(5.0, 0.0, -1.0), 1e-3));
+        assert!(vec3_approx_eq(
+            composed.translation,
+            vec3(5.0, 0.0, -1.0),
+            1e-3
+        ));
     }
 
     #[test]

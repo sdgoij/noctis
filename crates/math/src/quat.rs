@@ -177,6 +177,14 @@ impl Quat {
     }
 
     /// Hamilton product; `a.mul(b)` applies `b` then `a`.
+    ///
+    /// This is the named form of the `*` operator: [`std::ops::Mul`] is
+    /// implemented for `Quat` and forwards here. Both forms are part of the
+    /// `math` contract (see `docs/core-api.md`), so the method is intentionally
+    /// kept next to the operator. The lint is a false positive: the trait is
+    /// already implemented, and consumers such as `editor` call `.mul(..)`
+    /// without importing `std::ops::Mul`.
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, rhs: Self) -> Self {
         Self::new(
             self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,

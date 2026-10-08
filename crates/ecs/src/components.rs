@@ -680,7 +680,7 @@ mod tests {
         world.insert(e, Collider::default());
         world.insert(e, Light::directional(vec3(-1.0, -1.0, 0.0)));
         assert_eq!(world.get::<Name>(e).unwrap().as_str(), "Player");
-        assert!(world.has::<Camera>(e) == false);
+        assert!(!world.has::<Camera>(e));
         assert_eq!(world.count::<MeshRenderer>(), 1);
     }
 }

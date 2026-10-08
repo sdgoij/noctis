@@ -404,10 +404,10 @@ impl<'a, C> Iterator for Query<'a, C> {
     fn next(&mut self) -> Option<Self::Item> {
         let inner = self.inner.as_mut()?;
         for (index, slot) in inner.by_ref() {
-            if let Some(component) = slot {
-                if let Some(entity) = self.entities.entity_at(index) {
-                    return Some((entity, component));
-                }
+            if let Some(component) = slot
+                && let Some(entity) = self.entities.entity_at(index)
+            {
+                return Some((entity, component));
             }
         }
         None
@@ -425,10 +425,10 @@ impl<'a, C> Iterator for QueryMut<'a, C> {
     fn next(&mut self) -> Option<Self::Item> {
         let inner = self.inner.as_mut()?;
         for (index, slot) in inner.by_ref() {
-            if let Some(component) = slot {
-                if let Some(entity) = self.entities.entity_at(index) {
-                    return Some((entity, component));
-                }
+            if let Some(component) = slot
+                && let Some(entity) = self.entities.entity_at(index)
+            {
+                return Some((entity, component));
             }
         }
         None
@@ -457,12 +457,12 @@ impl<'a, A, B> Iterator for QueryWith<'a, A, B> {
             if self.cursor >= self.candidates.len() {
                 return None;
             }
-            if self.candidates[self.cursor] as usize == index {
-                if let Some(component) = slot {
-                    self.cursor += 1;
-                    if let Some(entity) = self.entities.entity_at(index) {
-                        return Some((entity, component));
-                    }
+            if self.candidates[self.cursor] as usize == index
+                && let Some(component) = slot
+            {
+                self.cursor += 1;
+                if let Some(entity) = self.entities.entity_at(index) {
+                    return Some((entity, component));
                 }
             }
         }
@@ -542,7 +542,7 @@ mod tests {
         world.spawn(); // no Position
         let mut seen: Vec<(Entity, f32)> =
             world.query::<Position>().map(|(e, p)| (e, p.0)).collect();
-        seen.sort_by(|x, y| x.0.cmp(&y.0));
+        seen.sort_by_key(|x| x.0);
         assert_eq!(seen, vec![(a, 1.0), (b, 2.0)]);
     }
 

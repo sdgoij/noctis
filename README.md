@@ -37,6 +37,16 @@ Enable the real JavaScript backend:
 cargo test -p script --features slag
 ```
 
+### Pre-commit hook
+
+The `hooks/pre-commit` script blocks commits whose code fails
+`cargo fmt --check` or `cargo clippy --workspace --all-targets -- -D warnings`.
+Point Git at it once per clone:
+
+```sh
+git config core.hooksPath hooks
+```
+
 ## Status
 
 All crates — `math`, `ecs`, `render`, `physics`, `audio`, `script`, `testscene`,

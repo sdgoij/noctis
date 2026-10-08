@@ -546,7 +546,7 @@ impl IblData {
     /// constant LUT. Used when no HDR is provided.
     pub fn neutral() -> IblData {
         let mut lut = vec![0.0f32; 4 * 4 * 2];
-        for texel in lut.chunks_exact_mut(2) {
+        for texel in lut.as_chunks_mut::<2>().0 {
             texel[0] = 1.0;
             texel[1] = 0.0;
         }

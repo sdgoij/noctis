@@ -137,17 +137,17 @@ impl<T> Assets<T> {
     }
 
     fn insert_impl(&mut self, path: Option<String>, value: T) -> AssetHandle<T> {
-        if let Some(ref p) = path {
-            if let Some(&id) = self.paths.get(p) {
-                self.entries.insert(
-                    id,
-                    Entry {
-                        value: Arc::new(value),
-                        path,
-                    },
-                );
-                return AssetHandle::new(id);
-            }
+        if let Some(ref p) = path
+            && let Some(&id) = self.paths.get(p)
+        {
+            self.entries.insert(
+                id,
+                Entry {
+                    value: Arc::new(value),
+                    path,
+                },
+            );
+            return AssetHandle::new(id);
         }
         let id = AssetId(self.next_id);
         self.next_id += 1;

@@ -45,6 +45,9 @@ use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
 use wgpu::util::DeviceExt;
 
+/// Records an overlay pass (e.g. an egui UI) into a frame's encoder and target.
+type OverlayPass<'a> = dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView) + 'a;
+
 /// Configuration for a headless [`Renderer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererConfig {
@@ -474,7 +477,7 @@ impl Renderer {
         assets: &AssetRegistry,
         camera: Entity,
         present_view: Option<&wgpu::TextureView>,
-        overlay: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView)>,
+        overlay: Option<&mut OverlayPass<'_>>,
     ) -> Result<(), RenderError> {
         let view = extract_camera(world, camera, self.targets.width, self.targets.height)
             .ok_or(RenderError::NoCamera)?;

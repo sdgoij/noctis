@@ -494,10 +494,10 @@ impl LoadedGltf {
             .collect();
 
         for (index, node) in self.nodes.iter().enumerate() {
-            if let Some(parent) = node.parent {
-                if let Some(&parent_entity) = node_entities.get(parent) {
-                    set_parent(world, node_entities[index], Some(parent_entity));
-                }
+            if let Some(parent) = node.parent
+                && let Some(&parent_entity) = node_entities.get(parent)
+            {
+                set_parent(world, node_entities[index], Some(parent_entity));
             }
         }
 
@@ -605,11 +605,11 @@ mod tests {
 
     fn make_glb(json: &str, bin: &[u8]) -> Vec<u8> {
         let mut json_bytes = json.as_bytes().to_vec();
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
         let mut bin_bytes = bin.to_vec();
-        while bin_bytes.len() % 4 != 0 {
+        while !bin_bytes.len().is_multiple_of(4) {
             bin_bytes.push(0);
         }
         let total = 12 + 8 + json_bytes.len() + 8 + bin_bytes.len();

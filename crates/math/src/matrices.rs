@@ -202,10 +202,12 @@ pub fn to_cols_array(m: &Mat4) -> [[f32; 4]; 4] {
 
 /// Build a matrix from `[[f32; 4]; 4]` columns.
 pub fn from_cols_array(c: [[f32; 4]; 4]) -> Mat4 {
-    Mat4::new(gvec4(c[0][0], c[0][1], c[0][2], c[0][3]),
-              gvec4(c[1][0], c[1][1], c[1][2], c[1][3]),
-              gvec4(c[2][0], c[2][1], c[2][2], c[2][3]),
-              gvec4(c[3][0], c[3][1], c[3][2], c[3][3]))
+    Mat4::new(
+        gvec4(c[0][0], c[0][1], c[0][2], c[0][3]),
+        gvec4(c[1][0], c[1][1], c[1][2], c[1][3]),
+        gvec4(c[2][0], c[2][1], c[2][2], c[2][3]),
+        gvec4(c[3][0], c[3][1], c[3][2], c[3][3]),
+    )
 }
 
 /// Compose a TRS matrix and return it directly as columns.
@@ -239,7 +241,7 @@ fn normalize_or(v: Vec3, fallback: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{vec3_approx_eq, Vec4};
+    use crate::{Vec4, vec3_approx_eq};
 
     const EPS: f32 = 1e-4;
 
@@ -284,7 +286,10 @@ mod tests {
         let v = vec3(1.0, 2.0, -3.0);
         let by_matrix = transform_point(&m, v);
         let by_quat = q.rotate_vec3(v);
-        assert!(vec3_approx_eq(by_matrix, by_quat, 1e-4), "{by_matrix:?} vs {by_quat:?}");
+        assert!(
+            vec3_approx_eq(by_matrix, by_quat, 1e-4),
+            "{by_matrix:?} vs {by_quat:?}"
+        );
     }
 
     #[test]
@@ -310,7 +315,11 @@ mod tests {
 
     #[test]
     fn look_at_places_eye_at_origin() {
-        let view = look_at_rh(vec3(0.0, 0.0, 5.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+        let view = look_at_rh(
+            vec3(0.0, 0.0, 5.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+        );
         let p = transform_point(&view, vec3(0.0, 0.0, 5.0));
         assert!(vec3_approx_eq(p, vec3(0.0, 0.0, 0.0), EPS), "got {p:?}");
         // A point in front of the camera is at negative z in RH view space.
@@ -320,7 +329,11 @@ mod tests {
 
     #[test]
     fn inverse_round_trips() {
-        let m = trs(vec3(1.0, 2.0, 3.0), Quat::from_rotation_y(0.8), vec3(2.0, 0.5, 1.5));
+        let m = trs(
+            vec3(1.0, 2.0, 3.0),
+            Quat::from_rotation_y(0.8),
+            vec3(2.0, 0.5, 1.5),
+        );
         let inv = inverse(&m).expect("invertible");
         let prod = m * inv;
         let cols = to_cols_array(&prod);
@@ -334,7 +347,11 @@ mod tests {
 
     #[test]
     fn cols_array_round_trip() {
-        let m = trs(vec3(-1.0, 4.0, 0.5), Quat::from_euler_xyz(0.1, 0.2, 0.3), vec3(1.0, 2.0, 3.0));
+        let m = trs(
+            vec3(-1.0, 4.0, 0.5),
+            Quat::from_euler_xyz(0.1, 0.2, 0.3),
+            vec3(1.0, 2.0, 3.0),
+        );
         let cols = to_cols_array(&m);
         let back = from_cols_array(cols);
         assert_eq!(to_cols_array(&back), cols);

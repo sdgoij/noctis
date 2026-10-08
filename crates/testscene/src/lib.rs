@@ -171,7 +171,7 @@ fn checker_texture(name: &str, cells: u32) -> Texture {
     let mut data = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
-            let on = ((x / cell) + (y / cell)) % 2 == 0;
+            let on = ((x / cell) + (y / cell)).is_multiple_of(2);
             let c = if on { 230u8 } else { 40u8 };
             data.extend_from_slice(&[c, c, c, 255]);
         }

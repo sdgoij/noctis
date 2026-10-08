@@ -259,6 +259,9 @@ impl ResourceCache {
 
     /// Get or create a material bind group, resolving its textures (with
     /// fallbacks) against `assets`.
+    // The parameters are the device/queue plus the material and its texture
+    // resolution inputs; a one-use struct would only add indirection here.
+    #[allow(clippy::too_many_arguments)]
     pub fn material(
         &mut self,
         device: &wgpu::Device,

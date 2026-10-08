@@ -109,10 +109,10 @@ pub fn pick_entity(
             continue;
         };
         let world_aabb = render::transform_aabb(&global.matrix, &local);
-        if let Some(t) = ray_aabb(ray, &world_aabb, max_distance) {
-            if best.is_none_or(|(best_t, _)| t < best_t) {
-                best = Some((t, entity));
-            }
+        if let Some(t) = ray_aabb(ray, &world_aabb, max_distance)
+            && best.is_none_or(|(best_t, _)| t < best_t)
+        {
+            best = Some((t, entity));
         }
     }
     best.map(|(_, entity)| entity)

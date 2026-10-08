@@ -100,10 +100,10 @@ pub fn is_renderable(world: &World, entity: Entity) -> bool {
 
 /// The local-space bounds of a mesh, computing them if the asset has none.
 fn mesh_bounds(mesh: &Mesh) -> Aabb {
-    if let Some(bounds) = mesh.bounds {
-        if !bounds.is_empty() {
-            return bounds;
-        }
+    if let Some(bounds) = mesh.bounds
+        && !bounds.is_empty()
+    {
+        return bounds;
     }
     mesh.compute_bounds()
         .unwrap_or(Aabb::new(vec3(-0.5, -0.5, -0.5), vec3(0.5, 0.5, 0.5)))

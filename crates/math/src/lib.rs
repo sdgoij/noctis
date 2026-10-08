@@ -27,8 +27,8 @@ pub mod transform;
 pub use bounds::Aabb;
 pub use matrices::{
     from_cols_array, from_quat, identity, inverse, look_at_lh, look_at_rh, orthographic,
-    perspective, rotation_x, rotation_y, rotation_z, scaling, to_cols_array, translation, transpose,
-    trs, trs_to_cols_array,
+    perspective, rotation_x, rotation_y, rotation_z, scaling, to_cols_array, translation,
+    transpose, trs, trs_to_cols_array,
 };
 pub use quat::Quat;
 pub use transform::Transform;
@@ -160,7 +160,15 @@ mod tests {
 
     #[test]
     fn vec_approx_eq_works() {
-        assert!(vec3_approx_eq(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 3.0 + 1e-7), 1e-5));
-        assert!(!vec3_approx_eq(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 3.1), 1e-5));
+        assert!(vec3_approx_eq(
+            vec3(1.0, 2.0, 3.0),
+            vec3(1.0, 2.0, 3.0 + 1e-7),
+            1e-5
+        ));
+        assert!(!vec3_approx_eq(
+            vec3(1.0, 2.0, 3.0),
+            vec3(1.0, 2.0, 3.1),
+            1e-5
+        ));
     }
 }
