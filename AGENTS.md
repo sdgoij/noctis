@@ -104,9 +104,11 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   egui panels (outliner, inspector, transform editing), supports click-to-select
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per
-  drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. It
-  spawns primitive objects (cube/sphere/plane/light/camera) from the Outliner's
-  **Add** buttons and `--testscene` loads the all-features test scene.
+  drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. The
+  viewport is navigated with WASD (fly), a middle-mouse drag (orbit about the
+  selection, or the origin when nothing is selected) and the scroll wheel
+  (dolly). It spawns primitive objects (cube/sphere/plane/light/camera) from the
+  Outliner's **Add** buttons and `--testscene` loads the all-features test scene.
   `noctis-runtime --export <dir> --scene <file>` writes a self-contained game
   folder (a copy of the executable, `scene.json`, and a manifest) that loads its
   bundled scene when run with no arguments. The windowed loop is not unit-tested

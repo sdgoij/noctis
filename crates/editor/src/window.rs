@@ -29,6 +29,13 @@ const KEY_D: Key = Key::Letter(3);
 const KEY_S: Key = Key::Letter(18);
 const KEY_W: Key = Key::Letter(22);
 
+/// Orbit sensitivity: radians of camera rotation per logical point of a
+/// middle-mouse drag.
+const ORBIT_SPEED: f32 = 0.008;
+/// Dolly sensitivity: world units moved along the view direction per scroll
+/// point.
+const ZOOM_SPEED: f32 = 0.05;
+
 /// The gizmo shaft length as a fraction of the viewport height.
 const GIZMO_SCREEN_FRACTION: f32 = 0.15;
 /// How close (as a fraction of the shaft length) a ray must pass to a handle to
@@ -88,6 +95,9 @@ pub struct EditorDriver {
     gizmo_orientation: gizmo::GizmoOrientation,
     hovered_axis: Option<GizmoAxis>,
     drag: Option<GizmoDrag>,
+    /// The world pivot a middle-mouse orbit turns about, captured when the drag
+    /// begins so the point stays fixed on screen for the whole gesture.
+    orbit_pivot: Option<Vec3>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -101,6 +111,7 @@ impl std::fmt::Debug for EditorDriver {
             .field("gizmo_orientation", &self.gizmo_orientation)
             .field("hovered_axis", &self.hovered_axis)
             .field("drag", &self.drag)
+            .field("orbit_pivot", &self.orbit_pivot)
             .finish_non_exhaustive()
     }
 }
@@ -119,6 +130,7 @@ impl EditorDriver {
             gizmo_orientation: gizmo::GizmoOrientation::World,
             hovered_axis: None,
             drag: None,
+            orbit_pivot: None,
         }
     }
 
@@ -176,6 +188,37 @@ impl EditorDriver {
 
     fn axis(&self, positive: Key, negative: Key) -> f32 {
         (self.input.key_down(positive) as i32 - self.input.key_down(negative) as i32) as f32
+    }
+
+    /// The world point an orbit turns about: the selected entity's position if
+    /// there is a selection, otherwise the world origin.
+    fn orbit_pivot_position(&self) -> Vec3 {
+        self.selected
+            .and_then(|entity| self.world_position(entity))
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+    }
+
+    /// Turn the active camera rigidly about `pivot` by a middle-mouse drag,
+    /// preserving the pivot's position on screen (a Blender-style orbit).
+    fn orbit(&mut self, pivot: Vec3, dx: f32, dy: f32) {
+        let world = &mut self.editor.scene_mut().world;
+        let Some(camera) = render::first_active_camera(world) else {
+            return;
+        };
+        if let Some(transform) = world.get_mut::<LocalTransform>(camera) {
+            *transform = orbit_transform(*transform, pivot, dx, dy);
+        }
+    }
+
+    /// Move the active camera along its view direction by a scroll amount.
+    fn dolly(&mut self, scroll: f32) {
+        let world = &mut self.editor.scene_mut().world;
+        let Some(camera) = render::first_active_camera(world) else {
+            return;
+        };
+        if let Some(transform) = world.get_mut::<LocalTransform>(camera) {
+            *transform = dolly_transform(*transform, scroll);
+        }
     }
 
     /// Spawn a new object into the scene and select it.
@@ -616,8 +659,30 @@ impl EditorDriver {
         }
     }
 
-    /// Handle gizmo hover, handle dragging, and click-to-select in the viewport.
+    /// Handle camera navigation, gizmo hover, handle dragging, and click-to-select
+    /// in the viewport.
     fn viewport_interaction(&mut self, ui: &egui::Ui, rect: egui::Rect, response: &egui::Response) {
+        // Camera navigation, independent of the primary-button edit gestures below:
+        // the middle mouse button orbits around a fixed pivot, the wheel dollies.
+        if response.drag_started_by(egui::PointerButton::Middle) {
+            self.orbit_pivot = Some(self.orbit_pivot_position());
+        }
+        if response.dragged_by(egui::PointerButton::Middle)
+            && let Some(pivot) = self.orbit_pivot
+        {
+            let drag = response.drag_delta();
+            self.orbit(pivot, drag.x, drag.y);
+        }
+        if response.drag_stopped_by(egui::PointerButton::Middle) {
+            self.orbit_pivot = None;
+        }
+        if response.contains_pointer() {
+            let scroll = ui.ctx().input(|input| input.smooth_scroll_delta().y);
+            if scroll != 0.0 {
+                self.dolly(scroll);
+            }
+        }
+
         let pointer = if response.hovered() || response.dragged() {
             response
                 .interact_pointer_pos()
@@ -636,8 +701,8 @@ impl EditorDriver {
             self.hovered_axis = handle;
         }
 
-        // Begin a drag when a press lands on a handle.
-        if response.drag_started()
+        // Begin a drag when a primary-button press lands on a handle.
+        if response.drag_started_by(egui::PointerButton::Primary)
             && let (Some(ray), Some(entity), Some(axis)) = (ray.as_ref(), self.selected, handle)
             && let Some(drag) = self.begin_drag(entity, axis, ray)
         {
@@ -647,7 +712,7 @@ impl EditorDriver {
         }
 
         // Apply the drag as the pointer moves.
-        if response.dragged()
+        if response.dragged_by(egui::PointerButton::Primary)
             && let (Some(drag), Some(ray)) = (self.drag, ray.as_ref())
         {
             self.update_drag(drag, ray);
@@ -655,7 +720,7 @@ impl EditorDriver {
         }
 
         // Commit the drag as a single undo step on release.
-        if response.drag_stopped() && self.drag.take().is_some() {
+        if response.drag_stopped_by(egui::PointerButton::Primary) && self.drag.take().is_some() {
             self.editor.end_interactive_edit();
         }
 
@@ -784,7 +849,7 @@ impl AppDriver for EditorDriver {
                 }
                 ui.separator();
                 ui.label(format!("{} entities", self.editor.list_entities().len()));
-                ui.label("|  WASD: fly camera");
+                ui.label("|  WASD: fly  ·  MMB drag: orbit  ·  wheel: zoom");
             });
         });
 
@@ -834,7 +899,10 @@ impl AppDriver for EditorDriver {
             .show(ui, |ui| {
                 ui.label("Viewport");
                 ui.separator();
-                ui.label("Click to select. Drag a handle to transform. WASD flies the camera.");
+                ui.label(
+                    "WASD flies the camera, a middle-mouse drag orbits, the wheel zooms.\n\
+                     Click to select. Drag a handle to transform.",
+                );
                 let rect = ui.max_rect();
                 let response = ui.interact(
                     rect,
@@ -851,7 +919,126 @@ impl AppDriver for EditorDriver {
     }
 }
 
+/// Rotate a camera transform rigidly about `pivot` by an orbit drag of `(dx, dy)`
+/// logical points.
+///
+/// Rotating both the camera's position and orientation by the same rotation
+/// leaves any point's camera-space coordinates unchanged, so the pivot keeps its
+/// screen position for the whole gesture.
+fn orbit_transform(transform: LocalTransform, pivot: Vec3, dx: f32, dy: f32) -> LocalTransform {
+    // Pitch about the camera's own right axis, then yaw about the world up axis.
+    let right = transform.rotation.rotate_vec3(vec3(1.0, 0.0, 0.0));
+    let pitch = Quat::from_axis_angle(right, dy * ORBIT_SPEED);
+    let yaw = Quat::from_rotation_y(dx * ORBIT_SPEED);
+    let turn = (yaw * pitch).normalized();
+
+    let offset = transform.translation - pivot;
+    LocalTransform {
+        translation: pivot + turn.rotate_vec3(offset),
+        rotation: (turn * transform.rotation).normalized(),
+        scale: transform.scale,
+    }
+}
+
+/// Move a camera transform along its view direction by `scroll` points; positive
+/// scroll means zoom in (dolly forward).
+fn dolly_transform(transform: LocalTransform, scroll: f32) -> LocalTransform {
+    let forward = transform.rotation.rotate_vec3(vec3(0.0, 0.0, -1.0));
+    LocalTransform {
+        translation: transform.translation + forward * (scroll * ZOOM_SPEED),
+        ..transform
+    }
+}
+
 /// Open `editor` in a window with egui panels. Blocks until the window closes.
 pub fn run(editor: Editor, config: WindowConfig) -> Result<(), PlatformError> {
     platform::run(EditorDriver::new(editor), config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A camera on `+Z` at distance 6, looking down its local `-Z` toward the
+    /// world origin.
+    fn orbiting_camera() -> LocalTransform {
+        LocalTransform::from_translation(vec3(0.0, 0.0, 6.0))
+    }
+
+    /// The camera-space coordinates of a world point (what the camera sees).
+    fn camera_space(t: &LocalTransform, world_point: Vec3) -> Vec3 {
+        t.rotation
+            .inverse()
+            .rotate_vec3(world_point - t.translation)
+    }
+
+    #[test]
+    fn orbit_preserves_distance_and_the_pivot_on_screen() {
+        let pivot = vec3(0.0, 0.0, 0.0);
+        let before = orbiting_camera();
+        let after = orbit_transform(before, pivot, 30.0, -20.0);
+
+        // A rigid rotation keeps the camera at the same distance from the pivot.
+        let d0 = math::length(before.translation - pivot);
+        let d1 = math::length(after.translation - pivot);
+        assert!((d0 - d1).abs() < 1e-3, "distance changed: {d0} -> {d1}");
+
+        // And it keeps the pivot at the same spot in the camera's view.
+        let p0 = camera_space(&before, pivot);
+        let p1 = camera_space(&after, pivot);
+        assert!(
+            math::length(p0 - p1) < 1e-3,
+            "pivot moved on screen: {p0:?} -> {p1:?}"
+        );
+
+        // The camera really moved, and the rotation stayed unit length.
+        assert!(math::length(after.translation - before.translation) > 0.1);
+        assert!((after.rotation.length() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn orbit_direction_follows_the_drag() {
+        let pivot = vec3(0.0, 0.0, 0.0);
+        let base = orbiting_camera();
+
+        // Dragging right swings the camera to `+X`.
+        let right = orbit_transform(base, pivot, 20.0, 0.0);
+        assert!(
+            right.translation.x > 0.1,
+            "right drag: {:?}",
+            right.translation
+        );
+
+        // Dragging down drops the camera below the pivot.
+        let down = orbit_transform(base, pivot, 0.0, 20.0);
+        assert!(
+            down.translation.y < -0.1,
+            "down drag: {:?}",
+            down.translation
+        );
+    }
+
+    #[test]
+    fn dolly_moves_along_the_view_direction() {
+        let base = orbiting_camera(); // forward is `-Z`
+
+        let closer = dolly_transform(base, 10.0);
+        assert!(
+            closer.translation.z < base.translation.z,
+            "scroll up should zoom in: {:?}",
+            closer.translation
+        );
+
+        let farther = dolly_transform(base, -10.0);
+        assert!(
+            farther.translation.z > base.translation.z,
+            "scroll down should zoom out: {:?}",
+            farther.translation
+        );
+
+        // A dolly never rotates the camera.
+        let forward = base.rotation.rotate_vec3(vec3(0.0, 0.0, -1.0));
+        let forward_after = closer.rotation.rotate_vec3(vec3(0.0, 0.0, -1.0));
+        assert!(math::length(forward - forward_after) < 1e-6);
+    }
 }
