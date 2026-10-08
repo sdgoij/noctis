@@ -17,6 +17,7 @@ ecs.workspace = true
 render.workspace = true
 platform.workspace = true
 testscene.workspace = true
+project.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true

@@ -14,10 +14,12 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use editor::{Editor, command_schema, parse_commands};
 use platform::WindowConfig;
+use project::Project;
 
 const USAGE: &str = "\
 noctis-editor — build Noctis scenes from JSON commands
@@ -28,6 +30,9 @@ USAGE:
 OPTIONS:
     -s, --scene <PATH>      Open a scene; if the file does not exist, start a new
                             empty scene instead (written when you pass --out)
+        --project <DIR>     Open a project (its noctis.toml); --scene is then a
+                            project-relative path, and the project's default
+                            scene is used when --scene is omitted
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
@@ -102,6 +107,7 @@ fn main() -> ExitCode {
 #[derive(Default, Debug, PartialEq)]
 struct Options {
     scene: Option<String>,
+    project: Option<String>,
     command: Option<String>,
     out: Option<String>,
     controls: Option<String>,
@@ -123,15 +129,16 @@ fn run(args: &[String]) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to render schema: {e}")));
     }
 
-    let editor = build_editor(&options)?;
+    let editor = build_editor(&options, open_project(&options)?.as_ref())?;
     let entities = editor.list_entities();
     serde_json::to_string_pretty(&entities)
         .map_err(|e| CliError::Message(format!("failed to serialize entities: {e}")))
 }
 
-/// Build the editor for the options: a `--testscene`, a `--scene` file (or a
-/// new scene), then any command batch, saving when `--out` is given.
-fn build_editor(options: &Options) -> Result<Editor, CliError> {
+/// Build the editor for the options: a `--testscene`, a scene (from `--scene`,
+/// resolved against `--project`, or the project's default), then any command
+/// batch, saving when `--out` is given.
+fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, CliError> {
     let mut editor = Editor::new();
 
     if options.testscene {
@@ -139,10 +146,14 @@ fn build_editor(options: &Options) -> Result<Editor, CliError> {
         *editor.scene_mut() = scene;
         *editor.assets_mut() = assets;
         editor.scene_mut().update_transforms();
-    } else if let Some(scene) = &options.scene {
+    } else if let Some(scene) = resolve_scene(options, project) {
+        let display = scene.display().to_string();
         editor
-            .open_or_new(scene)
-            .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
+            .open_or_new(&scene)
+            .map_err(|e| CliError::Message(format!("failed to open scene {display:?}: {e}")))?;
+    } else if let Some(project) = project {
+        // A project with no scene and no default scene: start one named after it.
+        editor.new_scene(project.name());
     }
 
     if let Some(source) = &options.command {
@@ -196,6 +207,11 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
             "--scene" | "-s" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.scene = Some(value);
+                index = consumed;
+            }
+            "--project" => {
+                let (value, consumed) = value_for(&inline, args, index, &flag)?;
+                options.project = Some(value);
                 index = consumed;
             }
             "--command" | "--commands" | "-c" => {
@@ -264,17 +280,74 @@ fn wants_window(args: &[String]) -> bool {
         .any(|arg| arg == "--window" || arg.starts_with("--window="))
 }
 
-/// Build the scene from the options, then run it in a window until closed.
-fn run_windowed(options: &Options) -> Result<(), CliError> {
-    let editor = build_editor(options)?;
-    let config = WindowConfig {
+/// Open the project named by `--project`, if any.
+fn open_project(options: &Options) -> Result<Option<Project>, CliError> {
+    match &options.project {
+        Some(dir) => Project::open(dir)
+            .map(Some)
+            .map_err(|e| CliError::Message(format!("failed to open project {dir:?}: {e}"))),
+        None => Ok(None),
+    }
+}
+
+/// The scene to open: `--scene` (resolved against the project when given), else
+/// the project's default scene.
+fn resolve_scene(options: &Options, project: Option<&Project>) -> Option<PathBuf> {
+    if let Some(scene) = &options.scene {
+        return Some(match project {
+            Some(project) => project.resolve_path(scene),
+            None => PathBuf::from(scene),
+        });
+    }
+    project.and_then(Project::default_scene_file)
+}
+
+/// The window config: the project's `[window]`, else the editor default.
+fn window_config(project: Option<&Project>) -> WindowConfig {
+    let mut config = WindowConfig {
         title: "Noctis Editor".to_string(),
         width: 1280,
         height: 720,
     };
-    match &options.controls {
+    if let Some(project) = project {
+        let window = &project.manifest().window;
+        config.title = window
+            .title
+            .clone()
+            .unwrap_or_else(|| project.name().to_string());
+        config.width = window.width;
+        config.height = window.height;
+    }
+    config
+}
+
+/// Build the project's camera controls path, if it sets one.
+fn project_controls_path(project: Option<&Project>) -> Option<String> {
+    let project = project?;
+    let controls = project.manifest().input.controls.as_ref()?;
+    Some(
+        project
+            .resolve_path(controls)
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// Build the scene from the options, then run it in a window until closed.
+fn run_windowed(options: &Options) -> Result<(), CliError> {
+    let project = open_project(options)?;
+    let editor = build_editor(options, project.as_ref())?;
+    let config = window_config(project.as_ref());
+
+    // `--controls` wins over the project's `[input].controls`.
+    let controls = options
+        .controls
+        .clone()
+        .or_else(|| project_controls_path(project.as_ref()));
+
+    match controls {
         Some(path) => {
-            let controls = editor::CameraControls::load(path)
+            let controls = editor::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
             editor::window::run_with_controls(editor, config, controls)
                 .map_err(|e| CliError::Message(e.to_string()))
@@ -338,6 +411,19 @@ mod tests {
         let options = parse_args(&args(&["--window", "--controls", "controls.json"])).unwrap();
         assert!(options.window);
         assert_eq!(options.controls.as_deref(), Some("controls.json"));
+    }
+
+    #[test]
+    fn parses_a_project_and_a_scene() {
+        let options = parse_args(&args(&[
+            "--project",
+            "game",
+            "--scene",
+            "scenes/main.scene.json",
+        ]))
+        .unwrap();
+        assert_eq!(options.project.as_deref(), Some("game"));
+        assert_eq!(options.scene.as_deref(), Some("scenes/main.scene.json"));
     }
 
     #[test]

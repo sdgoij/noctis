@@ -106,7 +106,11 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   To make that possible, `App` systems are deliberately **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.
-- `editor`/`runtime` open a live windowed viewport (`--window`). The editor draws
+- `editor`/`runtime` open a live windowed viewport (`--window`). Both CLIs accept
+  `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):
+  it makes `--scene` project-relative, supplies the default scene when `--scene`
+  is omitted, and drives the window title/size and (for the runtime) gravity from
+  the manifest; `--scene` alone still opens a loose scene file. The editor draws
   egui panels (outliner, inspector, transform editing), supports click-to-select
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per

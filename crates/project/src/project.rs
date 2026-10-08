@@ -69,6 +69,27 @@ impl Project {
         self.manifest.project.settings.default_scene.as_deref()
     }
 
+    /// The default scene's file on disk, if a valid default is set.
+    pub fn default_scene_file(&self) -> Option<PathBuf> {
+        let scene = self.default_scene()?;
+        AssetPath::parse(scene)
+            .ok()
+            .map(|asset| self.file_for(&asset))
+    }
+
+    /// Resolve a user-supplied path against the project: a relative path is
+    /// treated as a project-relative asset path, while an absolute path (or one
+    /// that is not a canonical asset path) is used as given.
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        if Path::new(path).is_absolute() {
+            return PathBuf::from(path);
+        }
+        match AssetPath::parse(path) {
+            Ok(asset) => self.file_for(&asset),
+            Err(_) => PathBuf::from(path),
+        }
+    }
+
     /// An absolute path for a project-relative path.
     pub fn dir(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
@@ -196,6 +217,33 @@ mod tests {
         assert_eq!(
             project.file_for(&asset),
             Path::new("/tmp/game/assets/models/robot.glb")
+        );
+    }
+
+    #[test]
+    fn resolve_path_joins_relative_and_keeps_absolute() {
+        let manifest = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        let project = Project::from_manifest("/tmp/game", manifest);
+        assert_eq!(
+            project.resolve_path("scenes/main.scene.json"),
+            Path::new("/tmp/game/scenes/main.scene.json")
+        );
+        assert_eq!(
+            project.resolve_path("/abs/other.scene.json"),
+            Path::new("/abs/other.scene.json")
+        );
+    }
+
+    #[test]
+    fn default_scene_file_resolves_the_setting() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n",
+        )
+        .unwrap();
+        let project = Project::from_manifest("/tmp/game", manifest);
+        assert_eq!(
+            project.default_scene_file(),
+            Some(Path::new("/tmp/game/scenes/main.scene.json").to_path_buf())
         );
     }
 

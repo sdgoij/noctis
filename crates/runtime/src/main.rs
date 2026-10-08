@@ -18,7 +18,9 @@ use std::process::ExitCode;
 
 use ecs::assets::AssetRegistry;
 use ecs::scene::Scene;
+use math::vec3;
 use platform::WindowConfig;
+use project::Project;
 use render::RendererConfig;
 use runtime::{
     ExportReport, RunSummary, Runtime, RuntimeConfig, bundled_scene, demo, export_game,
@@ -29,6 +31,7 @@ use runtime::{
 #[derive(Clone, Debug)]
 struct Args {
     scene: Option<String>,
+    project: Option<String>,
     demo: bool,
     frames: u32,
     dt: f32,
@@ -46,6 +49,7 @@ impl Default for Args {
     fn default() -> Self {
         Self {
             scene: None,
+            project: None,
             demo: false,
             frames: 300,
             dt: 1.0 / 60.0,
@@ -77,6 +81,10 @@ impl Args {
                 "--scene" => {
                     let value = it.next().ok_or("--scene requires a file path")?;
                     args.scene = Some(value);
+                }
+                "--project" => {
+                    let value = it.next().ok_or("--project requires a directory")?;
+                    args.project = Some(value);
                 }
                 "--export" => {
                     let value = it.next().ok_or("--export requires a directory")?;
@@ -131,6 +139,9 @@ USAGE:
 
 OPTIONS:
     --scene <path>     Load and run a scene JSON file (optional).
+    --project <dir>    Open a project (its noctis.toml); --scene is then a
+                       project-relative path and the default scene is used when no
+                       --scene is given.
     --demo             Run a small built-in scene (the default when no scene is given).
     --frames <N>       Number of frames to run (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
@@ -173,16 +184,20 @@ fn make_host() -> Result<Host, String> {
 }
 
 /// Build the runtime for the requested scene.
-fn build_runtime(args: &Args) -> Result<Runtime<Host>, String> {
-    let config = RuntimeConfig {
+fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>, String> {
+    let mut config = RuntimeConfig {
         audio: args.audio,
         timestep: args.dt,
         ..RuntimeConfig::default()
     };
+    if let Some(project) = project {
+        let gravity = project.manifest().project.settings.gravity;
+        config.gravity = vec3(gravity[0], gravity[1], gravity[2]);
+    }
 
     let mut assets = AssetRegistry::with_defaults();
     register_wasm_modules(args, &mut assets)?;
-    let scene = load_scene(args, &mut assets)?;
+    let scene = load_scene(args, project, &mut assets)?;
     let host = make_host()?;
 
     let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
@@ -218,17 +233,26 @@ fn register_wasm_modules(args: &Args, _assets: &mut AssetRegistry) -> Result<(),
     }
 }
 
-/// Load the scene to run: an explicit file, a `scene.json` bundled next to the
+/// Load the scene to run: an explicit file (resolved against `--project` when
+/// given), the project's default scene, a `scene.json` bundled next to the
 /// executable (an exported game), or the built-in demo.
-fn load_scene(args: &Args, assets: &mut AssetRegistry) -> Result<Scene, String> {
+fn load_scene(
+    args: &Args,
+    project: Option<&Project>,
+    assets: &mut AssetRegistry,
+) -> Result<Scene, String> {
     if args.demo {
         return Ok(demo::demo_scene(assets));
     }
 
     let path = args
         .scene
-        .clone()
-        .map(PathBuf::from)
+        .as_deref()
+        .map(|scene| match project {
+            Some(project) => project.resolve_path(scene),
+            None => PathBuf::from(scene),
+        })
+        .or_else(|| project.and_then(Project::default_scene_file))
         .or_else(bundled_next_to_exe);
     let Some(path) = path else {
         log::info!("no scene specified; using the built-in demo scene");
@@ -255,16 +279,30 @@ fn bundled_next_to_exe() -> Option<PathBuf> {
 
 /// Export a self-contained game folder for `destination`.
 fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
-    let scene_path = args
-        .scene
-        .as_deref()
-        .ok_or("--export requires --scene <path>: an exported game needs a scene file")?;
-    let scene_json = fs::read_to_string(scene_path)
-        .map_err(|err| format!("failed to read scene '{scene_path}': {err}"))?;
+    let project = open_project(args)?;
+    let scene_path = match args.scene.as_deref() {
+        Some(scene) => match &project {
+            Some(project) => project.resolve_path(scene),
+            None => PathBuf::from(scene),
+        },
+        None => project
+            .as_ref()
+            .and_then(Project::default_scene_file)
+            .ok_or("--export requires --scene <path>, or a project with a default scene")?,
+    };
+    let scene_json = fs::read_to_string(&scene_path)
+        .map_err(|err| format!("failed to read scene '{}': {err}", scene_path.display()))?;
     let name = args
         .name
         .clone()
-        .unwrap_or_else(|| default_game_name(scene_path));
+        .or_else(|| {
+            // Prefer the project's name for an export of a project.
+            project
+                .as_ref()
+                .map(|project| project.name().to_string())
+                .filter(|name| runtime::export::valid_name(name))
+        })
+        .unwrap_or_else(|| default_game_name(scene_path.to_string_lossy().as_ref()));
     export_game(Path::new(destination), &name, &scene_json).map_err(|err| err.to_string())
 }
 
@@ -278,21 +316,50 @@ fn default_game_name(scene_path: &str) -> String {
         .to_string()
 }
 
+/// Open the project named by `--project`, if any.
+fn open_project(args: &Args) -> Result<Option<Project>, String> {
+    match &args.project {
+        Some(dir) => Project::open(dir)
+            .map(Some)
+            .map_err(|error| format!("failed to open project {dir:?}: {error}")),
+        None => Ok(None),
+    }
+}
+
+/// The window config: the project's `[window]` when a project is open, else a
+/// default titled after the scene.
+fn window_config(args: &Args, project: Option<&Project>) -> WindowConfig {
+    let mut config = WindowConfig {
+        title: "Noctis".to_string(),
+        width: 1280,
+        height: 720,
+    };
+    if let Some(project) = project {
+        let window = &project.manifest().window;
+        config.title = window
+            .title
+            .clone()
+            .unwrap_or_else(|| project.name().to_string());
+        config.width = window.width;
+        config.height = window.height;
+    } else if let Some(scene) = &args.scene {
+        config.title = scene.clone();
+    }
+    config
+}
+
 /// Load the scene and run the loop headlessly. Returns the run summary.
 fn run(args: &Args) -> Result<RunSummary, String> {
-    let mut runtime = build_runtime(args)?;
+    let project = open_project(args)?;
+    let mut runtime = build_runtime(args, project.as_ref())?;
     Ok(runtime.run_headless(args.frames, args.dt))
 }
 
 /// Run the scene in a window until it is closed.
 fn run_windowed(args: &Args) -> Result<(), String> {
-    let runtime = build_runtime(args)?;
-    let title = args.scene.clone().unwrap_or_else(|| "Noctis".to_string());
-    let config = WindowConfig {
-        title,
-        width: 1280,
-        height: 720,
-    };
+    let project = open_project(args)?;
+    let runtime = build_runtime(args, project.as_ref())?;
+    let config = window_config(args, project.as_ref());
     run_in_window(runtime, config).map_err(|err| err.to_string())
 }
 
@@ -380,4 +447,34 @@ fn init_logging() {
     // `set_logger` fails only if a logger is already set; ignore that.
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(level);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Option<Args>, String> {
+        Args::parse(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn parses_a_project_and_a_project_relative_scene() {
+        let args = parse(&["--project", "game", "--scene", "scenes/main.scene.json"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(args.project.as_deref(), Some("game"));
+        assert_eq!(args.scene.as_deref(), Some("scenes/main.scene.json"));
+    }
+
+    #[test]
+    fn a_project_without_a_scene_is_allowed() {
+        let args = parse(&["--project", "game"]).unwrap().unwrap();
+        assert!(args.project.is_some());
+        assert!(args.scene.is_none());
+    }
+
+    #[test]
+    fn a_missing_project_value_is_an_error() {
+        assert!(parse(&["--project"]).is_err());
+    }
 }

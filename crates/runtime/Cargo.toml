@@ -24,5 +24,6 @@ physics.workspace = true
 audio.workspace = true
 script.workspace = true
 platform.workspace = true
+project.workspace = true
 serde_json.workspace = true
 log.workspace = true
