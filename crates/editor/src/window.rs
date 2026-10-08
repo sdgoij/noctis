@@ -386,18 +386,24 @@ impl AppDriver for EditorDriver {
         if self.show_inspector {
             egui::Panel::right("noctis_inspector").show(ui, |ui| self.inspector(ui));
         }
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.label("Viewport");
-            ui.separator();
-            ui.label("Click an object to select it. WASD flies the camera.");
-            let rect = ui.max_rect();
-            let response = ui.interact(rect, ui.id().with("viewport_pick"), egui::Sense::click());
-            if response.clicked() {
-                if let Some(pointer) = response.interact_pointer_pos() {
+        // The 3D scene is blitted to the surface *before* egui draws, and egui's
+        // default central panel paints an opaque background over it. Use a
+        // transparent frame so the viewport shows the rendered scene.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().fill(egui::Color32::TRANSPARENT))
+            .show(ui, |ui| {
+                ui.label("Viewport");
+                ui.separator();
+                ui.label("Click an object to select it. WASD flies the camera.");
+                let rect = ui.max_rect();
+                let response =
+                    ui.interact(rect, ui.id().with("viewport_pick"), egui::Sense::click());
+                if response.clicked()
+                    && let Some(pointer) = response.interact_pointer_pos()
+                {
                     self.pick_at(ui, rect, pointer);
                 }
-            }
-        });
+            });
     }
 }
 
