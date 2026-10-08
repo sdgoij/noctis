@@ -9,7 +9,7 @@
 use ecs::assets::{AlphaMode, AssetHandle, AssetId, Assets, Material};
 use ecs::components::{
     Active, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind, MeshRenderer,
-    Projection, RigidBody, Script, Text, Visible,
+    Projection, RigidBody, Script, Text, TextAnchor, Visible,
 };
 use ecs::world::Entity;
 use math::{Quat, Vec3, degrees, radians, vec3};
@@ -19,7 +19,7 @@ use crate::command::ComponentName;
 use crate::editor::Editor;
 
 /// Components the inspector can add.
-const ADDABLE: [ComponentName; 9] = [
+const ADDABLE: [ComponentName; 10] = [
     ComponentName::Camera,
     ComponentName::Light,
     ComponentName::MeshRenderer,
@@ -27,6 +27,7 @@ const ADDABLE: [ComponentName; 9] = [
     ComponentName::Collider,
     ComponentName::AudioSource,
     ComponentName::Script,
+    ComponentName::Text,
     ComponentName::Active,
     ComponentName::Visible,
 ];
@@ -84,6 +85,9 @@ pub(crate) fn show(
     }
     if editor.has_component(entity, ComponentName::Script) {
         script_section(editor, entity, ui);
+    }
+    if editor.has_component(entity, ComponentName::Text) {
+        text_section(editor, entity, ui);
     }
 
     add_component_row(editor, entity, state, ui);
@@ -478,6 +482,70 @@ fn audio_source_section(editor: &mut Editor, entity: Entity, ui: &mut egui::Ui) 
 
     if changed {
         editor.edit_component::<AudioSource>(entity, |a| *a = source);
+    }
+}
+
+/// The nine text anchors with their UI labels.
+const ANCHORS: [(TextAnchor, &str); 9] = [
+    (TextAnchor::Center, "Center"),
+    (TextAnchor::TopLeft, "Top-left"),
+    (TextAnchor::TopCenter, "Top-center"),
+    (TextAnchor::TopRight, "Top-right"),
+    (TextAnchor::MiddleLeft, "Middle-left"),
+    (TextAnchor::MiddleRight, "Middle-right"),
+    (TextAnchor::BottomLeft, "Bottom-left"),
+    (TextAnchor::BottomCenter, "Bottom-center"),
+    (TextAnchor::BottomRight, "Bottom-right"),
+];
+
+fn anchor_name(anchor: TextAnchor) -> &'static str {
+    ANCHORS
+        .iter()
+        .find(|(a, _)| *a == anchor)
+        .map_or("Center", |(_, name)| name)
+}
+
+fn text_section(editor: &mut Editor, entity: Entity, ui: &mut egui::Ui) {
+    let Some(mut text) = editor.component::<Text>(entity).cloned() else {
+        return;
+    };
+    if section_header(ui, "Text") {
+        let _ = editor.remove_component(entity, ComponentName::Text);
+        return;
+    }
+
+    let mut changed = false;
+    changed |= ui
+        .add(
+            egui::TextEdit::multiline(&mut text.text)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        )
+        .changed();
+
+    let fonts = asset_list(&editor.assets().fonts);
+    if let Some(id) = asset_combo(ui, "text_font", "Font", text.font.id(), &fonts) {
+        text.font = AssetHandle::new(id);
+        changed = true;
+    }
+    changed |= f32_row(ui, "Size", &mut text.size, 0.02);
+    changed |= rgba_row(ui, "Color", &mut text.color);
+    ui.horizontal(|ui| {
+        ui.label("Anchor");
+        egui::ComboBox::from_id_salt("inspector_text_anchor")
+            .selected_text(anchor_name(text.anchor))
+            .show_ui(ui, |ui| {
+                for (anchor, name) in ANCHORS {
+                    changed |= ui
+                        .selectable_value(&mut text.anchor, anchor, name)
+                        .changed();
+                }
+            });
+    });
+    changed |= ui.checkbox(&mut text.depth_test, "Depth test").changed();
+
+    if changed {
+        editor.edit_component::<Text>(entity, |t| *t = text);
     }
 }
 

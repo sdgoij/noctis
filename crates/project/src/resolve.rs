@@ -38,7 +38,8 @@ fn component_references(component: &ComponentDesc) -> Vec<&str> {
         }
         ComponentDesc::AudioSource { clip, .. } => clip.as_deref().into_iter().collect(),
         ComponentDesc::Script { path, .. } => path.as_deref().into_iter().collect(),
-        // Cameras, lights, physics, and inline scripts carry no asset references.
+        ComponentDesc::Text { font, .. } => font.as_deref().into_iter().collect(),
+        // Cameras, lights, and physics carry no asset references.
         _ => Vec::new(),
     }
 }
@@ -156,5 +157,28 @@ mod tests {
         let index = lookup(&[("scripts/player.js", "scripts/player.js")]);
         let files = referenced_files(&scene, &index).unwrap();
         assert_eq!(files, vec![AssetPath::parse("scripts/player.js").unwrap()]);
+    }
+
+    #[test]
+    fn a_text_font_is_bundled_too() {
+        let scene = scene_with(
+            r#"{ "type": "text", "text": "Hi", "font": "assets/fonts/body.ttf", "size": 1.0, "color": [1,1,1,1], "anchor": "center", "depth_test": true }"#,
+        );
+        let index = lookup(&[("assets/fonts/body.ttf", "assets/fonts/body.ttf")]);
+        let files = referenced_files(&scene, &index).unwrap();
+        assert_eq!(
+            files,
+            vec![AssetPath::parse("assets/fonts/body.ttf").unwrap()]
+        );
+
+        // A built-in font (or none) is not a project file.
+        let none = scene_with(
+            r#"{ "type": "text", "text": "Hi", "font": null, "size": 1.0, "color": [1,1,1,1], "anchor": "center", "depth_test": true }"#,
+        );
+        assert!(
+            referenced_files(&none, &BTreeMap::new())
+                .unwrap()
+                .is_empty()
+        );
     }
 }
