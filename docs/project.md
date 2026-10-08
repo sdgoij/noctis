@@ -69,7 +69,7 @@ height = 720
 
 [render]
 hdr = true                        # HDR pipeline + tonemapping
-sample_count = 1
+sample_count = 4                  # MSAA samples (1 disables); clamped to what the device supports
 environment = "assets/hdris/sky.hdr"  # IBL source; omit for a neutral environment
 
 # The input bindings the editor viewport loads (see `--controls` today).

@@ -79,15 +79,19 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
 
 ## Known limitations (tracked, not hidden)
 
-- `render`: `sample_count > 1` (MSAA) is clamped to 1; IBL is precomputed on the
-  CPU at load time from the `[render] environment` a project names (a `.hdr`
-  equirectangular map decoded into the `hdr` store) — there is no GPU precompute,
-  no `.exr` decode, and no live re-bake, and an unset environment falls back to a
-  neutral (fully white) one; one shadow-casting directional/spot light at a time.
-  In-world
-  text (`ecs::components::Text`) is drawn billboarded by a dedicated pass,
-  rasterized from a font atlas baked on demand (`ab_glyph`); the atlas is cached
-  per process, not yet persisted under `.noctis/`.
+- `render`: MSAA is supported up to 4x (`[render] sample_count`), degrading to
+  the largest count the device supports for the HDR colour and depth formats; it
+  smooths geometry silhouettes, so shader-level aliasing (a hard texture edge, a
+  glyph's coverage) is still visible; it also shades the forward geometry a second
+  time, because the single-sampled depth SSAO samples cannot be the multisampled
+  one the forward passes need. IBL is precomputed on the CPU at load time
+  from the `[render] environment` a project names (a `.hdr` equirectangular map
+  decoded into the `hdr` store) — there is no GPU precompute, no `.exr` decode,
+  and no live re-bake, and an unset environment falls back to a neutral (fully
+  white) one; one shadow-casting directional/spot light at a time. In-world text
+  (`ecs::components::Text`) is drawn billboarded by a dedicated pass, rasterized
+  from a font atlas baked on demand (`ab_glyph`); the atlas is cached per
+  process, not yet persisted under `.noctis/`.
 - `script`: the real backends are the `slag` feature (off by default). It builds
   from the pinned `github.com/sdgoij/slag` and its smoke tests pass
   (`cargo test -p script --features slag`); the default build uses the testable

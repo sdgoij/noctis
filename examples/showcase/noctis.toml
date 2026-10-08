@@ -27,7 +27,8 @@ height = 900
 
 [render]
 hdr = true
-sample_count = 1
+# 4x MSAA: geometry silhouettes are anti-aliased (1 disables it).
+sample_count = 4
 # The equirectangular .hdr the renderer precomputes image-based lighting from.
 # Without it the renderer falls back to a neutral (fully white) environment.
 environment = "assets/hdris/sky.hdr"

@@ -24,6 +24,9 @@ pub struct WindowConfig {
     pub width: u32,
     /// The initial height in logical pixels.
     pub height: u32,
+    /// MSAA sample count for the viewport (`1` disables it). The renderer uses
+    /// the largest supported count that does not exceed this.
+    pub sample_count: u32,
 }
 
 impl Default for WindowConfig {
@@ -32,6 +35,9 @@ impl Default for WindowConfig {
             title: "Noctis".to_string(),
             width: 1280,
             height: 720,
+            // A window is looked at, so anti-alias it by default; a project's
+            // `[render] sample_count` overrides this.
+            sample_count: 4,
         }
     }
 }
@@ -129,7 +135,7 @@ impl<D: AppDriver> WindowHost<D> {
             width: size.width.max(1),
             height: size.height.max(1),
             hdr: true,
-            sample_count: 1,
+            sample_count: self.config.sample_count,
         };
         match Renderer::for_surface(renderer_config, instance, surface) {
             Ok(mut renderer) => {

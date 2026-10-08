@@ -16,6 +16,20 @@
 //!
 //! The LDR result is copied into a mappable buffer and returned as a [`Frame`].
 //!
+//! ## MSAA
+//!
+//! With [`RendererConfig::sample_count`] > 1 the forward passes (4–6) render into
+//! multisampled colour and depth targets that **resolve into the single-sampled
+//! HDR target**, so the resolve averages linear radiance before the tonemap —
+//! resolving the tonemapped colour instead would darken every edge.
+//!
+//! The depth prepass (2) stays single-sampled: it exists so SSAO has a depth
+//! source, and a screen-space pass cannot sample a multisampled depth texture.
+//! The forward passes therefore carry their own multisampled depth, populated by
+//! the opaque pipeline. Sample counts the device cannot do for both the HDR
+//! colour and depth formats are rejected up front (see
+//! [`pick_sample_count`]), since MSAA is a format capability.
+//!
 //! If the machine has no usable adapter, [`Renderer::headless`] returns
 //! [`RenderError::NoAdapter`]; callers (and tests) should skip rendering rather
 //! than fail.
@@ -60,8 +74,11 @@ pub struct RendererConfig {
     /// tonemapping. Only `true` is implemented; `false` falls back to the same
     /// pipeline with a lower exposure.
     pub hdr: bool,
-    /// Requested MSAA sample count. Only `1` is implemented today; other values
-    /// are clamped and a warning is logged.
+    /// Requested MSAA sample count (`1` disables anti-aliasing).
+    ///
+    /// The renderer uses the largest supported count that does not exceed this,
+    /// so `4` degrades to `2` or `1` on hardware that cannot do it rather than
+    /// failing. [`Renderer::config`] reports what was actually chosen.
     pub sample_count: u32,
 }
 
@@ -74,6 +91,49 @@ impl Default for RendererConfig {
             sample_count: 1,
         }
     }
+}
+
+/// The MSAA sample counts the renderer considers, best first.
+const MSAA_SAMPLE_COUNTS: [u32; 3] = [4, 2, 1];
+
+/// The largest count in [`MSAA_SAMPLE_COUNTS`] that does not exceed `requested`
+/// and that `supported` accepts.
+///
+/// Split out from the device query so the policy is testable without a GPU.
+pub fn choose_sample_count(requested: u32, supported: impl Fn(u32) -> bool) -> u32 {
+    let requested = requested.max(1);
+    MSAA_SAMPLE_COUNTS
+        .into_iter()
+        .find(|count| *count <= requested && supported(*count))
+        .unwrap_or(1)
+}
+
+/// The largest sample count at or below `requested` that the device supports for
+/// both the HDR colour and the depth format.
+///
+/// MSAA is a format capability, and asking for an unsupported count is a
+/// validation error, so an unreasonable request (or a backend that cannot do it)
+/// degrades — with a warning — instead of failing.
+pub fn pick_sample_count(requested: u32, device: &wgpu::Device) -> u32 {
+    let supported = |count: u32| {
+        count == 1
+            || (wgpu::TextureFormat::Rgba16Float
+                .guaranteed_format_features(device.features())
+                .flags
+                .sample_count_supported(count)
+                && wgpu::TextureFormat::Depth32Float
+                    .guaranteed_format_features(device.features())
+                    .flags
+                    .sample_count_supported(count))
+    };
+    let chosen = choose_sample_count(requested, supported);
+    if chosen != requested.max(1) {
+        log::warn!(
+            "render: MSAA at {} samples is unsupported here; using {chosen}",
+            requested.max(1)
+        );
+    }
+    chosen
 }
 
 /// A rendered frame as tightly packed RGBA8 sRGB bytes.
@@ -217,18 +277,13 @@ impl Renderer {
     /// surface renderer. A surface is attached afterwards, if any.
     fn build_core(device: wgpu::Device, queue: wgpu::Queue, config: RendererConfig) -> Renderer {
         let mut config = config;
-        if config.sample_count != 1 {
-            log::warn!(
-                "render: sample_count {} requested but only 1 is implemented; using 1",
-                config.sample_count
-            );
-            config.sample_count = 1;
-        }
+        config.sample_count = pick_sample_count(config.sample_count, &device);
 
-        let targets = RenderTargets::create(&device, config.width, config.height);
+        let targets =
+            RenderTargets::create(&device, config.width, config.height, config.sample_count);
         let shadow = ShadowResources::new(&device, 2048);
         let layouts = create_layouts(&device);
-        let pipelines = create_pipelines(&device, &layouts);
+        let pipelines = create_pipelines(&device, &layouts, config.sample_count);
         let ibl = IblGpu::create(&device, &queue, &IblData::neutral());
         let frame = FrameBindings::new(
             &device,
@@ -844,18 +899,25 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("pbr.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.targets.hdr.view,
+                    view: self.targets.color_target(),
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: self.targets.color_resolve(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.targets.depth.view,
+                    view: self.targets.depth_target(),
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        // With MSAA this is a fresh multisampled depth the opaque
+                        // pass populates; without it, the prepass already filled
+                        // the shared depth and the opaque pass only tests.
+                        load: if self.targets.is_multisampled() {
+                            wgpu::LoadOp::Clear(1.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -892,16 +954,16 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("gizmo.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.targets.hdr.view,
+                    view: self.targets.color_target(),
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: self.targets.color_resolve(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.targets.depth.view,
+                    view: self.targets.depth_target(),
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
@@ -933,16 +995,16 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("text.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.targets.hdr.view,
+                    view: self.targets.color_target(),
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: self.targets.color_resolve(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.targets.depth.view,
+                    view: self.targets.depth_target(),
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
@@ -1177,7 +1239,7 @@ impl Renderer {
         }
         self.config.width = width;
         self.config.height = height;
-        self.targets = RenderTargets::create(&self.device, width, height);
+        self.targets = RenderTargets::create(&self.device, width, height, self.config.sample_count);
         self.frame = FrameBindings::new(
             &self.device,
             &self.layouts.frame,
@@ -1765,6 +1827,112 @@ mod tests {
             "the text drawn must be visibly brighter: {} vs {}",
             brightest(&with_text),
             brightest(&without_text)
+        );
+    }
+
+    #[test]
+    fn the_sample_count_policy_degrades_sensibly() {
+        // Everything supported: the request is honoured, capped at the best we
+        // offer, and a silly request (0) means "off".
+        assert_eq!(choose_sample_count(1, |_| true), 1);
+        assert_eq!(choose_sample_count(4, |_| true), 4);
+        assert_eq!(choose_sample_count(8, |_| true), 4);
+        assert_eq!(choose_sample_count(3, |_| true), 2);
+        assert_eq!(choose_sample_count(0, |_| true), 1);
+
+        // A backend that can only do 2 samples, and one that cannot do MSAA.
+        assert_eq!(choose_sample_count(4, |n| n <= 2), 2);
+        assert_eq!(choose_sample_count(4, |n| n == 1), 1);
+        // Only the format's own answer decides; the policy never goes up.
+        assert_eq!(choose_sample_count(4, |n| n != 2), 4);
+    }
+
+    /// A white sphere on a black background: a bad case for aliasing, since the
+    /// silhouette is a long high-contrast curve.
+    fn aliasing_scene() -> (World, AssetRegistry, Entity) {
+        use ecs::components::{Camera, MeshRenderer};
+        use math::vec3;
+
+        let mut assets = AssetRegistry::with_defaults();
+        let mesh = assets
+            .meshes
+            .insert_named("primitives/sphere", ecs::primitives::sphere(0.6, 32, 48));
+        let material = assets.materials.handle("$default").unwrap();
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera {
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            ..Camera::default()
+        });
+        world.spawn_with(ecs::components::Light::directional(vec3(0.3, -1.0, -0.4)));
+        let sphere = world.spawn_with(MeshRenderer {
+            mesh,
+            material,
+            ..MeshRenderer::default()
+        });
+        world.insert(
+            sphere,
+            math::Transform::from_translation(vec3(0.0, 0.0, -3.0)),
+        );
+        (world, assets, camera)
+    }
+
+    /// The largest luminance step between horizontally adjacent pixels: what an
+    /// alias looks like. MSAA spreads a silhouette's step across its samples, so
+    /// the worst single step must fall (a count of "medium" steps can even rise,
+    /// as one hard step becomes two soft ones).
+    fn worst_step(frame: &Frame) -> i32 {
+        let luma = |pixel: [u8; 4]| (pixel[0] as i32 + pixel[1] as i32 + pixel[2] as i32) / 3;
+        let mut worst = 0;
+        for y in 0..frame.height {
+            for x in 1..frame.width {
+                let left = luma(frame.pixel(x - 1, y).expect("in bounds"));
+                let right = luma(frame.pixel(x, y).expect("in bounds"));
+                worst = worst.max((left - right).abs());
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn msaa_smooths_the_silhouette_or_reports_no_adapter() {
+        let config = |sample_count| RendererConfig {
+            width: 128,
+            height: 128,
+            sample_count,
+            ..Default::default()
+        };
+        let mut aliased = match Renderer::headless(config(1)) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+        let mut multisampled = Renderer::headless(config(4)).expect("second device");
+        assert_eq!(
+            multisampled.config().sample_count,
+            4,
+            "4x MSAA was accepted"
+        );
+        assert_eq!(aliased.config().sample_count, 1);
+
+        let (world, assets, camera) = aliasing_scene();
+        let one = aliased
+            .render_frame(&world, &assets, camera)
+            .expect("1-sample frame");
+        let four = multisampled
+            .render_frame(&world, &assets, camera)
+            .expect("4-sample frame");
+
+        // The frames differ (the sample count really is in use), and the
+        // multisampled one softens the silhouette.
+        assert_ne!(one.rgba, four.rgba, "MSAA produced a different image");
+        let (aliased_step, smoothed_step) = (worst_step(&one), worst_step(&four));
+        assert!(
+            smoothed_step < aliased_step,
+            "MSAA should soften the silhouette: worst step {aliased_step} -> {smoothed_step}"
         );
     }
 }

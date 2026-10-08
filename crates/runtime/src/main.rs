@@ -245,7 +245,14 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
     let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
 
     if args.render {
-        match runtime.enable_renderer(RendererConfig::default()) {
+        // Anti-alias the headless render at the manifest's sample count.
+        let renderer_config = RendererConfig {
+            sample_count: project
+                .map(|project| project.manifest().render.sample_count)
+                .unwrap_or(1),
+            ..RendererConfig::default()
+        };
+        match runtime.enable_renderer(renderer_config) {
             Ok(()) => log::info!("headless rendering enabled"),
             Err(err) => log::warn!("rendering disabled: {err}"),
         }
@@ -391,12 +398,13 @@ fn bundled_project_dir() -> Option<PathBuf> {
 }
 
 /// The window config: the project's `[window]` when a project is open, else a
-/// default titled after the scene.
+/// default titled after the scene. The `[render]` MSAA setting applies either way.
 fn window_config(args: &Args, project: Option<&Project>) -> WindowConfig {
     let mut config = WindowConfig {
         title: "Noctis".to_string(),
         width: 1280,
         height: 720,
+        ..WindowConfig::default()
     };
     if let Some(project) = project {
         let window = &project.manifest().window;
@@ -406,6 +414,7 @@ fn window_config(args: &Args, project: Option<&Project>) -> WindowConfig {
             .unwrap_or_else(|| project.name().to_string());
         config.width = window.width;
         config.height = window.height;
+        config.sample_count = project.manifest().render.sample_count;
     } else if let Some(scene) = &args.scene {
         config.title = scene.clone();
     }

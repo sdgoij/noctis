@@ -288,8 +288,13 @@ environment is not decodable yet (only `.hdr`).
 - **Prefabs are not bundled by `noctis build`** — only assets a scene references
   are. The runtime path (`instantiate_prefab` with inline JSON) still works in an
   exported game.
-- Only **one shadow-casting** directional/spot light is used, and `sample_count`
-  (MSAA) is clamped to 1.
+- **Anti-aliasing** is MSAA: `[render] sample_count = 4` here. It smooths
+  geometry silhouettes — the sphere, capsule, cylinder and torus edges — but not
+  shader detail: a hard texel edge (the drone's checker) or a glyph's coverage
+  still steps. That needs alpha-to-coverage or a post-process AA pass, neither of
+  which exists yet. A device that cannot do 4x degrades to 2x or 1x rather than
+  failing.
+- Only **one shadow-casting** directional/spot light is used.
 - `.noctis/` (the import cache) and `dist/` (build output) are generated and
   gitignored.
 - The characters the generated font covers are `A–Z`, `a–z` (folding to caps),

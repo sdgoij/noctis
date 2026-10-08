@@ -63,6 +63,8 @@ fn every_showcase_scene_renders() {
     let mut renderer = match Renderer::headless(RendererConfig {
         width: 960,
         height: 540,
+        // Honour the project's MSAA setting, so the previews show the game's AA.
+        sample_count: project.manifest().render.sample_count,
         ..RendererConfig::default()
     }) {
         Ok(renderer) => renderer,

@@ -132,6 +132,7 @@ srgb = false     # a data map (normal/roughness); omit for colour maps
 ```toml
 [render]
 environment = "assets/hdris/sky.hdr"   # equirectangular; omit for a neutral env
+sample_count = 4                       # MSAA samples (1 disables); clamped to the device
 ```
 
 The `.hdr` imports into the `hdr` store as linear floats, and the renderer

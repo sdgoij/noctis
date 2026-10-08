@@ -384,6 +384,7 @@ fn window_config(project: Option<&Project>) -> WindowConfig {
         title: "Noctis Editor".to_string(),
         width: 1280,
         height: 720,
+        ..WindowConfig::default()
     };
     if let Some(project) = project {
         let window = &project.manifest().window;
@@ -393,6 +394,8 @@ fn window_config(project: Option<&Project>) -> WindowConfig {
             .unwrap_or_else(|| project.name().to_string());
         config.width = window.width;
         config.height = window.height;
+        // The viewport anti-aliases at the project's `[render] sample_count`.
+        config.sample_count = project.manifest().render.sample_count;
     }
     config
 }

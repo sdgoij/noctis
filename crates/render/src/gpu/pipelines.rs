@@ -226,8 +226,24 @@ fn pipeline_layout(
     })
 }
 
-/// Create all render pipelines.
-pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pipelines {
+/// Create all render pipelines for a frame rendered at `sample_count` samples
+/// per pixel (`1` = no MSAA).
+///
+/// The depth-only, SSAO and tonemap pipelines stay single-sampled whatever the
+/// setting: they render into single-sampled targets (the shadow map, the SSAO
+/// term, the LDR image). The pipelines that draw into the multisampled HDR target
+/// — opaque, transparent, gizmo and text — declare the same sample count as that
+/// target, or the device rejects the pipeline/pass pairing.
+pub fn create_pipelines(
+    device: &wgpu::Device,
+    layouts: &BindGroupLayouts,
+    sample_count: u32,
+) -> Pipelines {
+    let samples = sample_count.max(1);
+    let multisample = wgpu::MultisampleState {
+        count: samples,
+        ..Default::default()
+    };
     let depth_shader =
         device.create_shader_module(wgpu::include_wgsl!("../shaders/depth_only.wgsl"));
     let ssao_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/ssao.wgsl"));
@@ -300,7 +316,7 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
         })
     };
 
-    let make_pbr = |label: &str, blend: Option<wgpu::BlendState>| {
+    let make_pbr = |label: &str, blend: Option<wgpu::BlendState>, depth_write: bool| {
         let layout = pipeline_layout(
             device,
             &format!("{label}.layout"),
@@ -322,13 +338,16 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                // Depth was already written by the prepass.
-                depth_write_enabled: Some(false),
+                // Without MSAA the prepass already wrote the depth this pass
+                // shares. With MSAA the forward passes render into their own
+                // multisampled depth, which the *opaque* pass has to populate
+                // (the transparent pass must not, or it would occlude itself).
+                depth_write_enabled: Some(depth_write),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             fragment: Some(wgpu::FragmentState {
                 module: &pbr_shader,
                 entry_point: Some("fs_main"),
@@ -343,8 +362,12 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
             cache: None,
         })
     };
-    let pbr_opaque = make_pbr("pbr.opaque", None);
-    let pbr_transparent = make_pbr("pbr.transparent", Some(wgpu::BlendState::ALPHA_BLENDING));
+    let pbr_opaque = make_pbr("pbr.opaque", None, samples > 1);
+    let pbr_transparent = make_pbr(
+        "pbr.transparent",
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        false,
+    );
 
     let gizmo = |label: &str, topology: wgpu::PrimitiveTopology| {
         let layout = pipeline_layout(device, &format!("{label}.layout"), &[&layouts.view]);
@@ -385,7 +408,7 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             fragment: Some(wgpu::FragmentState {
                 module: &gizmo_shader,
                 entry_point: Some("fs_main"),
@@ -428,7 +451,7 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             fragment: Some(wgpu::FragmentState {
                 module: &text_shader,
                 entry_point: Some("fs_main"),
