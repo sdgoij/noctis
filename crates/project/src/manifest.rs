@@ -7,6 +7,8 @@
 
 use serde::Deserialize;
 
+use ecs::scene::SceneMode;
+
 use crate::error::ProjectError;
 use crate::path::AssetPath;
 
@@ -117,7 +119,7 @@ pub struct Settings {
     pub default_scene: Option<String>,
     /// The default presentation mode for new scenes.
     #[serde(default)]
-    pub mode: Mode,
+    pub mode: SceneMode,
     /// Gravity applied to dynamic bodies, metres per second squared.
     #[serde(default = "default_gravity")]
     pub gravity: [f32; 3],
@@ -127,7 +129,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_scene: None,
-            mode: Mode::default(),
+            mode: SceneMode::default(),
             gravity: default_gravity(),
         }
     }
@@ -135,28 +137,6 @@ impl Default for Settings {
 
 fn default_gravity() -> [f32; 3] {
     [0.0, -9.81, 0.0]
-}
-
-/// A scene's presentation mode: 3D, or 2D as a hint (not a schema fork).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-pub enum Mode {
-    /// Two-dimensional presentation.
-    #[serde(rename = "2d")]
-    TwoD,
-    /// Three-dimensional presentation (the default).
-    #[default]
-    #[serde(rename = "3d")]
-    ThreeD,
-}
-
-impl Mode {
-    /// The canonical string (`"2d"` / `"3d"`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Mode::TwoD => "2d",
-            Mode::ThreeD => "3d",
-        }
-    }
 }
 
 /// The `[paths]` table: overrides for the conventional directories.
@@ -366,7 +346,7 @@ platform = "linux"
         let manifest = ProjectManifest::from_toml(FULL).unwrap();
         assert_eq!(manifest.project.name, "MyGame");
         assert_eq!(manifest.project.version.as_deref(), Some("0.1.0"));
-        assert_eq!(manifest.project.settings.mode, Mode::TwoD);
+        assert_eq!(manifest.project.settings.mode, SceneMode::TwoD);
         assert_eq!(manifest.project.settings.gravity, [0.0, -3.0, 0.0]);
         assert_eq!(
             manifest.project.settings.default_scene.as_deref(),
@@ -391,7 +371,7 @@ platform = "linux"
     #[test]
     fn defaults_are_sensible() {
         let manifest = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
-        assert_eq!(manifest.project.settings.mode, Mode::ThreeD);
+        assert_eq!(manifest.project.settings.mode, SceneMode::ThreeD);
         assert_eq!(manifest.project.settings.gravity, [0.0, -9.81, 0.0]);
         assert_eq!(manifest.paths.assets, "assets");
         assert_eq!(manifest.paths.scenes, "scenes");

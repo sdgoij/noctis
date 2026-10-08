@@ -136,7 +136,9 @@ Component types must be `Send + Sync + 'static`.
   are **not** required to be `Send`/`Sync` — a system may own single-threaded
   state (e.g. a JavaScript engine). Component *types* are still
   `Send + Sync + 'static`.
-- `ecs::scene`: `Scene { name, world }`, `propagate_transforms(&mut World)`,
+- `ecs::scene`: `Scene { name, mode, world }`, `SceneMode { TwoD, ThreeD }`
+  (`as_str`, `is_2d`, `FromStr`; the presentation hint stored in `SceneDesc.mode`),
+  `propagate_transforms(&mut World)`,
   `set_parent(&mut World, child, Option<Entity>)`, `children_of(&World, Entity)`,
   `instantiate_into(&mut World, &SceneDesc, &AssetRegistry, Option<Entity>)`,
   `Prefab`, `SceneDesc`, `SceneError`.

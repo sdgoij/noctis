@@ -17,6 +17,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use ecs::scene::SceneMode;
 use editor::{Editor, command_schema, parse_commands};
 use platform::WindowConfig;
 use project::Project;
@@ -33,6 +34,9 @@ OPTIONS:
         --project <DIR>     Open a project (its noctis.toml); --scene is then a
                             project-relative path, and the project's default
                             scene is used when --scene is omitted
+        --mode <2d|3d>      Presentation mode for a scene created from scratch
+                            (overrides the project's default; an existing scene
+                            keeps the mode stored in its file)
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
@@ -108,6 +112,7 @@ fn main() -> ExitCode {
 struct Options {
     scene: Option<String>,
     project: Option<String>,
+    mode: Option<SceneMode>,
     command: Option<String>,
     out: Option<String>,
     controls: Option<String>,
@@ -170,12 +175,18 @@ fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, 
         editor.scene_mut().update_transforms();
     } else if let Some(scene) = resolve_scene(options, project) {
         let display = scene.display().to_string();
+        // A scene that does not exist yet is created in the effective mode.
+        let mode = effective_mode(options, project);
         editor
-            .open_or_new(&scene)
+            .open_or_new_with_mode(&scene, mode)
             .map_err(|e| CliError::Message(format!("failed to open scene {display:?}: {e}")))?;
     } else if let Some(project) = project {
         // A project with no scene and no default scene: start one named after it.
-        editor.new_scene(project.name());
+        editor.new_scene_with_mode(project.name(), effective_mode(options, Some(project)));
+    } else if let Some(mode) = options.mode {
+        // A bare invocation starts a fresh scene; `--mode` applies to it. There is
+        // no history yet, so assigning the field directly records no undo step.
+        editor.scene_mut().mode = mode;
     }
 
     if let Some(source) = &options.command {
@@ -234,6 +245,11 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
             "--project" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.project = Some(value);
+                index = consumed;
+            }
+            "--mode" => {
+                let (value, consumed) = value_for(&inline, args, index, &flag)?;
+                options.mode = Some(value.parse().map_err(CliError::Message)?);
                 index = consumed;
             }
             "--command" | "--commands" | "-c" => {
@@ -300,6 +316,15 @@ fn reject_inline(inline: &Option<String>, flag: &str) -> Result<(), CliError> {
 fn wants_window(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--window" || arg.starts_with("--window="))
+}
+
+/// The mode for a scene created from scratch: `--mode`, else the project's
+/// default, else 3D.
+fn effective_mode(options: &Options, project: Option<&Project>) -> SceneMode {
+    options
+        .mode
+        .or_else(|| project.map(Project::mode))
+        .unwrap_or_default()
 }
 
 /// Open the project named by `--project`, if any.
@@ -446,6 +471,40 @@ mod tests {
         .unwrap();
         assert_eq!(options.project.as_deref(), Some("game"));
         assert_eq!(options.scene.as_deref(), Some("scenes/main.scene.json"));
+    }
+
+    #[test]
+    fn parses_the_scene_mode() {
+        assert_eq!(
+            parse_args(&args(&["--mode", "2d"])).unwrap().mode,
+            Some(SceneMode::TwoD)
+        );
+        assert_eq!(
+            parse_args(&args(&["--mode=3d"])).unwrap().mode,
+            Some(SceneMode::ThreeD)
+        );
+        let err = parse_args(&args(&["--mode", "sideways"])).unwrap_err();
+        assert!(matches!(err, CliError::Message(_)));
+    }
+
+    #[test]
+    fn run_creates_a_scene_in_the_requested_mode() {
+        let dir = std::env::temp_dir().join(format!(
+            "noctis-mode-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let out = dir.join("menu.scene.json");
+
+        run(&args(&["--mode", "2d", "--out", out.to_str().unwrap()])).unwrap();
+        let json = std::fs::read_to_string(&out).expect("scene written");
+        assert!(json.contains("\"mode\": \"2d\""), "{json}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

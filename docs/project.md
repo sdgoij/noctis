@@ -209,6 +209,13 @@ menu scene and a 3D level. Concretely, `SceneDesc` gains a `mode` field
 correctly even opened on its own. The project's `mode` is the default applied to
 new scenes; a scene may override it.
 
+*Implemented*: `SceneMode` lives in `ecs::scene`, stored on both `Scene` and
+`SceneDesc` (default `3d`, so pre-existing documents stay valid). The project's
+`mode` seeds a scene created by the editor CLI (`--project` with no scene), the
+`--mode 2d|3d` flag overrides it, and a 2D scene's default camera (the editor's
+"Add → Camera") is orthographic. Top-down grid, planar gizmo, and snapping are
+still pending.
+
 If genuine 2D is wanted later, it arrives as a **component set** (`SpriteRenderer`,
 `Collider2D`, Z-ordering) on the same format — 2D vs 3D then means "which
 components you use".
@@ -331,7 +338,7 @@ New work this design implies (✔ = implemented):
 - Drag & drop in the editor, wired to project import.
 - A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
   importer that bakes a glyph atlas into the cache.
-- A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
+- ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
 - ✔ `--project` in `noctis-editor` / `noctis-runtime` (both now import the
   project's assets). Remaining: a `noctis` build CLI and the UI project picker.

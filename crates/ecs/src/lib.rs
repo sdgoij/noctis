@@ -41,8 +41,8 @@ pub mod prelude {
     };
     pub use crate::resources::{ActionMap, Events, InputState, Key, MouseButton, MouseState, Time};
     pub use crate::scene::{
-        Prefab, Scene, SceneDesc, SceneError, children_of, instantiate_into, propagate_transforms,
-        set_parent,
+        Prefab, Scene, SceneDesc, SceneError, SceneMode, children_of, instantiate_into,
+        propagate_transforms, set_parent,
     };
     pub use crate::world::{Entities, Entity, Query, QueryMut, QueryWith, World};
     pub use math;

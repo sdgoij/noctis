@@ -112,11 +112,63 @@ fn compute_global_matrix(world: &World, entity: Entity) -> Mat4 {
 // Scene
 // ---------------------------------------------------------------------------
 
+/// A scene's presentation mode: 3D, or 2D as a hint (not a schema fork).
+///
+/// `mode` is **per scene** because mixing dimensions is a real use case — a
+/// project may hold a 2D menu scene and a 3D level. It is a *presentation hint*
+/// that drives editor defaults (an orthographic camera, a top-down grid, a
+/// planar gizmo), not a change of format: there is exactly one scene schema.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SceneMode {
+    /// Two-dimensional presentation.
+    #[serde(rename = "2d")]
+    TwoD,
+    /// Three-dimensional presentation (the default).
+    #[default]
+    #[serde(rename = "3d")]
+    ThreeD,
+}
+
+impl SceneMode {
+    /// The canonical string (`"2d"` / `"3d"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SceneMode::TwoD => "2d",
+            SceneMode::ThreeD => "3d",
+        }
+    }
+
+    /// Whether this is the 2D mode.
+    pub fn is_2d(self) -> bool {
+        self == SceneMode::TwoD
+    }
+}
+
+impl std::fmt::Display for SceneMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SceneMode {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text.to_ascii_lowercase().as_str() {
+            "2d" | "2" => Ok(SceneMode::TwoD),
+            "3d" | "3" => Ok(SceneMode::ThreeD),
+            other => Err(format!("unknown scene mode '{other}' (expected 2d or 3d)")),
+        }
+    }
+}
+
 /// A named [`World`].
 #[derive(Default)]
 pub struct Scene {
     /// The scene name.
     pub name: String,
+    /// The presentation mode (a hint; see [`SceneMode`]).
+    pub mode: SceneMode,
     /// The entities and components.
     pub world: World,
 }
@@ -126,8 +178,22 @@ impl Scene {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            mode: SceneMode::default(),
             world: World::new(),
         }
+    }
+
+    /// An empty scene with a name and a presentation mode.
+    pub fn with_mode(name: impl Into<String>, mode: SceneMode) -> Self {
+        Self {
+            mode,
+            ..Self::new(name)
+        }
+    }
+
+    /// Whether this scene is 2D (a presentation hint).
+    pub fn is_2d(&self) -> bool {
+        self.mode.is_2d()
     }
 
     /// Propagate all transforms in the scene.
@@ -182,6 +248,7 @@ impl Scene {
         SceneDesc {
             name: self.name.clone(),
             format_version: SCENE_FORMAT_VERSION,
+            mode: self.mode,
             entities: descs,
         }
     }
@@ -189,7 +256,7 @@ impl Scene {
     /// Build a scene from its serializable form, resolving asset paths via
     /// `assets`.
     pub fn from_desc(desc: &SceneDesc, assets: &AssetRegistry) -> Scene {
-        let mut scene = Scene::new(desc.name.clone());
+        let mut scene = Scene::with_mode(desc.name.clone(), desc.mode);
         instantiate_into(&mut scene.world, desc, assets, None);
         scene.update_transforms();
         scene
@@ -533,6 +600,9 @@ pub struct SceneDesc {
     /// The format version this document was written with.
     #[serde(default = "default_version")]
     pub format_version: u32,
+    /// The presentation mode (a hint; see [`SceneMode`]).
+    #[serde(default)]
+    pub mode: SceneMode,
     /// The entities in the scene.
     #[serde(default)]
     pub entities: Vec<EntityDesc>,
@@ -1035,6 +1105,34 @@ mod tests {
             from_desc.to_json(&assets),
             "desc round trip reordered"
         );
+    }
+
+    #[test]
+    fn scenes_carry_a_presentation_mode_that_round_trips() {
+        assert_eq!(Scene::new("S").mode, SceneMode::ThreeD);
+        assert!(SceneMode::TwoD.is_2d());
+        assert!(!SceneMode::ThreeD.is_2d());
+        assert_eq!(SceneMode::TwoD.as_str(), "2d");
+        assert_eq!("3D".parse::<SceneMode>().unwrap(), SceneMode::ThreeD);
+        assert!("2d".parse::<SceneMode>().is_ok());
+        assert!("sideways".parse::<SceneMode>().is_err());
+
+        let (mut scene, assets) = make_scene();
+        scene.mode = SceneMode::TwoD;
+        let json = scene.to_json(&assets);
+        assert!(json.contains("\"mode\": \"2d\""), "mode is written: {json}");
+
+        let reloaded = Scene::from_json(&json, &assets).expect("parse");
+        assert_eq!(reloaded.mode, SceneMode::TwoD, "mode survives a reload");
+        assert!(reloaded.is_2d());
+    }
+
+    #[test]
+    fn a_scene_without_a_mode_field_loads_as_3d() {
+        // Documents written before the field existed stay valid, defaulting to 3D.
+        let legacy = r#"{ "name": "Legacy", "entities": [] }"#;
+        let scene = Scene::from_json(legacy, &AssetRegistry::with_defaults()).expect("parse");
+        assert_eq!(scene.mode, SceneMode::ThreeD);
     }
 
     #[test]

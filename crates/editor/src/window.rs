@@ -13,7 +13,7 @@ use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform,
 use crate::editor::Editor;
 use crate::gizmo;
 use crate::inspector::InspectorState;
-use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams};
+use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
 
 /// The kind of object the "Add" buttons create.
 #[derive(Clone, Copy, Debug)]
@@ -310,7 +310,20 @@ impl EditorDriver {
             NewObject::Camera => {
                 let entity = self.editor.spawn("Camera", None);
                 let _ = self.editor.set_translation(entity, vec3(0.0, 2.0, 6.0));
-                let _ = self.editor.add_camera(entity, CameraParams::default());
+                // A 2D scene gets an orthographic camera by default.
+                let params = if self.editor.mode().is_2d() {
+                    CameraParams {
+                        projection: ProjectionSpec::Orthographic {
+                            height: 10.0,
+                            near: 0.1,
+                            far: 100.0,
+                        },
+                        ..CameraParams::default()
+                    }
+                } else {
+                    CameraParams::default()
+                };
+                let _ = self.editor.add_camera(entity, params);
                 self.select(entity);
             }
         }

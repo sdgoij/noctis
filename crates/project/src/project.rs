@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use ecs::scene::SceneMode;
+
 use crate::error::ProjectError;
 use crate::manifest::ProjectManifest;
 use crate::path::AssetPath;
@@ -60,7 +62,7 @@ impl Project {
     }
 
     /// The default presentation mode for new scenes.
-    pub fn mode(&self) -> crate::manifest::Mode {
+    pub fn mode(&self) -> SceneMode {
         self.manifest.project.settings.mode
     }
 
@@ -196,7 +198,7 @@ mod tests {
         assert_eq!(project.scenes_dir(), Path::new("/tmp/game/scenes"));
         assert_eq!(project.prefabs_dir(), Path::new("/tmp/game/prefabs"));
         assert_eq!(project.scripts_dir(), Path::new("/tmp/game/scripts"));
-        assert_eq!(project.mode(), crate::manifest::Mode::ThreeD);
+        assert_eq!(project.mode(), SceneMode::ThreeD);
     }
 
     #[test]

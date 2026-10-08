@@ -18,6 +18,7 @@ to work in this repository.
 | `audio` | rodio playback + 3D spatialization. |
 | `script` | Script runtime + engine API (Slag backend optional). |
 | `testscene` | The all-features scene used for testing. |
+| `project` | The project model: `noctis.toml`, asset paths, asset import. |
 | `editor` / `runtime` | Editor (AI-controllable) and game runtime/export binaries. |
 | `platform` | Window + winit event loop + egui overlay; presents a live viewport. |
 
@@ -50,11 +51,18 @@ git config core.hooksPath hooks
 ## Status
 
 All crates — `math`, `ecs`, `render`, `physics`, `audio`, `script`, `testscene`,
-`editor`, `runtime`, and `platform` — are implemented and tested. The renderer
-presents to a real window (`noctis-runtime --window`, `noctis-editor --window`),
-and the editor draws an [egui](https://github.com/emilk/egui) interface (outliner,
-inspector, live transform editing) over the viewport. The whole engine also runs
-headlessly for CI. Click-to-select viewport picking is implemented (a ray vs.
-mesh bounds); the editor can spawn primitive objects (cube/sphere/plane/light/
-camera) with the Outliner's **Add** buttons, and `--testscene` loads the
-all-features test scene. Gizmo/handle dragging is the next milestone.
+`project`, `editor`, `runtime`, and `platform` — are implemented and tested. The
+renderer presents to a real window (`noctis-runtime --window`,
+`noctis-editor --window`), and the editor draws an
+[egui](https://github.com/emilk/egui) interface (outliner, inspector, live
+transform editing) over the viewport. The whole engine also runs headlessly for
+CI. Click-to-select viewport picking is implemented (a ray vs. mesh bounds); the
+editor can spawn primitive objects (cube/sphere/plane/light/camera) with the
+Outliner's **Add** buttons, and `--testscene` loads the all-features test scene;
+the transform gizmo (Move/Rotate/Scale) is implemented.
+
+Both CLIs accept `--project <dir>`: it opens a project (a directory with a
+`noctis.toml`, see [`docs/project.md`](docs/project.md)), imports its assets into
+one shared registry, and makes `--scene` project-relative. A scene carries a
+presentation `mode` (`2d` | `3d`); the editor creates new scenes in the project's
+mode (or `--mode`), and a 2D scene's default camera is orthographic.

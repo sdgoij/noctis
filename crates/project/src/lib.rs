@@ -28,9 +28,10 @@ mod path;
 mod project;
 
 pub use assets::{AssetImportError, AssetMap, AssetMapEntry, ImportedAssets, fragment_path};
+pub use ecs::scene::SceneMode;
 pub use error::ProjectError;
 pub use manifest::{
-    BuildTarget, InputSettings, Mode, Paths, Platform, Profile, ProjectInfo, ProjectManifest,
+    BuildTarget, InputSettings, Paths, Platform, Profile, ProjectInfo, ProjectManifest,
     RenderSettings, Settings, WindowSettings,
 };
 pub use path::{AssetKind, AssetPath, detect};

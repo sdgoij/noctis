@@ -29,7 +29,7 @@ use ecs::components::{
     Active, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
     LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, Visible,
 };
-use ecs::scene::{Prefab, Scene, SceneDesc, set_parent};
+use ecs::scene::{Prefab, Scene, SceneDesc, SceneMode, set_parent};
 use ecs::world::{Entity, World};
 use math::{Quat, Transform, Vec3, degrees, radians, vec3, zero3};
 
@@ -210,6 +210,15 @@ impl Editor {
     /// This is what the CLI uses, so opening a scene that has not been created
     /// yet does something sensible instead of failing.
     pub fn open_or_new(&mut self, path: impl AsRef<Path>) -> Result<(), EditorError> {
+        self.open_or_new_with_mode(path, SceneMode::default())
+    }
+
+    /// Like [`Editor::open_or_new`], but a newly created scene uses `mode`.
+    pub fn open_or_new_with_mode(
+        &mut self,
+        path: impl AsRef<Path>,
+        mode: SceneMode,
+    ) -> Result<(), EditorError> {
         let path = path.as_ref();
         if path.exists() {
             self.open(path)
@@ -219,7 +228,7 @@ impl Editor {
                 .and_then(|stem| stem.to_str())
                 .filter(|stem| !stem.is_empty())
                 .unwrap_or("Untitled");
-            self.new_scene(name);
+            self.new_scene_with_mode(name, mode);
             Ok(())
         }
     }
@@ -255,9 +264,30 @@ impl Editor {
 
     /// Replace the scene with a fresh, empty one. Undoable.
     pub fn new_scene(&mut self, name: impl Into<String>) {
+        self.new_scene_with_mode(name, SceneMode::default());
+    }
+
+    /// Replace the scene with a fresh, empty one in a given presentation mode.
+    /// Undoable.
+    pub fn new_scene_with_mode(&mut self, name: impl Into<String>, mode: SceneMode) {
         let before = self.snapshot();
-        self.scene = Scene::new(name.into());
+        self.scene = Scene::with_mode(name, mode);
         self.selection.clear();
+        self.push_history(before);
+    }
+
+    /// The scene's presentation mode (a hint; see [`SceneMode`]).
+    pub fn mode(&self) -> SceneMode {
+        self.scene.mode
+    }
+
+    /// Set the scene's presentation mode. Undoable.
+    pub fn set_mode(&mut self, mode: SceneMode) {
+        if self.scene.mode == mode {
+            return;
+        }
+        let before = self.snapshot();
+        self.scene.mode = mode;
         self.push_history(before);
     }
 
@@ -2245,6 +2275,40 @@ mod tests {
         assert_eq!(ed.scene_name(), "Fresh");
         assert!(ed.undo());
         assert_eq!(ed.entity_count(), 1);
+    }
+
+    #[test]
+    fn scenes_default_to_3d_and_the_mode_is_undoable() {
+        let mut ed = editor();
+        assert_eq!(ed.mode(), SceneMode::ThreeD);
+
+        ed.new_scene_with_mode("Menu", SceneMode::TwoD);
+        assert_eq!(ed.mode(), SceneMode::TwoD);
+        assert!(ed.scene().is_2d());
+
+        ed.set_mode(SceneMode::ThreeD);
+        assert_eq!(ed.mode(), SceneMode::ThreeD);
+        assert!(ed.undo(), "set_mode is undoable");
+        assert_eq!(ed.mode(), SceneMode::TwoD);
+        assert!(ed.undo(), "the preceding new_scene is undoable");
+        assert_eq!(ed.mode(), SceneMode::ThreeD);
+    }
+
+    #[test]
+    fn set_mode_to_the_same_value_makes_no_history_entry() {
+        let mut ed = editor();
+        ed.set_mode(SceneMode::ThreeD);
+        assert!(!ed.can_undo(), "a no-op set_mode records nothing");
+    }
+
+    #[test]
+    fn scene_mode_survives_save_and_reload() {
+        let mut ed = editor();
+        ed.new_scene_with_mode("Level", SceneMode::TwoD);
+        ed.spawn("Sprite", None);
+        let json = ed.to_json();
+        let reopened = Editor::from_json(&json).unwrap();
+        assert_eq!(reopened.mode(), SceneMode::TwoD);
     }
 
     #[test]
