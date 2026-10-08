@@ -60,5 +60,10 @@ rodio = "0.22"
 # Windowing
 winit = "0.30"
 
+# UI
+egui = "0.36"
+egui-wgpu = { version = "0.36", default-features = false, features = ["winit"] }
+egui-winit = "0.36"
+
 # Logging
 log = "0.4"

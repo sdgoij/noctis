@@ -18,7 +18,6 @@ use std::process::ExitCode;
 
 use editor::{Editor, command_schema, parse_commands};
 use platform::WindowConfig;
-use runtime::{Runtime, RuntimeConfig, run_in_window};
 
 const USAGE: &str = "\
 noctis-editor — build Noctis scenes from JSON commands
@@ -265,14 +264,12 @@ fn run_windowed(options: &Options) -> Result<(), CliError> {
             .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
     }
 
-    let (scene, assets) = editor.into_parts();
-    let runtime: Runtime = Runtime::from_assets(scene, assets, RuntimeConfig::default());
     let config = WindowConfig {
         title: "Noctis Editor".to_string(),
         width: 1280,
         height: 720,
     };
-    run_in_window(runtime, config).map_err(|e| CliError::Message(e.to_string()))
+    editor::window::run(editor, config).map_err(|e| CliError::Message(e.to_string()))
 }
 
 /// Read the command batch from a file, stdin (`-`), or the literal argument.

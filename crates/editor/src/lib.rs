@@ -48,6 +48,7 @@ pub mod command;
 pub mod editor;
 pub mod error;
 pub mod info;
+pub mod window;
 
 pub use command::{
     AlphaModeSpec, AssetRef, AudioSourceParams, BodyTypeSpec, CameraParams, ColliderParams,

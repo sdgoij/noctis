@@ -19,13 +19,14 @@ to work in this repository.
 | `script` | Script runtime + engine API (Slag backend optional). |
 | `testscene` | The all-features scene used for testing. |
 | `editor` / `runtime` | Editor (AI-controllable) and game runtime/export binaries. |
-| `platform` | Window + winit event loop; presents a live viewport. |
+| `platform` | Window + winit event loop + egui overlay; presents a live viewport. |
 
 ## Quick start
 
 ```sh
 cargo test --workspace        # run everything
 cargo run -p runtime          # run the sample scene headlessly
+cargo run -p runtime -- --window --demo   # open the demo scene in a window
 cargo run -p editor -- --help # drive the editor from the CLI / scripts
 ```
 
@@ -40,5 +41,7 @@ cargo test -p script --features slag
 All crates — `math`, `ecs`, `render`, `physics`, `audio`, `script`, `testscene`,
 `editor`, `runtime`, and `platform` — are implemented and tested. The renderer
 presents to a real window (`noctis-runtime --window`, `noctis-editor --window`),
-and the whole engine also runs headlessly for CI. GUI panels and viewport
-mouse-picking are the next milestone.
+and the editor draws an [egui](https://github.com/emilk/egui) interface (outliner,
+inspector, live transform editing) over the viewport. The whole engine also runs
+headlessly for CI. Viewport mouse-picking and gizmo dragging are the next
+milestone.

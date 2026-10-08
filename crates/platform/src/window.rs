@@ -1,4 +1,4 @@
-//! The winit window host.
+//! The winit window host, with an egui overlay.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,11 +45,19 @@ pub fn map_key(code: KeyCode) -> Option<ecs::resources::Key> {
     ecs::resources::Key::from_name(&format!("{code:?}"))
 }
 
-/// A window running an [`AppDriver`].
+/// The egui integration state (context, winit bridge, wgpu renderer).
+struct EguiLayer {
+    ctx: egui::Context,
+    state: egui_winit::State,
+    renderer: egui_wgpu::Renderer,
+}
+
+/// A window running an [`AppDriver`] with an egui overlay.
 pub struct WindowHost<D: AppDriver> {
     config: WindowConfig,
     driver: D,
     renderer: Option<Renderer>,
+    egui: Option<EguiLayer>,
     window: Option<Arc<Window>>,
     last: Instant,
 }
@@ -61,6 +69,7 @@ impl<D: AppDriver> WindowHost<D> {
             config,
             driver,
             renderer: None,
+            egui: None,
             window: None,
             last: Instant::now(),
         }
@@ -96,7 +105,31 @@ impl<D: AppDriver> WindowHost<D> {
             sample_count: 1,
         };
         match Renderer::for_surface(renderer_config, instance, surface) {
-            Ok(renderer) => self.renderer = Some(renderer),
+            Ok(renderer) => {
+                let format = renderer
+                    .present_format()
+                    .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+                let egui_ctx = egui::Context::default();
+                let egui_state = egui_winit::State::new(
+                    egui_ctx.clone(),
+                    egui::ViewportId::ROOT,
+                    window.as_ref(),
+                    Some(window.scale_factor() as f32),
+                    None,
+                    Some(renderer.device().limits().max_texture_dimension_2d as usize),
+                );
+                let egui_renderer = egui_wgpu::Renderer::new(
+                    renderer.device(),
+                    format,
+                    egui_wgpu::RendererOptions::default(),
+                );
+                self.egui = Some(EguiLayer {
+                    ctx: egui_ctx,
+                    state: egui_state,
+                    renderer: egui_renderer,
+                });
+                self.renderer = Some(renderer);
+            }
             Err(RenderError::NoAdapter) => {
                 log::warn!("no graphics adapter available; the window will not render");
             }
@@ -110,6 +143,12 @@ impl<D: AppDriver> WindowHost<D> {
         self.window = Some(window);
     }
 
+    fn forward_to_egui(&mut self, event: &WindowEvent) {
+        if let (Some(egui), Some(window)) = (self.egui.as_mut(), self.window.clone()) {
+            let _ = egui.state.on_window_event(&window, event);
+        }
+    }
+
     fn redraw(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().clamp(0.0, 0.1);
@@ -117,15 +156,97 @@ impl<D: AppDriver> WindowHost<D> {
 
         self.driver.update(dt);
 
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        // Take the renderer and egui layer out so `self.driver` can be borrowed
+        // freely while we build the egui frame and present.
+        let Some(mut renderer) = self.renderer.take() else {
+            window.request_redraw();
+            return;
+        };
         let camera = self.driver.camera();
-        if let (Some(renderer), Some(camera)) = (self.renderer.as_mut(), camera) {
+        let egui = self.egui.take();
+
+        if let Some(mut egui) = egui {
+            let raw_input = egui.state.take_egui_input(&window);
+            let output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
+            egui.state
+                .handle_platform_output(&window, output.platform_output);
+            let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
+
+            let size = window.inner_size();
+            let screen_descriptor = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [size.width.max(1), size.height.max(1)],
+                pixels_per_point: output.pixels_per_point,
+            };
+
+            for (id, deltas) in &output.textures_delta.set {
+                for delta in deltas {
+                    egui.renderer
+                        .update_texture(renderer.device(), renderer.queue(), *id, delta);
+                }
+            }
+            {
+                let device = renderer.device();
+                let queue = renderer.queue();
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("egui.upload"),
+                });
+                let extra = egui.renderer.update_buffers(
+                    device,
+                    queue,
+                    &mut encoder,
+                    &paint_jobs,
+                    &screen_descriptor,
+                );
+                queue.submit(std::iter::once(encoder.finish()).chain(extra));
+            }
+
+            if let Some(camera) = camera {
+                let result = renderer.present_with_overlay(
+                    self.driver.world(),
+                    self.driver.assets(),
+                    camera,
+                    &mut |encoder, view| {
+                        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("egui.pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        let mut pass = pass.forget_lifetime();
+                        egui.renderer
+                            .render(&mut pass, &paint_jobs, &screen_descriptor);
+                    },
+                );
+                if let Err(err) = result {
+                    log::warn!("present failed: {err}");
+                }
+            }
+
+            for id in &output.textures_delta.free {
+                egui.renderer.free_texture(id);
+            }
+            self.egui = Some(egui);
+        } else if let Some(camera) = camera {
             if let Err(err) = renderer.present(self.driver.world(), self.driver.assets(), camera) {
                 log::warn!("present failed: {err}");
             }
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+
+        self.renderer = Some(renderer);
+        window.request_redraw();
     }
 }
 
@@ -142,24 +263,12 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        match event {
+        match &event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
                     if let Err(err) = renderer.resize(size.width, size.height) {
                         log::warn!("resize failed: {err}");
-                    }
-                }
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    if let Some(key) = map_key(code) {
-                        if let Some(input) = self.driver.input_mut() {
-                            match event.state {
-                                ElementState::Pressed => input.press_key(key),
-                                ElementState::Released => input.release_key(key),
-                            }
-                        }
                     }
                 }
             }
@@ -169,7 +278,22 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                     event_loop.exit();
                 }
             }
-            _ => {}
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
+                if let PhysicalKey::Code(code) = key_event.physical_key {
+                    if let Some(key) = map_key(code) {
+                        if let Some(input) = self.driver.input_mut() {
+                            match key_event.state {
+                                ElementState::Pressed => input.press_key(key),
+                                ElementState::Released => input.release_key(key),
+                            }
+                        }
+                    }
+                }
+                self.forward_to_egui(&event);
+            }
+            other => self.forward_to_egui(other),
         }
     }
 }

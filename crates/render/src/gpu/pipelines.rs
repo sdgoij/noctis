@@ -479,18 +479,26 @@ pub fn create_present_pipeline(
     })
 }
 
-/// Choose a surface format: prefer an 8-bit sRGB format (the present shader
-/// decodes for those), otherwise the first advertised format.
+/// Choose a surface format.
+///
+/// A gamma-space (non-sRGB) 8-bit format is preferred: the tonemap blit and
+/// egui both write sRGB-encoded values, so no hardware transfer function is
+/// wanted on the surface. Falls back to an sRGB 8-bit format, then any non-sRGB
+/// format, then the first advertised format.
 pub fn pick_surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
-    let eight_bit_srgb = formats.iter().copied().find(|f| {
-        f.is_srgb()
-            && matches!(
-                f,
-                wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb
-            )
-    });
-    eight_bit_srgb
-        .or_else(|| formats.iter().copied().find(|f| f.is_srgb()))
+    use wgpu::TextureFormat as F;
+    let is_8bit = |f: F| {
+        matches!(
+            f,
+            F::Bgra8Unorm | F::Rgba8Unorm | F::Bgra8UnormSrgb | F::Rgba8UnormSrgb
+        )
+    };
+    let find = |pred: &dyn Fn(F) -> bool| formats.iter().copied().find(|f| pred(*f));
+    find(&|f| f == F::Bgra8Unorm)
+        .or_else(|| find(&|f| f == F::Rgba8Unorm))
+        .or_else(|| find(&|f| is_8bit(f) && !f.is_srgb()))
+        .or_else(|| find(&|f| is_8bit(f) && f.is_srgb()))
+        .or_else(|| find(&|f| !f.is_srgb()))
         .or_else(|| formats.first().copied())
 }
 
@@ -500,34 +508,29 @@ mod tests {
     use wgpu::TextureFormat;
 
     #[test]
-    fn prefers_eight_bit_srgb_formats() {
-        let formats = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8UnormSrgb];
+    fn prefers_gamma_space_8bit_formats() {
         assert_eq!(
-            pick_surface_format(&formats),
-            Some(TextureFormat::Rgba8UnormSrgb)
+            pick_surface_format(&[TextureFormat::Rgba8UnormSrgb, TextureFormat::Bgra8Unorm]),
+            Some(TextureFormat::Bgra8Unorm)
         );
-        let formats = [TextureFormat::Rgba16Float, TextureFormat::Bgra8UnormSrgb];
         assert_eq!(
-            pick_surface_format(&formats),
-            Some(TextureFormat::Bgra8UnormSrgb)
+            pick_surface_format(&[TextureFormat::Bgra8UnormSrgb, TextureFormat::Rgba8Unorm]),
+            Some(TextureFormat::Rgba8Unorm)
         );
     }
 
     #[test]
-    fn falls_back_to_any_srgb_then_first_format() {
-        // No sRGB format at all: the first advertised format is used.
-        let formats = [TextureFormat::Rgba8Unorm, TextureFormat::Rgba16Float];
+    fn falls_back_through_srgb_then_first() {
+        // Only an sRGB format is available.
         assert_eq!(
-            pick_surface_format(&formats),
-            Some(TextureFormat::Rgba8Unorm)
+            pick_surface_format(&[TextureFormat::Bgra8UnormSrgb]),
+            Some(TextureFormat::Bgra8UnormSrgb)
         );
-        // No sRGB format at all: the first advertised format is used.
-        let formats = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm];
+        // No 8-bit format: the first non-sRGB format wins.
         assert_eq!(
-            pick_surface_format(&formats),
-            Some(TextureFormat::Bgra8Unorm)
+            pick_surface_format(&[TextureFormat::Rgba16Float, TextureFormat::Rgba32Float]),
+            Some(TextureFormat::Rgba16Float)
         );
-        // Empty list has no valid choice.
         assert_eq!(pick_surface_format(&[]), None);
     }
 }

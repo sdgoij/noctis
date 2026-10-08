@@ -36,6 +36,12 @@ pub trait AppDriver {
         None
     }
 
+    /// Draw the driver's UI into the given egui UI. Called once per frame,
+    /// before the scene is presented, when the window host has an egui layer.
+    ///
+    /// `Ui` derefs to `egui::Context`, so `ui.ctx()` is available if needed.
+    fn ui(&mut self, _ui: &mut egui::Ui) {}
+
     /// Whether the driver has requested the application exit.
     fn should_exit(&self) -> bool {
         false

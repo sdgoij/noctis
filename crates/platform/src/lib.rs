@@ -37,3 +37,7 @@ mod window;
 pub use driver::AppDriver;
 pub use error::PlatformError;
 pub use window::{WindowConfig, WindowHost, map_key, run};
+
+/// The egui version this crate draws with, re-exported so drivers can build UI
+/// without depending on `egui` directly.
+pub use egui;

@@ -457,19 +457,24 @@ impl Renderer {
         assets: &AssetRegistry,
         camera: Entity,
     ) -> Result<Frame, RenderError> {
-        self.render_scene(world, assets, camera, None)?;
+        self.render_scene(world, assets, camera, None, None)?;
         self.read_back()
     }
 
     /// Record one frame. When `present_view` is `Some`, the tonemapped LDR
     /// result is blitted into it (a surface texture view); otherwise it is
     /// copied into the readback buffer for [`Renderer::render_frame`].
+    ///
+    /// `overlay`, when given, is called after the scene is presented into the
+    /// surface view and before submission, so a UI (egui) can record its own
+    /// pass into the same encoder/target.
     fn render_scene(
         &mut self,
         world: &World,
         assets: &AssetRegistry,
         camera: Entity,
         present_view: Option<&wgpu::TextureView>,
+        overlay: Option<&mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView)>,
     ) -> Result<(), RenderError> {
         let view = extract_camera(world, camera, self.targets.width, self.targets.height)
             .ok_or(RenderError::NoCamera)?;
@@ -791,6 +796,10 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
                 pass.draw(0..3, 0..1);
+                drop(pass);
+                if let Some(overlay) = overlay {
+                    overlay(&mut encoder, view);
+                }
             }
             None => {
                 encoder.copy_texture_to_buffer(
@@ -1050,7 +1059,64 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.render_scene(world, assets, camera, Some(&view))?;
+        self.render_scene(world, assets, camera, Some(&view), None)?;
+        self.queue.present(frame);
+        if suboptimal {
+            self.reconfigure_surface();
+        }
+        Ok(())
+    }
+
+    /// Render one frame to the surface, calling `overlay` to draw on top of the
+    /// scene (before presentation). Used for an egui UI over the 3D viewport.
+    pub fn present_with_overlay(
+        &mut self,
+        world: &World,
+        assets: &AssetRegistry,
+        camera: Entity,
+        overlay: &mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView),
+    ) -> Result<(), RenderError> {
+        let acquired = {
+            let surface = self
+                .surface
+                .as_ref()
+                .ok_or_else(|| RenderError::Unsupported("renderer has no surface".into()))?;
+            surface.get_current_texture()
+        };
+        let (frame, suboptimal) = match acquired {
+            wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.reconfigure_surface();
+                match self
+                    .surface
+                    .as_ref()
+                    .expect("surface present")
+                    .get_current_texture()
+                {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, false),
+                    other => {
+                        return Err(RenderError::Surface(format!(
+                            "surface reacquire failed: {other:?}"
+                        )));
+                    }
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(RenderError::Surface("surface lost".into()));
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(RenderError::Surface("surface validation error".into()));
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_scene(world, assets, camera, Some(&view), Some(overlay))?;
         self.queue.present(frame);
         if suboptimal {
             self.reconfigure_surface();

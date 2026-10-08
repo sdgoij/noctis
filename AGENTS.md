@@ -17,7 +17,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
 | `editor` | `crates/editor` | Scene editor library + AI-controllable command API + `noctis-editor` CLI. |
 | `runtime` | `crates/runtime` | Game runtime/export loop + `noctis-runtime` CLI. |
-| `platform` | `crates/platform` | Window + winit event loop; drives any `AppDriver` into a surface-backed viewport. |
+| `platform` | `crates/platform` | Window + winit event loop + egui overlay; drives any `AppDriver` into a surface-backed viewport. |
 
 The frozen interface between `math`/`ecs` and everything else is documented in
 [`docs/core-api.md`](docs/core-api.md). **Treat it as a contract**: if a consumer
@@ -76,9 +76,10 @@ cargo build -p script --features slag   # enable the real JavaScript backend
   CPU at load time; one shadow-casting directional/spot light at a time.
 - `script`: the real Slag backend is the optional `slag` feature (its build
   fetches a large `test262` submodule); the default build uses a testable host.
-- `editor`/`runtime` can open a live windowed viewport (`--window`); the
-  viewport has no GUI panels and no viewport mouse-picking yet, and the windowed
-  loop is not unit-tested (it blocks and needs a display).
+- `editor`/`runtime` open a live windowed viewport (`--window`). The editor draws
+  egui panels (outliner, inspector, transform editing); there is still no
+  viewport mouse-picking or gizmo dragging, and the windowed loop is not
+  unit-tested (it blocks and needs a display).
 
 ## Commit messages
 

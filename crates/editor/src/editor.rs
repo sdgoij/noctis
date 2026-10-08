@@ -246,6 +246,15 @@ impl Editor {
         &self.scene
     }
 
+    /// Mutable access to the underlying scene.
+    ///
+    /// Mutations here bypass command history; prefer the typed methods. This is
+    /// for host code (the windowed play mode ensuring a camera exists, for
+    /// example).
+    pub fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+
     /// Read-only access to the asset registry.
     pub fn assets(&self) -> &AssetRegistry {
         &self.assets
