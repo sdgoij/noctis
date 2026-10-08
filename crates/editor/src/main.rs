@@ -17,6 +17,8 @@
 use std::process::ExitCode;
 
 use editor::{Editor, command_schema, parse_commands};
+use platform::WindowConfig;
+use runtime::{Runtime, RuntimeConfig, run_in_window};
 
 const USAGE: &str = "\
 noctis-editor — build Noctis scenes from JSON commands
@@ -29,6 +31,7 @@ OPTIONS:
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
+        --window            Open the scene in a window with a live viewport
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
 
@@ -46,6 +49,34 @@ enum CliError {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if wants_window(&args) {
+        let options = match parse_args(&args) {
+            Ok(options) => options,
+            Err(CliError::Usage(message)) => {
+                eprintln!("noctis-editor: {message}\n");
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+            Err(CliError::Message(message)) => {
+                eprintln!("noctis-editor: {message}");
+                return ExitCode::FAILURE;
+            }
+        };
+        return match run_windowed(&options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(CliError::Usage(message)) => {
+                eprintln!("noctis-editor: {message}\n");
+                eprintln!("{USAGE}");
+                ExitCode::from(2)
+            }
+            Err(CliError::Message(message)) => {
+                eprintln!("noctis-editor: {message}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     match run(&args) {
         Ok(output) => {
             println!("{output}");
@@ -68,6 +99,7 @@ struct Options {
     scene: Option<String>,
     command: Option<String>,
     out: Option<String>,
+    window: bool,
     print_schema: bool,
     help: bool,
 }
@@ -134,6 +166,10 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
                 reject_inline(&inline, &flag)?;
                 options.print_schema = true;
             }
+            "--window" => {
+                reject_inline(&inline, &flag)?;
+                options.window = true;
+            }
             "--scene" | "-s" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.scene = Some(value);
@@ -197,6 +233,46 @@ fn reject_inline(inline: &Option<String>, flag: &str) -> Result<(), CliError> {
     } else {
         Ok(())
     }
+}
+
+/// Whether the invocation asked for a window.
+fn wants_window(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--window" || arg.starts_with("--window="))
+}
+
+/// Build the scene from the options, then run it in a window until closed.
+fn run_windowed(options: &Options) -> Result<(), CliError> {
+    let mut editor = Editor::new();
+    if let Some(scene) = &options.scene {
+        editor
+            .open(scene)
+            .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
+    }
+    if let Some(source) = &options.command {
+        let json = read_commands(source)?;
+        let commands = parse_commands(&json)
+            .map_err(|e| CliError::Message(format!("invalid command batch: {e}")))?;
+        for (index, command) in commands.into_iter().enumerate() {
+            editor
+                .apply(command)
+                .map_err(|e| CliError::Message(format!("command #{} failed: {e}", index + 1)))?;
+        }
+    }
+    if let Some(out) = &options.out {
+        editor
+            .save(out)
+            .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
+    }
+
+    let (scene, assets) = editor.into_parts();
+    let runtime: Runtime = Runtime::from_assets(scene, assets, RuntimeConfig::default());
+    let config = WindowConfig {
+        title: "Noctis Editor".to_string(),
+        width: 1280,
+        height: 720,
+    };
+    run_in_window(runtime, config).map_err(|e| CliError::Message(e.to_string()))
 }
 
 /// Read the command batch from a file, stdin (`-`), or the literal argument.

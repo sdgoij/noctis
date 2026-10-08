@@ -18,5 +18,6 @@ render.workspace = true
 physics.workspace = true
 audio.workspace = true
 script.workspace = true
+platform.workspace = true
 serde_json.workspace = true
 log.workspace = true

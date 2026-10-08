@@ -29,6 +29,8 @@ pub struct BindGroupLayouts {
     pub ssao: wgpu::BindGroupLayout,
     /// Group 0 of the tonemap pass.
     pub tonemap: wgpu::BindGroupLayout,
+    /// Group 0 of the present (surface blit) pass.
+    pub present: wgpu::BindGroupLayout,
 }
 
 fn buffer_entry(
@@ -166,6 +168,11 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         ],
     });
 
+    let present = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("present.layout"),
+        entries: &[texture(0), sampler(1, false)],
+    });
+
     BindGroupLayouts {
         frame,
         object,
@@ -173,6 +180,7 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         view,
         ssao,
         tonemap,
+        present,
     }
 }
 
@@ -426,6 +434,101 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
         gizmo_line,
         gizmo_triangle,
         tonemap,
+    }
+}
+
+/// Create the present (surface blit) pipeline for a specific surface `format`.
+///
+/// `fragment_entry` is `"fs_passthrough"` for a non-sRGB surface format, or
+/// `"fs_srgb_decode"` for an sRGB one (see `shaders/present.wgsl`).
+pub fn create_present_pipeline(
+    device: &wgpu::Device,
+    layouts: &BindGroupLayouts,
+    format: wgpu::TextureFormat,
+    fragment_entry: &str,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/present.wgsl"));
+    let layout = pipeline_layout(device, "present.pipeline_layout", &[&layouts.present]);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("present.pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some(fragment_entry),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Choose a surface format: prefer an 8-bit sRGB format (the present shader
+/// decodes for those), otherwise the first advertised format.
+pub fn pick_surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
+    let eight_bit_srgb = formats.iter().copied().find(|f| {
+        f.is_srgb()
+            && matches!(
+                f,
+                wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb
+            )
+    });
+    eight_bit_srgb
+        .or_else(|| formats.iter().copied().find(|f| f.is_srgb()))
+        .or_else(|| formats.first().copied())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wgpu::TextureFormat;
+
+    #[test]
+    fn prefers_eight_bit_srgb_formats() {
+        let formats = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8UnormSrgb];
+        assert_eq!(
+            pick_surface_format(&formats),
+            Some(TextureFormat::Rgba8UnormSrgb)
+        );
+        let formats = [TextureFormat::Rgba16Float, TextureFormat::Bgra8UnormSrgb];
+        assert_eq!(
+            pick_surface_format(&formats),
+            Some(TextureFormat::Bgra8UnormSrgb)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_any_srgb_then_first_format() {
+        // No sRGB format at all: the first advertised format is used.
+        let formats = [TextureFormat::Rgba8Unorm, TextureFormat::Rgba16Float];
+        assert_eq!(
+            pick_surface_format(&formats),
+            Some(TextureFormat::Rgba8Unorm)
+        );
+        // No sRGB format at all: the first advertised format is used.
+        let formats = [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm];
+        assert_eq!(
+            pick_surface_format(&formats),
+            Some(TextureFormat::Bgra8Unorm)
+        );
+        // Empty list has no valid choice.
+        assert_eq!(pick_surface_format(&[]), None);
     }
 }
 

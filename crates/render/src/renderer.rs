@@ -27,6 +27,7 @@ use crate::gizmo::{GizmoGeometry, GizmoVertex};
 use crate::gpu::ibl_gpu::IblGpu;
 use crate::gpu::pipelines::{
     BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, create_layouts, create_pipelines,
+    create_present_pipeline, pick_surface_format,
 };
 use crate::gpu::resources::ResourceCache;
 use crate::gpu::shadow::ShadowResources;
@@ -144,6 +145,11 @@ pub struct Renderer {
     tonemap_mode: Tonemap,
     ssao_strength: f32,
     clear_color: [f32; 4],
+    surface: Option<wgpu::Surface<'static>>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
+    present_pipeline: Option<wgpu::RenderPipeline>,
+    present_bind_group: Option<wgpu::BindGroup>,
+    present_format: Option<wgpu::TextureFormat>,
 }
 
 impl std::fmt::Debug for Renderer {
@@ -187,6 +193,12 @@ impl Renderer {
         }))
         .map_err(|e| RenderError::RequestDevice(e.to_string()))?;
 
+        Ok(Self::build_core(device, queue, config))
+    }
+
+    /// Shared GPU-resource construction, used by both the headless and the
+    /// surface renderer. A surface is attached afterwards, if any.
+    fn build_core(device: wgpu::Device, queue: wgpu::Queue, config: RendererConfig) -> Renderer {
         let mut config = config;
         if config.sample_count != 1 {
             log::warn!(
@@ -288,7 +300,7 @@ impl Renderer {
             ],
         });
 
-        Ok(Renderer {
+        Renderer {
             config,
             device,
             queue,
@@ -319,7 +331,12 @@ impl Renderer {
             tonemap_mode: Tonemap::Aces,
             ssao_strength: 1.0,
             clear_color: [0.02, 0.02, 0.03, 1.0],
-        })
+            surface: None,
+            surface_config: None,
+            present_pipeline: None,
+            present_bind_group: None,
+            present_format: None,
+        }
     }
 
     /// The active configuration.
@@ -433,13 +450,27 @@ impl Renderer {
         self.gizmo_triangle_indices = None;
     }
 
-    /// Render one frame from `world` through the camera entity.
+    /// Render one frame offscreen and read the pixels back as RGBA8.
     pub fn render_frame(
         &mut self,
         world: &World,
         assets: &AssetRegistry,
         camera: Entity,
     ) -> Result<Frame, RenderError> {
+        self.render_scene(world, assets, camera, None)?;
+        self.read_back()
+    }
+
+    /// Record one frame. When `present_view` is `Some`, the tonemapped LDR
+    /// result is blitted into it (a surface texture view); otherwise it is
+    /// copied into the readback buffer for [`Renderer::render_frame`].
+    fn render_scene(
+        &mut self,
+        world: &World,
+        assets: &AssetRegistry,
+        camera: Entity,
+        present_view: Option<&wgpu::TextureView>,
+    ) -> Result<(), RenderError> {
         let view = extract_camera(world, camera, self.targets.width, self.targets.height)
             .ok_or(RenderError::NoCamera)?;
         let lights = extract_lights(world);
@@ -732,31 +763,305 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // 7. Copy to readback buffer.
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.targets.ldr.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.targets.readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.targets.padded_bytes_per_row),
-                    rows_per_image: Some(self.targets.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.targets.width,
-                height: self.targets.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        // 7. Present to the surface, or copy into the readback buffer.
+        match present_view {
+            Some(view) => {
+                let pipeline = self.present_pipeline.as_ref().ok_or_else(|| {
+                    RenderError::Unsupported("renderer has no present pipeline".into())
+                })?;
+                let bind_group = self.present_bind_group.as_ref().ok_or_else(|| {
+                    RenderError::Unsupported("renderer has no present bind group".into())
+                })?;
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("present.pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            None => {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.targets.ldr.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &self.targets.readback,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(self.targets.padded_bytes_per_row),
+                            rows_per_image: Some(self.targets.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: self.targets.width,
+                        height: self.targets.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
 
         self.queue.submit(Some(encoder.finish()));
-        self.read_back()
+        Ok(())
+    }
+
+    /// Create a wgpu instance to build a surface from, for [`Renderer::for_surface`].
+    pub fn create_instance() -> wgpu::Instance {
+        wgpu::Instance::default()
+    }
+
+    /// Create a renderer that presents to a window `surface`.
+    ///
+    /// The `surface` must have been created from the same `instance`
+    /// (`instance.create_surface(window)`). Returns [`RenderError::NoAdapter`]
+    /// when no adapter can drive the surface.
+    pub fn for_surface(
+        config: RendererConfig,
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<Renderer, RenderError> {
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface),
+            apply_limit_buckets: false,
+        };
+        let adapter = pollster::block_on(instance.request_adapter(&options))
+            .map_err(|_| RenderError::NoAdapter)?;
+        let caps = surface.get_capabilities(&adapter);
+        let format = pick_surface_format(&caps.formats)
+            .ok_or_else(|| RenderError::Unsupported("surface advertises no formats".into()))?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("noctis.render.device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            ..Default::default()
+        }))
+        .map_err(|e| RenderError::RequestDevice(e.to_string()))?;
+
+        let mut renderer = Self::build_core(device, queue, config);
+        renderer.attach_surface(surface, &caps, format)?;
+        Ok(renderer)
+    }
+
+    fn attach_surface(
+        &mut self,
+        surface: wgpu::Surface<'static>,
+        caps: &wgpu::SurfaceCapabilities,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), RenderError> {
+        let entry = if format.is_srgb() {
+            "fs_srgb_decode"
+        } else {
+            "fs_passthrough"
+        };
+        let pipeline = create_present_pipeline(&self.device, &self.layouts, format, entry);
+        let bind_group = self.present_bind_group_for(&self.device);
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: self.targets.width,
+            height: self.targets.height,
+            present_mode: caps
+                .present_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::PresentMode::Fifo),
+            alpha_mode: caps
+                .alpha_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&self.device, &surface_config);
+        self.present_pipeline = Some(pipeline);
+        self.present_bind_group = Some(bind_group);
+        self.present_format = Some(format);
+        self.surface_config = Some(surface_config);
+        self.surface = Some(surface);
+        Ok(())
+    }
+
+    fn present_bind_group_for(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present.bind_group"),
+            layout: &self.layouts.present,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.targets.ldr.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.ibl.sampler),
+                },
+            ],
+        })
+    }
+
+    /// `true` if this renderer presents to a window surface.
+    pub fn has_surface(&self) -> bool {
+        self.surface.is_some()
+    }
+
+    /// The surface format, if this renderer has a surface.
+    pub fn present_format(&self) -> Option<wgpu::TextureFormat> {
+        self.present_format
+    }
+
+    /// The underlying device (for integrations that must share it).
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// The underlying queue.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Resize the offscreen targets and, if present, the window surface.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
+        let width = width.max(1);
+        let height = height.max(1);
+        if width == self.targets.width && height == self.targets.height {
+            return Ok(());
+        }
+        self.config.width = width;
+        self.config.height = height;
+        self.targets = RenderTargets::create(&self.device, width, height);
+        self.frame = FrameBindings::new(
+            &self.device,
+            &self.layouts.frame,
+            &self.ibl,
+            &self.shadow.view,
+            &self.targets.ssao.view,
+        );
+        let ssao = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ssao.bind_group"),
+            layout: &self.layouts.ssao,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.ssao_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.targets.depth.view),
+                },
+            ],
+        });
+        self.ssao_bind_group = ssao;
+        let tonemap = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tonemap.bind_group"),
+            layout: &self.layouts.tonemap,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.tonemap_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.targets.hdr.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.ibl.sampler),
+                },
+            ],
+        });
+        self.tonemap_bind_group = tonemap;
+        if self.present_pipeline.is_some() {
+            let present = self.present_bind_group_for(&self.device);
+            self.present_bind_group = Some(present);
+        }
+        if let (Some(surface), Some(cfg)) = (self.surface.as_ref(), self.surface_config.as_mut()) {
+            cfg.width = width;
+            cfg.height = height;
+            surface.configure(&self.device, cfg);
+        }
+        Ok(())
+    }
+
+    /// Render one frame and present it to the window surface.
+    pub fn present(
+        &mut self,
+        world: &World,
+        assets: &AssetRegistry,
+        camera: Entity,
+    ) -> Result<(), RenderError> {
+        let acquired = {
+            let surface = self
+                .surface
+                .as_ref()
+                .ok_or_else(|| RenderError::Unsupported("renderer has no surface".into()))?;
+            surface.get_current_texture()
+        };
+        let (frame, suboptimal) = match acquired {
+            wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                // Skip this frame; try again next tick.
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.reconfigure_surface();
+                match self
+                    .surface
+                    .as_ref()
+                    .expect("surface present")
+                    .get_current_texture()
+                {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, false),
+                    other => {
+                        return Err(RenderError::Surface(format!(
+                            "surface reacquire failed: {other:?}"
+                        )));
+                    }
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                return Err(RenderError::Surface("surface lost".into()));
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(RenderError::Surface("surface validation error".into()));
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_scene(world, assets, camera, Some(&view))?;
+        self.queue.present(frame);
+        if suboptimal {
+            self.reconfigure_surface();
+        }
+        Ok(())
+    }
+
+    fn reconfigure_surface(&mut self) {
+        if let (Some(surface), Some(cfg)) = (self.surface.as_ref(), self.surface_config.as_ref()) {
+            surface.configure(&self.device, cfg);
+        }
     }
 
     fn build_shadow(

@@ -30,6 +30,8 @@ pub enum RenderError {
     Unsupported(String),
     /// Reading back the rendered frame from the GPU failed.
     Readback(String),
+    /// Presenting to a window surface failed (acquire/configure/present).
+    Surface(String),
 }
 
 impl fmt::Display for RenderError {
@@ -44,6 +46,7 @@ impl fmt::Display for RenderError {
             RenderError::MissingAsset(msg) => write!(f, "missing asset: {msg}"),
             RenderError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
             RenderError::Readback(msg) => write!(f, "frame readback failed: {msg}"),
+            RenderError::Surface(msg) => write!(f, "surface error: {msg}"),
         }
     }
 }
@@ -78,6 +81,7 @@ mod tests {
             RenderError::MissingAsset("mesh".into()),
             RenderError::Unsupported("x".into()),
             RenderError::Readback("x".into()),
+            RenderError::Surface("x".into()),
         ];
         for case in cases {
             assert!(!case.to_string().is_empty());

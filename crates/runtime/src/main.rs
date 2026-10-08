@@ -16,8 +16,9 @@ use std::process::ExitCode;
 
 use ecs::assets::AssetRegistry;
 use ecs::scene::Scene;
+use platform::WindowConfig;
 use render::RendererConfig;
-use runtime::{RunSummary, Runtime, RuntimeConfig, demo};
+use runtime::{RunSummary, Runtime, RuntimeConfig, demo, run_in_window};
 
 /// Parsed command-line arguments.
 #[derive(Clone, Debug)]
@@ -27,6 +28,7 @@ struct Args {
     frames: u32,
     dt: f32,
     render: bool,
+    window: bool,
     audio: bool,
     print_summary: bool,
     quiet: bool,
@@ -40,6 +42,7 @@ impl Default for Args {
             frames: 300,
             dt: 1.0 / 60.0,
             render: false,
+            window: false,
             audio: true,
             print_summary: false,
             quiet: false,
@@ -56,6 +59,7 @@ impl Args {
                 "--help" | "-h" => return Ok(None),
                 "--demo" => args.demo = true,
                 "--render" => args.render = true,
+                "--window" => args.window = true,
                 "--no-audio" => args.audio = false,
                 "--print-summary" => args.print_summary = true,
                 "--quiet" | "-q" => args.quiet = true,
@@ -106,6 +110,7 @@ OPTIONS:
     --frames <N>       Number of frames to run (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
     --render           Render frames with a headless GPU (skipped if unavailable).
+    --window           Open a window and run with a live viewport (blocks).
     --no-audio         Do not open an audio device (use silent audio).
     --print-summary    Print the run summary (printed by default).
     --quiet            Suppress the run summary.
@@ -115,8 +120,8 @@ ENVIRONMENT:
     NOCTIS_LOG         error | warn | info (default) | debug | trace | off"
 }
 
-/// Load the scene and run the loop. Returns the run summary.
-fn run(args: &Args) -> Result<RunSummary, String> {
+/// Build the runtime for the requested scene (demo or file).
+fn build_runtime(args: &Args) -> Result<Runtime, String> {
     let config = RuntimeConfig {
         audio: args.audio,
         timestep: args.dt,
@@ -146,7 +151,25 @@ fn run(args: &Args) -> Result<RunSummary, String> {
         }
     }
 
+    Ok(runtime)
+}
+
+/// Load the scene and run the loop headlessly. Returns the run summary.
+fn run(args: &Args) -> Result<RunSummary, String> {
+    let mut runtime = build_runtime(args)?;
     Ok(runtime.run_headless(args.frames, args.dt))
+}
+
+/// Run the scene in a window until it is closed.
+fn run_windowed(args: &Args) -> Result<(), String> {
+    let runtime = build_runtime(args)?;
+    let title = args.scene.clone().unwrap_or_else(|| "Noctis".to_string());
+    let config = WindowConfig {
+        title,
+        width: 1280,
+        height: 720,
+    };
+    run_in_window(runtime, config).map_err(|err| err.to_string())
 }
 
 fn main() -> ExitCode {
@@ -164,6 +187,16 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if args.window {
+        return match run_windowed(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("noctis-runtime: {message}");
+                ExitCode::from(1)
+            }
+        };
+    }
 
     match run(&args) {
         Ok(summary) => {

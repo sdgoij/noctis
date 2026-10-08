@@ -259,6 +259,14 @@ impl Editor {
         &mut self.assets
     }
 
+    /// Consume the editor, returning its scene and asset registry.
+    ///
+    /// This is how the editor hands a finished scene to the runtime's windowed
+    /// play mode ([`crate`]-external code calls `runtime::run_in_window`).
+    pub fn into_parts(self) -> (Scene, AssetRegistry) {
+        (self.scene, self.assets)
+    }
+
     // -----------------------------------------------------------------------
     // History
     // -----------------------------------------------------------------------

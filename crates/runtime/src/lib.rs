@@ -43,9 +43,11 @@ mod config;
 mod runtime;
 
 pub mod demo;
+pub mod window;
 
 pub use config::RuntimeConfig;
 pub use runtime::{RunSummary, Runtime};
+pub use window::run_in_window;
 
 /// The most commonly used imports.
 pub mod prelude {

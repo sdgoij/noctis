@@ -19,6 +19,7 @@ to work in this repository.
 | `script` | Script runtime + engine API (Slag backend optional). |
 | `testscene` | The all-features scene used for testing. |
 | `editor` / `runtime` | Editor (AI-controllable) and game runtime/export binaries. |
+| `platform` | Window + winit event loop; presents a live viewport. |
 
 ## Quick start
 
@@ -36,8 +37,8 @@ cargo test -p script --features slag
 
 ## Status
 
-The `math`, `ecs`, `render`, `physics`, `audio`, and `script` crates are
-implemented and tested. Windowing/presentation (live viewport) is the next
-milestone; the editor and runtime are otherwise fully functional headlessly and
-through their command-line interfaces, which is what makes them drivable by AI
-agents.
+All crates — `math`, `ecs`, `render`, `physics`, `audio`, `script`, `testscene`,
+`editor`, `runtime`, and `platform` — are implemented and tested. The renderer
+presents to a real window (`noctis-runtime --window`, `noctis-editor --window`),
+and the whole engine also runs headlessly for CI. GUI panels and viewport
+mouse-picking are the next milestone.
