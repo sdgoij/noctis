@@ -6,6 +6,9 @@
 // projected back to screen space; if the stored depth there is nearer than the
 // sample (and within the radius), it occludes. The fraction of occluded samples
 // becomes the ambient occlusion term, applied later to indirect light only.
+//
+// The depth buffer may be smaller than this pass's target (half resolution under
+// MSAA), so every lookup maps screen coordinates into the depth texture's grid.
 
 struct SsaoUniform {
     projection: mat4x4<f32>,
@@ -41,7 +44,11 @@ fn view_position_from_depth(uv: vec2<f32>, depth: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) f32 {
-    let coord = vec2<i32>(in.pos.xy);
+    // The depth texture may be smaller than the SSAO target (it is half resolution
+    // under MSAA), so map screen coordinates into its own texel grid.
+    let depth_size = vec2<f32>(textureDimensions(depth_map));
+    let depth_scale = depth_size / ssao.resolution.xy;
+    let coord = vec2<i32>(in.pos.xy * depth_scale);
     let center_depth = textureLoad(depth_map, coord, 0);
     if (center_depth >= 1.0) {
         return 1.0;
@@ -73,7 +80,7 @@ fn fs_main(in: VsOut) -> @location(0) f32 {
         if (ouv.x < 0.0 || ouv.x > 1.0 || ouv.y < 0.0 || ouv.y > 1.0) {
             continue;
         }
-        let ocoord = vec2<i32>(ouv * ssao.resolution.xy);
+        let ocoord = vec2<i32>(ouv * depth_size);
         let odepth = textureLoad(depth_map, ocoord, 0);
         let ov = view_position_from_depth(ouv, odepth);
         // Only count occlusion within the sample radius; this attenuates the

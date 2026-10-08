@@ -84,8 +84,9 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   smooths geometry silhouettes, so shader-level aliasing (a hard texture edge, a
   glyph's coverage) is still visible. MSAA adds no pass, but a screen-space pass
   cannot sample a multisampled depth texture, so the single-sampled camera depth
-  prepass SSAO reads cannot be the multisampled depth the forward passes write.
-  IBL is precomputed on the CPU at load time
+  prepass SSAO reads cannot be the multisampled depth the forward passes write;
+  because SSAO is then that prepass's only reader, under MSAA it renders at half
+  resolution. IBL is precomputed on the CPU at load time
   from the `[render] environment` a project names (a `.hdr` equirectangular map
   decoded into the `hdr` store) — there is no GPU precompute, no `.exr` decode,
   and no live re-bake, and an unset environment falls back to a neutral (fully

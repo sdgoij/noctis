@@ -25,11 +25,13 @@
 //! HDR target**, so the resolve averages linear radiance before the tonemap —
 //! resolving the tonemapped colour instead would darken every edge.
 //!
-//! The depth prepass (2) stays single-sampled: it exists so SSAO has a depth
-//! source, and a screen-space pass cannot sample a multisampled depth texture.
-//! The forward passes therefore carry their own multisampled depth, populated by
-//! the opaque pipeline. Sample counts the device cannot do for both the HDR
-//! colour and depth formats are rejected up front (see
+//! The depth prepass (2) stays single-sampled, because a screen-space pass cannot
+//! sample a multisampled depth texture; the forward passes carry their own
+//! multisampled depth, populated by the opaque pipeline. Since SSAO is then the
+//! prepass depth's only reader, under MSAA that target is allocated at **half
+//! resolution** (see [`camera_depth_size`](crate::gpu::targets::camera_depth_size)),
+//! quartering the prepass's fragment work. Sample counts the device cannot do for
+//! both the HDR colour and depth formats are rejected up front (see
 //! [`pick_sample_count`]), since MSAA is a format capability.
 //!
 //! If the machine has no usable adapter, [`Renderer::headless`] returns
@@ -846,7 +848,8 @@ impl Renderer {
 
         // 2. Depth prepass. This always runs: even an empty scene must leave the
         // depth buffer defined (cleared to far), or a later depth-tested pass (the
-        // text pass) would compare against undefined depth.
+        // text pass) would compare against undefined depth. Under MSAA it fills the
+        // half-resolution depth SSAO reads; the forward pass fills its own.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("depth.pass"),

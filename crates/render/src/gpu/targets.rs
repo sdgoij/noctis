@@ -11,9 +11,12 @@
 //! makes the average land in the right place: the resolve mixes linear radiance,
 //! not tonemapped colour.
 //!
-//! The camera depth prepass stays single-sampled either way: it exists to give
-//! SSAO a depth source, and a multisampled depth texture cannot be sampled by the
-//! screen-space pass. The forward passes write their own multisampled depth.
+//! The camera depth target stays single-sampled either way, because a
+//! multisampled depth texture cannot be sampled by a screen-space pass and SSAO
+//! reads it. When MSAA is on the forward passes write their own multisampled
+//! depth, leaving this target as an SSAO source only — so at that point it is
+//! allocated at **half resolution** (see [`camera_depth_size`]), quartering the
+//! depth prepass's fragment work.
 
 /// A texture plus its default view.
 #[derive(Debug)]
@@ -51,8 +54,9 @@ pub struct RenderTargets {
     /// HDR colour: the resolve target when multisampled, else the render target.
     /// Bound by the tonemap pass.
     pub hdr: GpuTarget,
-    /// Single-sampled depth: the SSAO source, and the forward depth target when
-    /// MSAA is off.
+    /// Single-sampled camera depth. It is the SSAO source, and (at 1x) the forward
+    /// and text depth target. Half resolution when MSAA is on, where SSAO is its
+    /// only reader.
     pub depth: GpuTarget,
     /// LDR sRGB-encoded color target (`rgba8unorm`).
     pub ldr: GpuTarget,
@@ -75,6 +79,20 @@ pub fn align_up(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
 }
 
+/// The pixel size of the single-sampled camera depth target.
+///
+/// It is full resolution when single-sampled, because the forward and text passes
+/// test against it. Under MSAA those passes write their own multisampled depth,
+/// so this target is read only by SSAO — a low-frequency effect — and half
+/// resolution suffices, quartering the depth prepass's fragment work.
+pub fn camera_depth_size(width: u32, height: u32, sample_count: u32) -> (u32, u32) {
+    if sample_count > 1 {
+        (width.div_ceil(2), height.div_ceil(2))
+    } else {
+        (width, height)
+    }
+}
+
 impl RenderTargets {
     /// Create the targets for a `width` x `height` frame (both clamped to >= 1),
     /// with MSAA at `sample_count` samples (`1` disables it).
@@ -92,16 +110,17 @@ impl RenderTargets {
             height,
             depth_or_array_layers: 1,
         };
-        let color = |label: &str,
-                     format: wgpu::TextureFormat,
-                     sample_count: u32,
-                     usage: wgpu::TextureUsages| {
+        let target = |label: &str,
+                      extent: wgpu::Extent3d,
+                      format: wgpu::TextureFormat,
+                      sample_count: u32,
+                      usage: wgpu::TextureUsages| {
             GpuTarget::new(
                 device,
                 label,
                 &wgpu::TextureDescriptor {
                     label: Some(label),
-                    size,
+                    size: extent,
                     mip_level_count: 1,
                     sample_count,
                     dimension: wgpu::TextureDimension::D2,
@@ -115,38 +134,49 @@ impl RenderTargets {
         // The HDR attachment (multisampled when MSAA is on) and the single
         // sampled texture it resolves into.
         let hdr_msaa = (samples > 1).then(|| {
-            color(
+            target(
                 "hdr.msaa",
+                size,
                 wgpu::TextureFormat::Rgba16Float,
                 samples,
                 wgpu::TextureUsages::RENDER_ATTACHMENT,
             )
         });
-        let hdr = color(
+        let hdr = target(
             "hdr",
+            size,
             wgpu::TextureFormat::Rgba16Float,
             1,
             // A resolve target must be a render attachment too.
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         );
-        // The single-sampled depth SSAO reads, plus the multisampled depth the
-        // forward passes write.
-        let depth = color(
+        // The single-sampled camera depth SSAO reads, plus the multisampled depth
+        // the forward passes write. At 1x one target fills both roles; at 4x it is
+        // SSAO's alone, so it shrinks to half resolution.
+        let (depth_width, depth_height) = camera_depth_size(width, height, samples);
+        let depth = target(
             "depth",
+            wgpu::Extent3d {
+                width: depth_width,
+                height: depth_height,
+                depth_or_array_layers: 1,
+            },
             wgpu::TextureFormat::Depth32Float,
             1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         );
         let depth_msaa = (samples > 1).then(|| {
-            color(
+            target(
                 "depth.msaa",
+                size,
                 wgpu::TextureFormat::Depth32Float,
                 samples,
                 wgpu::TextureUsages::RENDER_ATTACHMENT,
             )
         });
-        let ldr = color(
+        let ldr = target(
             "ldr",
+            size,
             wgpu::TextureFormat::Rgba8Unorm,
             // RENDER_ATTACHMENT: the tonemap pass renders into it. COPY_SRC: the
             // headless readback copies from it. TEXTURE_BINDING: the present
@@ -156,8 +186,9 @@ impl RenderTargets {
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING,
         );
-        let ssao = color(
+        let ssao = target(
             "ssao",
+            size,
             wgpu::TextureFormat::R8Unorm,
             1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -229,5 +260,15 @@ mod tests {
         assert_eq!(align_up(257, 256), 512);
         // e.g. a 300-pixel-wide rgba8 row is 1200 bytes -> 1280.
         assert_eq!(align_up(300 * 4, 256), 1280);
+    }
+
+    #[test]
+    fn the_camera_depth_shrinks_only_under_msaa() {
+        // Single-sampled: the forward and text passes test against it, so full.
+        assert_eq!(camera_depth_size(1280, 720, 1), (1280, 720));
+        // MSAA: SSAO's alone, so half — with odd sizes rounding up, never 0.
+        assert_eq!(camera_depth_size(1280, 720, 4), (640, 360));
+        assert_eq!(camera_depth_size(1, 1, 4), (1, 1));
+        assert_eq!(camera_depth_size(3, 5, 2), (2, 3));
     }
 }
