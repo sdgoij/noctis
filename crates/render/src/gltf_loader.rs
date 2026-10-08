@@ -1,0 +1,757 @@
+//! glTF 2.0 import.
+//!
+//! [`load_gltf`] / [`load_gltf_bytes`] turn a `.gltf` or `.glb` document into
+//! plain engine values: [`Mesh`] assets (one per primitive), [`Material`] assets,
+//! decoded [`Texture`] assets, and a flat list of [`NodeDesc`] hierarchy entries.
+//!
+//! ## Texture handle convention
+//!
+//! glTF materials reference textures by index, but [`Material`] stores
+//! [`AssetHandle`]s. While a [`LoadedGltf`] is *unregistered* the handles are
+//! encoded as `AssetHandle::from_raw(texture_index + 1)` so the data is
+//! self-describing. [`LoadedGltf::register`] then inserts every texture into an
+//! [`AssetRegistry`] and rewrites those placeholders to the real handles, so it
+//! works correctly even when the registry already contains assets.
+//!
+//! [`LoadedGltf::instantiate`] spawns one entity per node, wires up the parent
+//! hierarchy with [`ecs::scene::set_parent`], and attaches a child render entity
+//! for each mesh primitive.
+
+use crate::error::RenderError;
+use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture, TextureFormat, Vertex};
+use ecs::components::{LocalTransform, MeshRenderer, Name};
+use ecs::scene::set_parent;
+use ecs::world::{Entity, World};
+use math::{Quat, Transform, vec3};
+
+/// A node in the imported glTF hierarchy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeDesc {
+    /// The node name (empty when the file omits it).
+    pub name: String,
+    /// The index of the parent node, if any.
+    pub parent: Option<usize>,
+    /// The node's local transform.
+    pub transform: Transform,
+    /// The first mesh primitive attached to this node, if any.
+    pub mesh: Option<usize>,
+    /// Every mesh primitive attached to this node (usually zero or one entry).
+    pub mesh_primitives: Vec<usize>,
+}
+
+/// The full result of importing a glTF document.
+#[derive(Clone, Debug, Default)]
+pub struct LoadedGltf {
+    /// One [`Mesh`] per glTF primitive.
+    pub meshes: Vec<Mesh>,
+    /// One [`Material`] per glTF material.
+    pub materials: Vec<Material>,
+    /// One [`Texture`] per glTF texture.
+    pub textures: Vec<Texture>,
+    /// The node hierarchy, in glTF node-index order.
+    pub nodes: Vec<NodeDesc>,
+    /// The root node indices of the default scene.
+    pub roots: Vec<usize>,
+    /// The default scene name, if the file names it.
+    pub scene_name: Option<String>,
+    /// Material index for each entry in [`LoadedGltf::meshes`].
+    pub mesh_materials: Vec<Option<usize>>,
+    /// The mesh primitives belonging to each glTF mesh, in mesh-index order.
+    pub mesh_primitives: Vec<Vec<usize>>,
+}
+
+/// Handles produced by registering a [`LoadedGltf`] into an [`AssetRegistry`].
+#[derive(Clone, Debug, Default)]
+pub struct RegisteredGltf {
+    /// Mesh handles, parallel to [`LoadedGltf::meshes`].
+    pub meshes: Vec<AssetHandle<Mesh>>,
+    /// Material handles, parallel to [`LoadedGltf::materials`].
+    pub materials: Vec<AssetHandle<Material>>,
+    /// Texture handles, parallel to [`LoadedGltf::textures`].
+    pub textures: Vec<AssetHandle<Texture>>,
+    /// The material used by primitives without one.
+    pub default_material: AssetHandle<Material>,
+}
+
+/// Load a glTF document from a filesystem path.
+pub fn load_gltf(path: impl AsRef<std::path::Path>) -> Result<LoadedGltf, RenderError> {
+    let bytes = std::fs::read(path)?;
+    load_gltf_bytes(&bytes)
+}
+
+/// Load a glTF document from an in-memory `.gltf` or `.glb` buffer.
+pub fn load_gltf_bytes(bytes: &[u8]) -> Result<LoadedGltf, RenderError> {
+    let (document, buffers, images) = gltf::import_slice(bytes)?;
+    Ok(build_loaded(&document, &buffers, &images))
+}
+
+fn build_loaded(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    images: &[gltf::image::Data],
+) -> LoadedGltf {
+    // Which textures are color (sRGB) rather than data (linear).
+    let texture_count = document.textures().count();
+    let mut srgb = vec![false; texture_count];
+    for material in document.materials() {
+        let pbr = material.pbr_metallic_roughness();
+        if let Some(info) = pbr.base_color_texture() {
+            mark(&mut srgb, info.texture().index());
+        }
+        if let Some(info) = material.emissive_texture() {
+            mark(&mut srgb, info.texture().index());
+        }
+    }
+
+    let textures = document
+        .textures()
+        .map(|tex| {
+            let idx = tex.index();
+            let image_idx = tex.source().index();
+            let name = tex.name().unwrap_or("texture").to_string();
+            match images.get(image_idx) {
+                Some(image) => {
+                    image_to_texture(&name, image, srgb.get(idx).copied().unwrap_or(false))
+                }
+                None => Texture::solid(
+                    name,
+                    [255, 255, 255, 255],
+                    if srgb.get(idx).copied().unwrap_or(false) {
+                        TextureFormat::Rgba8Srgb
+                    } else {
+                        TextureFormat::Rgba8Unorm
+                    },
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let materials = document.materials().map(build_material).collect::<Vec<_>>();
+
+    let mut meshes = Vec::new();
+    let mut mesh_materials = Vec::new();
+    let mut mesh_primitives = Vec::new();
+    for mesh in document.meshes() {
+        let mut primitives = Vec::new();
+        for primitive in mesh.primitives() {
+            let reader =
+                primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| b.0.as_slice()));
+            let positions: Vec<[f32; 3]> = reader
+                .read_positions()
+                .map(|p| p.collect())
+                .unwrap_or_default();
+            if positions.is_empty() {
+                continue;
+            }
+            let normals: Vec<[f32; 3]> = reader
+                .read_normals()
+                .map(|n| n.collect())
+                .unwrap_or_default();
+            let uvs: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_default();
+            let tangents: Vec<[f32; 4]> = reader
+                .read_tangents()
+                .map(|t| t.collect())
+                .unwrap_or_default();
+            let indices: Vec<u32> = reader
+                .read_indices()
+                .map(|i| i.into_u32().collect())
+                .unwrap_or_else(|| (0..positions.len() as u32).collect());
+
+            let vertices = positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| Vertex {
+                    position: *p,
+                    normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
+                    uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                    tangent: tangents.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                })
+                .collect::<Vec<_>>();
+
+            let mut asset = Mesh {
+                name: format!(
+                    "{}_primitive{}",
+                    mesh.name().unwrap_or("mesh"),
+                    primitive.index()
+                ),
+                vertices,
+                indices,
+                bounds: None,
+            };
+            asset.bounds = asset.compute_bounds();
+
+            primitives.push(meshes.len());
+            meshes.push(asset);
+            mesh_materials.push(primitive.material().index());
+        }
+        mesh_primitives.push(primitives);
+    }
+
+    // Derive parent links by walking every scene's node tree.
+    let mut parents: Vec<Option<usize>> = vec![None; document.nodes().count()];
+    for scene in document.scenes() {
+        for root in scene.nodes() {
+            walk_parents(&root, &mut parents);
+        }
+    }
+
+    let nodes = document
+        .nodes()
+        .map(|node| {
+            let (translation, rotation, scale) = node.transform().decomposed();
+            let mesh = node.mesh().and_then(|m| {
+                mesh_primitives
+                    .get(m.index())
+                    .and_then(|p| p.first().copied())
+            });
+            let primitives = node
+                .mesh()
+                .and_then(|m| mesh_primitives.get(m.index()).cloned())
+                .unwrap_or_default();
+            NodeDesc {
+                name: node.name().unwrap_or("node").to_string(),
+                parent: parents[node.index()],
+                transform: Transform {
+                    translation: vec3(translation[0], translation[1], translation[2]),
+                    rotation: Quat::new(rotation[0], rotation[1], rotation[2], rotation[3]),
+                    scale: vec3(scale[0], scale[1], scale[2]),
+                },
+                mesh,
+                mesh_primitives: primitives,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let (roots, scene_name) = match document.default_scene() {
+        Some(scene) => (
+            scene.nodes().map(|n| n.index()).collect(),
+            scene.name().map(|s| s.to_string()),
+        ),
+        None => (
+            (0..nodes.len())
+                .filter(|i| parents.get(*i).copied().flatten().is_none())
+                .collect(),
+            None,
+        ),
+    };
+
+    LoadedGltf {
+        meshes,
+        materials,
+        textures,
+        nodes,
+        roots,
+        scene_name,
+        mesh_materials,
+        mesh_primitives,
+    }
+}
+
+fn mark(flags: &mut [bool], index: usize) {
+    if let Some(slot) = flags.get_mut(index) {
+        *slot = true;
+    }
+}
+
+fn walk_parents(node: &gltf::Node<'_>, parents: &mut [Option<usize>]) {
+    for child in node.children() {
+        if let Some(slot) = parents.get_mut(child.index()) {
+            *slot = Some(node.index());
+        }
+        walk_parents(&child, parents);
+    }
+}
+
+fn build_material(material: gltf::Material<'_>) -> Material {
+    let pbr = material.pbr_metallic_roughness();
+    let base = pbr.base_color_factor();
+    let emissive = material.emissive_factor();
+    let tex =
+        |info: gltf::texture::Info<'_>| AssetHandle::from_raw(info.texture().index() as u32 + 1);
+
+    Material {
+        name: material.name().unwrap_or("material").to_string(),
+        base_color: base,
+        metallic: pbr.metallic_factor(),
+        roughness: pbr.roughness_factor(),
+        emissive,
+        emissive_strength: 1.0,
+        base_color_texture: pbr
+            .base_color_texture()
+            .map(tex)
+            .unwrap_or(AssetHandle::NONE),
+        normal_texture: material
+            .normal_texture()
+            .map(|n| AssetHandle::from_raw(n.texture().index() as u32 + 1))
+            .unwrap_or(AssetHandle::NONE),
+        metallic_roughness_texture: pbr
+            .metallic_roughness_texture()
+            .map(tex)
+            .unwrap_or(AssetHandle::NONE),
+        emissive_texture: material
+            .emissive_texture()
+            .map(tex)
+            .unwrap_or(AssetHandle::NONE),
+        occlusion_texture: material
+            .occlusion_texture()
+            .map(|o| AssetHandle::from_raw(o.texture().index() as u32 + 1))
+            .unwrap_or(AssetHandle::NONE),
+        alpha_mode: match material.alpha_mode() {
+            gltf::material::AlphaMode::Opaque => ecs::assets::AlphaMode::Opaque,
+            gltf::material::AlphaMode::Mask => ecs::assets::AlphaMode::Mask,
+            gltf::material::AlphaMode::Blend => ecs::assets::AlphaMode::Blend,
+        },
+        double_sided: material.double_sided(),
+    }
+}
+
+fn image_to_texture(name: &str, image: &gltf::image::Data, srgb: bool) -> Texture {
+    let format = if srgb {
+        TextureFormat::Rgba8Srgb
+    } else {
+        TextureFormat::Rgba8Unorm
+    };
+    let data = image_to_rgba8(image)
+        .unwrap_or_else(|| vec![255u8; (image.width * image.height * 4) as usize]);
+    Texture {
+        name: name.to_string(),
+        width: image.width,
+        height: image.height,
+        format,
+        data,
+    }
+}
+
+/// Convert a decoded glTF image to tightly packed RGBA8. Returns `None` for
+/// formats we do not understand.
+fn image_to_rgba8(image: &gltf::image::Data) -> Option<Vec<u8>> {
+    use gltf::image::Format;
+    let pixels = image.pixels.as_slice();
+    let count = (image.width as usize) * (image.height as usize);
+    let mut out = Vec::with_capacity(count * 4);
+
+    let u16_at = |i: usize| -> u8 {
+        let lo = *pixels.get(i * 2).unwrap_or(&0) as u16;
+        let hi = *pixels.get(i * 2 + 1).unwrap_or(&0) as u16;
+        ((lo | (hi << 8)) >> 8) as u8
+    };
+    let f32_at = |i: usize| -> u8 {
+        let mut bytes = [0u8; 4];
+        for (k, b) in bytes.iter_mut().enumerate() {
+            *b = *pixels.get(i * 4 + k).unwrap_or(&0);
+        }
+        let v = f32::from_le_bytes(bytes);
+        (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+
+    match image.format {
+        Format::R8 => {
+            for i in 0..count {
+                let r = *pixels.get(i).unwrap_or(&0);
+                out.extend_from_slice(&[r, r, r, 255]);
+            }
+        }
+        Format::R8G8 => {
+            for i in 0..count {
+                let r = *pixels.get(i * 2).unwrap_or(&0);
+                let g = *pixels.get(i * 2 + 1).unwrap_or(&0);
+                out.extend_from_slice(&[r, g, 0, 255]);
+            }
+        }
+        Format::R8G8B8 => {
+            for i in 0..count {
+                let r = *pixels.get(i * 3).unwrap_or(&0);
+                let g = *pixels.get(i * 3 + 1).unwrap_or(&0);
+                let b = *pixels.get(i * 3 + 2).unwrap_or(&0);
+                out.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        Format::R8G8B8A8 => {
+            for i in 0..count {
+                out.extend_from_slice(&[
+                    *pixels.get(i * 4).unwrap_or(&0),
+                    *pixels.get(i * 4 + 1).unwrap_or(&0),
+                    *pixels.get(i * 4 + 2).unwrap_or(&0),
+                    *pixels.get(i * 4 + 3).unwrap_or(&0),
+                ]);
+            }
+        }
+        Format::R16 => {
+            for i in 0..count {
+                let r = u16_at(i);
+                out.extend_from_slice(&[r, r, r, 255]);
+            }
+        }
+        Format::R16G16 => {
+            for i in 0..count {
+                out.extend_from_slice(&[u16_at(i * 2), u16_at(i * 2 + 1), 0, 255]);
+            }
+        }
+        Format::R16G16B16 => {
+            for i in 0..count {
+                out.extend_from_slice(&[u16_at(i * 3), u16_at(i * 3 + 1), u16_at(i * 3 + 2), 255]);
+            }
+        }
+        Format::R16G16B16A16 => {
+            for i in 0..count {
+                out.extend_from_slice(&[
+                    u16_at(i * 4),
+                    u16_at(i * 4 + 1),
+                    u16_at(i * 4 + 2),
+                    u16_at(i * 4 + 3),
+                ]);
+            }
+        }
+        Format::R32G32B32FLOAT => {
+            for i in 0..count {
+                out.extend_from_slice(&[f32_at(i * 3), f32_at(i * 3 + 1), f32_at(i * 3 + 2), 255]);
+            }
+        }
+        Format::R32G32B32A32FLOAT => {
+            for i in 0..count {
+                out.extend_from_slice(&[
+                    f32_at(i * 4),
+                    f32_at(i * 4 + 1),
+                    f32_at(i * 4 + 2),
+                    f32_at(i * 4 + 3),
+                ]);
+            }
+        }
+    }
+    Some(out)
+}
+
+fn remap_texture(
+    handle: AssetHandle<Texture>,
+    textures: &[AssetHandle<Texture>],
+) -> AssetHandle<Texture> {
+    if handle.is_none() {
+        return AssetHandle::NONE;
+    }
+    let index = handle.id().0.saturating_sub(1) as usize;
+    textures.get(index).copied().unwrap_or(AssetHandle::NONE)
+}
+
+impl LoadedGltf {
+    /// Insert every texture, material, and mesh into `registry`, returning the
+    /// real handles. Material texture references are rewritten in the process.
+    pub fn register(&self, registry: &mut AssetRegistry) -> RegisteredGltf {
+        let texture_handles: Vec<AssetHandle<Texture>> = self
+            .textures
+            .iter()
+            .map(|t| registry.textures.insert_named(t.name.clone(), t.clone()))
+            .collect();
+
+        let material_handles: Vec<AssetHandle<Material>> = self
+            .materials
+            .iter()
+            .map(|m| {
+                let mut fixed = m.clone();
+                fixed.base_color_texture = remap_texture(m.base_color_texture, &texture_handles);
+                fixed.normal_texture = remap_texture(m.normal_texture, &texture_handles);
+                fixed.metallic_roughness_texture =
+                    remap_texture(m.metallic_roughness_texture, &texture_handles);
+                fixed.emissive_texture = remap_texture(m.emissive_texture, &texture_handles);
+                fixed.occlusion_texture = remap_texture(m.occlusion_texture, &texture_handles);
+                registry.materials.insert_named(m.name.clone(), fixed)
+            })
+            .collect();
+
+        let mesh_handles: Vec<AssetHandle<Mesh>> = self
+            .meshes
+            .iter()
+            .map(|m| registry.meshes.insert_named(m.name.clone(), m.clone()))
+            .collect();
+
+        let default_material = registry
+            .materials
+            .handle("$default")
+            .unwrap_or_else(|| registry.materials.insert(Material::default()));
+
+        RegisteredGltf {
+            meshes: mesh_handles,
+            materials: material_handles,
+            textures: texture_handles,
+            default_material,
+        }
+    }
+
+    /// Spawn one entity per node and attach mesh-renderer children to nodes that
+    /// reference geometry. Returns the node entities in node-index order.
+    pub fn instantiate(&self, world: &mut World, handles: &RegisteredGltf) -> Vec<Entity> {
+        let node_entities: Vec<Entity> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                let entity = world.spawn();
+                world.insert(entity, Name::new(node.name.clone()));
+                world.insert(entity, LocalTransform { ..node.transform });
+                entity
+            })
+            .collect();
+
+        for (index, node) in self.nodes.iter().enumerate() {
+            if let Some(parent) = node.parent {
+                if let Some(&parent_entity) = node_entities.get(parent) {
+                    set_parent(world, node_entities[index], Some(parent_entity));
+                }
+            }
+        }
+
+        for (index, node) in self.nodes.iter().enumerate() {
+            for &primitive in &node.mesh_primitives {
+                let Some(&mesh) = handles.meshes.get(primitive) else {
+                    continue;
+                };
+                let material = self
+                    .mesh_materials
+                    .get(primitive)
+                    .copied()
+                    .flatten()
+                    .and_then(|m| handles.materials.get(m).copied())
+                    .unwrap_or(handles.default_material);
+                let child = world.spawn();
+                world.insert(child, Name::new(format!("{}_mesh{}", node.name, primitive)));
+                world.insert(child, LocalTransform::default());
+                world.insert(
+                    child,
+                    MeshRenderer {
+                        mesh,
+                        material,
+                        ..MeshRenderer::default()
+                    },
+                );
+                set_parent(world, child, Some(node_entities[index]));
+            }
+        }
+
+        node_entities
+    }
+
+    /// The number of triangles across every imported mesh.
+    pub fn triangle_count(&self) -> usize {
+        self.meshes.iter().map(|m| m.triangle_count()).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal binary glTF (GLB) containing one triangle with normals,
+    /// UVs, indices, and a red material.
+    fn triangle_glb() -> Vec<u8> {
+        let positions: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals: [[f32; 3]; 3] = [[0.0, 0.0, 1.0]; 3];
+        let uvs: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let indices: [u16; 3] = [0, 1, 2];
+
+        let mut bin = Vec::new();
+        for p in positions {
+            for c in p {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let normal_offset = bin.len();
+        for n in normals {
+            for c in n {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let uv_offset = bin.len();
+        for uv in uvs {
+            for c in uv {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let index_offset = bin.len();
+        for i in indices {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        let total = bin.len();
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "scene": 0,
+  "scenes": [ {{ "name": "Main", "nodes": [0] }} ],
+  "nodes": [ {{ "name": "Tri", "mesh": 0 }} ],
+  "meshes": [ {{ "name": "TriMesh", "primitives": [
+     {{ "attributes": {{ "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }}, "indices": 3, "material": 0 }}
+  ] }} ],
+  "materials": [ {{ "name": "Red", "pbrMetallicRoughness": {{
+     "baseColorFactor": [1.0, 0.0, 0.0, 1.0], "metallicFactor": 0.1, "roughnessFactor": 0.7
+  }} }} ],
+  "buffers": [ {{ "byteLength": {total} }} ],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {normal_offset}, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {uv_offset}, "byteLength": 24 }},
+    {{ "buffer": 0, "byteOffset": {index_offset}, "byteLength": 6 }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" }},
+    {{ "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ]
+}}"#
+        );
+        make_glb(&json, &bin)
+    }
+
+    fn make_glb(json: &str, bin: &[u8]) -> Vec<u8> {
+        let mut json_bytes = json.as_bytes().to_vec();
+        while json_bytes.len() % 4 != 0 {
+            json_bytes.push(b' ');
+        }
+        let mut bin_bytes = bin.to_vec();
+        while bin_bytes.len() % 4 != 0 {
+            bin_bytes.push(0);
+        }
+        let total = 12 + 8 + json_bytes.len() + 8 + bin_bytes.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes()); // "JSON"
+        out.extend_from_slice(&json_bytes);
+        out.extend_from_slice(&(bin_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x004E_4942u32.to_le_bytes()); // "BIN\0"
+        out.extend_from_slice(&bin_bytes);
+        out
+    }
+
+    #[test]
+    fn loads_triangle_glb() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        assert_eq!(loaded.meshes.len(), 1);
+        assert_eq!(loaded.materials.len(), 1);
+        assert_eq!(loaded.nodes.len(), 1);
+        assert_eq!(loaded.triangle_count(), 1);
+    }
+
+    #[test]
+    fn mesh_geometry_is_correct() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mesh = &loaded.meshes[0];
+        assert_eq!(mesh.vertices.len(), 3);
+        assert_eq!(mesh.indices, vec![0, 1, 2]);
+        assert_eq!(mesh.triangle_count(), 1);
+        let bounds = mesh.bounds.expect("bounds");
+        assert!(math::vec3_approx_eq(bounds.min, vec3(0.0, 0.0, 0.0), 1e-6));
+        assert!(math::vec3_approx_eq(bounds.max, vec3(1.0, 1.0, 0.0), 1e-6));
+        assert_eq!(mesh.vertices[1].position, [1.0, 0.0, 0.0]);
+        assert_eq!(mesh.vertices[1].uv, [1.0, 0.0]);
+    }
+
+    #[test]
+    fn material_matches_gltf() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mat = &loaded.materials[0];
+        assert_eq!(mat.name, "Red");
+        assert!((mat.base_color[0] - 1.0).abs() < 1e-6);
+        assert!(mat.base_color[1].abs() < 1e-6);
+        assert!((mat.metallic - 0.1).abs() < 1e-6);
+        assert!((mat.roughness - 0.7).abs() < 1e-6);
+        assert!(mat.base_color_texture.is_none());
+    }
+
+    #[test]
+    fn nodes_and_roots() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        assert_eq!(loaded.roots, vec![0]);
+        assert_eq!(loaded.scene_name.as_deref(), Some("Main"));
+        let node = &loaded.nodes[0];
+        assert_eq!(node.name, "Tri");
+        assert_eq!(node.parent, None);
+        assert_eq!(node.mesh, Some(0));
+        assert_eq!(node.mesh_primitives, vec![0]);
+        assert_eq!(node.transform, Transform::identity());
+    }
+
+    #[test]
+    fn register_produces_handles() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mut registry = AssetRegistry::new();
+        let handles = loaded.register(&mut registry);
+        assert_eq!(handles.meshes.len(), 1);
+        assert_eq!(handles.materials.len(), 1);
+        assert!(!handles.default_material.is_none());
+        assert!(registry.meshes.get(handles.meshes[0]).is_some());
+        assert_eq!(
+            registry.materials.get(handles.materials[0]).unwrap().name,
+            "Red"
+        );
+    }
+
+    #[test]
+    fn register_works_on_non_empty_registry() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mut registry = AssetRegistry::with_defaults();
+        // A pre-existing texture shifts every later texture id.
+        registry.textures.insert(Texture::solid(
+            "existing",
+            [1, 2, 3, 255],
+            TextureFormat::Rgba8Unorm,
+        ));
+        let handles = loaded.register(&mut registry);
+        assert_eq!(handles.meshes.len(), 1);
+        assert!(registry.meshes.get(handles.meshes[0]).is_some());
+        // Default material resolves to the registry's `$default`.
+        assert_eq!(
+            handles.default_material,
+            registry.materials.handle("$default").unwrap()
+        );
+    }
+
+    #[test]
+    fn instantiate_spawns_node_and_mesh_entities() {
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mut registry = AssetRegistry::new();
+        let handles = loaded.register(&mut registry);
+        let mut world = World::new();
+        let nodes = loaded.instantiate(&mut world, &handles);
+        assert_eq!(nodes.len(), 1);
+        assert!(world.has::<Name>(nodes[0]));
+        assert!(world.has::<LocalTransform>(nodes[0]));
+        // The renderer child exists and references the imported mesh.
+        let renderers: Vec<_> = world.query::<MeshRenderer>().collect();
+        assert_eq!(renderers.len(), 1);
+        assert_eq!(renderers[0].1.mesh, handles.meshes[0]);
+        assert_eq!(renderers[0].1.material, handles.materials[0]);
+        assert_eq!(world.count::<Name>(), 2);
+    }
+
+    #[test]
+    fn invalid_bytes_report_gltf_error() {
+        let err = load_gltf_bytes(b"not a gltf").unwrap_err();
+        assert!(matches!(err, RenderError::Gltf(_)));
+    }
+
+    #[test]
+    fn image_conversion_rgba() {
+        let image = gltf::image::Data {
+            pixels: vec![10, 20, 30, 40],
+            format: gltf::image::Format::R8G8B8A8,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(image_to_rgba8(&image).unwrap(), vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn image_conversion_rgb_expands_alpha() {
+        let image = gltf::image::Data {
+            pixels: vec![1, 2, 3],
+            format: gltf::image::Format::R8G8B8,
+            width: 1,
+            height: 1,
+        };
+        assert_eq!(image_to_rgba8(&image).unwrap(), vec![1, 2, 3, 255]);
+    }
+}

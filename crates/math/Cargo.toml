@@ -1,0 +1,11 @@
+[package]
+name = "math"
+description = "Math foundation for the Noctis engine: GLSL-style types via glm plus quaternions and transforms."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+glm.workspace = true

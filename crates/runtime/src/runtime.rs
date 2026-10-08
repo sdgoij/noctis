@@ -1,0 +1,564 @@
+//! The game loop: wires physics, audio, and scripting into
+//! [`ecs::app::App`].
+//!
+//! A [`Runtime`] owns an [`App`] plus a [`PhysicsWorld`], an [`AudioEngine`],
+//! and a [`ScriptRuntime`], and schedules them across the app's stages:
+//!
+//! | stage | work |
+//! |---|---|
+//! | `startup` | sync physics, run each script's `on_start` |
+//! | `fixed` | sync from the world, `physics.step`, write back poses |
+//! | `update` | feed input, run each script's `on_update(dt)` |
+//! | `late` | reconcile the world's `AudioSource`s with the audio engine |
+//!
+//! The subsystems are shared with the stage systems through
+//! `Arc<Mutex<_>>`, which is what lets the closures registered on the `App`
+//! reach state the `Runtime` also owns. The runtime never holds a lock across a
+//! stage boundary, so the sharing cannot deadlock.
+//!
+//! Rendering is optional and off by default ([`Runtime::enable_renderer`]); when
+//! enabled, a frame is drawn each tick and the last [`Frame`] is kept. A missing
+//! GPU adapter is logged and ignored, never fatal.
+
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use audio::AudioEngine;
+use ecs::app::App;
+use ecs::assets::AssetRegistry;
+use ecs::scene::{Scene, propagate_transforms};
+use physics::PhysicsWorld;
+use render::{Frame, RenderError, Renderer, RendererConfig};
+use script::{NoopHost, ScriptHost, ScriptRuntime};
+
+use crate::config::RuntimeConfig;
+
+/// A summary of a headless run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RunSummary {
+    /// How many frames were run.
+    pub frames: u32,
+    /// Total scaled simulation time elapsed, seconds.
+    pub elapsed_seconds: f32,
+    /// Live entity count at the end of the run.
+    pub entities: usize,
+    /// How many fixed (physics) steps were taken.
+    pub fixed_steps: u64,
+}
+
+impl RunSummary {
+    /// `true` if no frames were run.
+    pub fn is_empty(&self) -> bool {
+        self.frames == 0
+    }
+}
+
+impl std::fmt::Display for RunSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "frames={} elapsed={:.3}s entities={} fixed_steps={}",
+            self.frames, self.elapsed_seconds, self.entities, self.fixed_steps
+        )
+    }
+}
+
+/// The game/export loop.
+///
+/// Generic over the script host so callers can pick a backend; the default is
+/// [`NoopHost`], which discovers scripts but runs no code.
+pub struct Runtime<H: ScriptHost + Send + 'static = NoopHost> {
+    app: App,
+    config: RuntimeConfig,
+    physics: Arc<Mutex<PhysicsWorld>>,
+    audio: Arc<Mutex<AudioEngine>>,
+    script: Arc<Mutex<ScriptRuntime<H>>>,
+    renderer: Option<Renderer>,
+    last_frame: Option<Frame>,
+}
+
+impl Runtime<NoopHost> {
+    /// Build a runtime for `scene` using the default (no-op) script host.
+    pub fn new(scene: Scene, config: RuntimeConfig) -> Self {
+        Self::with_host(scene, config, NoopHost)
+    }
+}
+
+impl<H: ScriptHost + Send + 'static> Runtime<H> {
+    /// Build a runtime for `scene` driven by `host`, using a default asset
+    /// registry.
+    pub fn with_host(scene: Scene, config: RuntimeConfig, host: H) -> Self {
+        Self::from_parts(scene, AssetRegistry::with_defaults(), config, host)
+    }
+
+    /// Build a runtime for `scene` with an explicit asset registry and host.
+    pub fn from_parts(scene: Scene, assets: AssetRegistry, config: RuntimeConfig, host: H) -> Self {
+        let audio_engine = if config.audio {
+            match AudioEngine::new() {
+                Ok(engine) => engine,
+                Err(err) => {
+                    log::warn!("audio device unavailable ({err}); using silent audio");
+                    AudioEngine::silent()
+                }
+            }
+        } else {
+            AudioEngine::silent()
+        };
+
+        let physics = Arc::new(Mutex::new(PhysicsWorld::new(config.physics_config())));
+        let audio = Arc::new(Mutex::new(audio_engine));
+        let script = Arc::new(Mutex::new(ScriptRuntime::with_host(host)));
+
+        let mut app = App::new(scene.name.clone());
+        app.context.scene = scene;
+        app.context.assets = assets;
+        // Give every entity a `GlobalTransform` before the first frame so the
+        // startup physics sync sees it (the app only propagates after `update`).
+        propagate_transforms(&mut app.context.scene.world);
+
+        {
+            let physics = Arc::clone(&physics);
+            app.on_startup("runtime.physics_sync", move |ctx| {
+                lock(&physics).sync_from_world(&ctx.scene.world);
+            });
+        }
+        {
+            let script = Arc::clone(&script);
+            app.on_startup("runtime.script_start", move |ctx| {
+                let mut script = lock(&script);
+                *script.input_mut() = ctx.input.clone();
+                script.run_start(&mut ctx.scene.world, &ctx.assets);
+            });
+        }
+        {
+            let physics = Arc::clone(&physics);
+            app.on_fixed("runtime.physics_step", move |ctx| {
+                let dt = ctx.time.fixed_delta();
+                let mut physics = lock(&physics);
+                physics.sync_from_world(&ctx.scene.world);
+                physics.step(&mut ctx.scene.world, dt);
+            });
+        }
+        {
+            let script = Arc::clone(&script);
+            app.on_update("runtime.script_update", move |ctx| {
+                let dt = ctx.time.delta();
+                let mut script = lock(&script);
+                *script.input_mut() = ctx.input.clone();
+                script.run_update(&mut ctx.scene.world, &ctx.assets, dt);
+            });
+        }
+        {
+            let audio = Arc::clone(&audio);
+            app.on_late("runtime.audio_update", move |ctx| {
+                lock(&audio).update(&ctx.scene.world, &ctx.assets);
+            });
+        }
+
+        Self {
+            app,
+            config,
+            physics,
+            audio,
+            script,
+            renderer: None,
+            last_frame: None,
+        }
+    }
+
+    /// Advance the simulation by one frame with raw delta `dt` seconds.
+    pub fn tick(&mut self, dt: f32) {
+        self.app.tick(dt);
+        self.render();
+    }
+
+    /// Advance one frame using the configured [`RuntimeConfig::timestep`].
+    pub fn tick_once(&mut self) {
+        let dt = self.config.timestep;
+        self.tick(dt);
+    }
+
+    /// Run up to `frames` frames (or until an exit is requested), each with a
+    /// raw delta of `dt` seconds, and summarise the result.
+    pub fn run_headless(&mut self, frames: u32, dt: f32) -> RunSummary {
+        let mut count = 0;
+        while count < frames && !self.app.context.exit_requested {
+            self.tick(dt);
+            count += 1;
+        }
+        self.summary(count)
+    }
+
+    /// A summary of the current state, reporting `frames` as the frame count.
+    pub fn summary(&self, frames: u32) -> RunSummary {
+        RunSummary {
+            frames,
+            elapsed_seconds: self.app.context.time.elapsed(),
+            entities: self.app.context.scene.world.entities().len(),
+            fixed_steps: self.app.fixed_steps_taken(),
+        }
+    }
+
+    /// The active scene.
+    pub fn scene(&self) -> &Scene {
+        &self.app.context.scene
+    }
+
+    /// The underlying app.
+    pub fn app(&self) -> &App {
+        &self.app
+    }
+
+    /// The underlying app, mutably (for registering extra systems, reading
+    /// input, or requesting an exit).
+    pub fn app_mut(&mut self) -> &mut App {
+        &mut self.app
+    }
+
+    /// The configuration this runtime was built with.
+    pub fn config(&self) -> RuntimeConfig {
+        self.config
+    }
+
+    /// The physics world. The guard derefs to [`PhysicsWorld`].
+    pub fn physics(&self) -> MutexGuard<'_, PhysicsWorld> {
+        lock(&self.physics)
+    }
+
+    /// The audio engine.
+    pub fn audio(&self) -> MutexGuard<'_, AudioEngine> {
+        lock(&self.audio)
+    }
+
+    /// The script runtime.
+    pub fn script(&self) -> MutexGuard<'_, ScriptRuntime<H>> {
+        lock(&self.script)
+    }
+
+    /// `true` if the audio engine is connected to a real output device.
+    pub fn is_audio_live(&self) -> bool {
+        lock(&self.audio).is_live()
+    }
+
+    /// The most recently rendered frame, if rendering is enabled and a frame
+    /// has been drawn.
+    pub fn last_frame(&self) -> Option<&Frame> {
+        self.last_frame.as_ref()
+    }
+
+    /// The renderer, if [`enable_renderer`](Self::enable_renderer) succeeded.
+    pub fn renderer(&self) -> Option<&Renderer> {
+        self.renderer.as_ref()
+    }
+
+    /// Try to enable headless rendering.
+    ///
+    /// Returns [`RenderError::NoAdapter`] (after logging) when no GPU adapter is
+    /// available; the runtime keeps running without rendering. This never
+    /// panics.
+    pub fn enable_renderer(&mut self, config: RendererConfig) -> Result<(), RenderError> {
+        match Renderer::headless(config) {
+            Ok(renderer) => {
+                self.renderer = Some(renderer);
+                Ok(())
+            }
+            Err(RenderError::NoAdapter) => {
+                log::warn!("no graphics adapter available; rendering stays disabled");
+                Err(RenderError::NoAdapter)
+            }
+            Err(err) => {
+                log::warn!("renderer initialization failed: {err}");
+                Err(err)
+            }
+        }
+    }
+
+    /// Turn rendering off and drop any cached frame.
+    pub fn disable_renderer(&mut self) {
+        self.renderer = None;
+        self.last_frame = None;
+    }
+
+    /// Render one frame if rendering is enabled and an active camera exists.
+    fn render(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let Some(camera) = render::first_active_camera(&self.app.context.scene.world) else {
+            log::debug!("no active camera; skipping render");
+            return;
+        };
+        let world = &self.app.context.scene.world;
+        let assets = &self.app.context.assets;
+        match renderer.render_frame(world, assets, camera) {
+            Ok(frame) => self.last_frame = Some(frame),
+            Err(err) => log::warn!("frame render failed: {err}"),
+        }
+    }
+}
+
+impl<H: ScriptHost + Default + Send + 'static> Runtime<H> {
+    /// Build a runtime for `scene` with an explicit asset registry, using the
+    /// host's `Default`.
+    pub fn from_assets(scene: Scene, assets: AssetRegistry, config: RuntimeConfig) -> Self {
+        Self::from_parts(scene, assets, config, H::default())
+    }
+}
+
+impl<H: ScriptHost + Send + 'static> std::fmt::Debug for Runtime<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runtime")
+            .field("config", &self.config)
+            .field("entities", &self.app.context.scene.world.entities().len())
+            .field("renderer", &self.renderer.is_some())
+            .field("has_frame", &self.last_frame.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Lock `mutex`, recovering the data even if the lock was poisoned. The runtime
+/// treats a poisoned subsystem lock as recoverable rather than panicking.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ecs::components::{GlobalTransform, Name};
+    use math::vec3_approx_eq;
+    use script::{RecordingHost, ScriptApi};
+
+    /// A tiny inline scene: a fixed floor, a dynamic ball above it, and an
+    /// entity carrying an (inert) script.
+    fn scene_json() -> String {
+        r#"{
+            "name": "RuntimeTest",
+            "entities": [
+                {
+                    "id": 0,
+                    "name": "Floor",
+                    "transform": { "translation": [0, -0.5, 0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "rigid_body", "body_type": "fixed", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 1.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
+                        { "type": "collider", "shape": { "kind": "cuboid", "half_extents": [10, 0.5, 10] }, "offset": [0,0,0], "is_sensor": false, "friction": 0.5, "restitution": 0.0 }
+                    ]
+                },
+                {
+                    "id": 1,
+                    "name": "Ball",
+                    "transform": { "translation": [0, 5, 0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "rigid_body", "body_type": "dynamic", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 1.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
+                        { "type": "collider", "shape": { "kind": "ball", "radius": 0.5 }, "offset": [0,0,0], "is_sensor": false, "friction": 0.5, "restitution": 0.0 }
+                    ]
+                },
+                {
+                    "id": 2,
+                    "name": "Runner",
+                    "transform": { "translation": [0, 0, 0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "script", "source": "function on_update(dt) {}", "path": null, "enabled": true }
+                    ]
+                }
+            ]
+        }"#
+        .to_string()
+    }
+
+    fn load_scene() -> Scene {
+        let assets = AssetRegistry::with_defaults();
+        Scene::from_json(&scene_json(), &assets).expect("test scene parses")
+    }
+
+    fn entity_named(runtime: &Runtime<RecordingHost>, name: &str) -> Option<ecs::world::Entity> {
+        let world = &runtime.scene().world;
+        world
+            .entities_with::<Name>()
+            .into_iter()
+            .find(|e| world.get::<Name>(*e).is_some_and(|n| n.as_str() == name))
+    }
+
+    fn y_of(runtime: &Runtime<RecordingHost>, name: &str) -> f32 {
+        let entity = entity_named(runtime, name).expect("named entity exists");
+        runtime
+            .scene()
+            .world
+            .get::<GlobalTransform>(entity)
+            .expect("entity has a global transform")
+            .position()
+            .y
+    }
+
+    #[test]
+    fn dynamic_body_falls_and_comes_to_rest() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |_api: &mut ScriptApi<'_, '_>| {});
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+
+        let entities_before = runtime.scene().world.entities().len();
+        assert_eq!(entities_before, 3);
+        let start_y = y_of(&runtime, "Ball");
+        assert!(y_of(&runtime, "Ball") > 4.0);
+
+        let summary = runtime.run_headless(120, 1.0 / 60.0);
+
+        assert_eq!(summary.frames, 120);
+        assert_eq!(summary.fixed_steps, 120);
+        assert!((summary.elapsed_seconds - 2.0).abs() < 0.05);
+        assert_eq!(summary.entities, entities_before);
+        assert_eq!(runtime.scene().world.entities().len(), entities_before);
+
+        let end_y = y_of(&runtime, "Ball");
+        assert!(end_y < start_y - 1.0, "the ball fell: {start_y} -> {end_y}");
+        assert!(
+            (end_y - 0.5).abs() < 0.2,
+            "the ball rests on the floor (y = 0.5), got {end_y}"
+        );
+
+        // The script's `on_update` ran once per frame.
+        assert_eq!(runtime.script().host().count_calls("on_update"), 120);
+        assert_eq!(runtime.script().instance_count(), 1);
+    }
+
+    #[test]
+    fn scripts_can_spawn_entities_with_silent_audio() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.spawn(Some("Spawned".into()));
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+
+        // No device was requested, so the engine is silent.
+        assert!(!runtime.is_audio_live());
+
+        let before = runtime.scene().world.entities().len();
+        let summary = runtime.run_headless(10, 1.0 / 60.0);
+        let after = runtime.scene().world.entities().len();
+
+        assert_eq!(summary.frames, 10);
+        assert_eq!(
+            after,
+            before + 10,
+            "one spawn per frame: {before} -> {after}"
+        );
+
+        let world = &runtime.scene().world;
+        assert!(world.entities_with::<Name>().into_iter().any(|e| {
+            world
+                .get::<Name>(e)
+                .is_some_and(|n| n.as_str() == "Spawned")
+        }));
+    }
+
+    #[test]
+    fn tick_once_uses_the_configured_timestep() {
+        let mut runtime = Runtime::new(
+            load_scene(),
+            RuntimeConfig {
+                audio: false,
+                ..RuntimeConfig::default()
+            },
+        );
+        runtime.tick_once();
+        let summary = runtime.summary(1);
+        assert_eq!(summary.frames, 1);
+        assert!(summary.elapsed_seconds > 0.0);
+        assert_eq!(summary.fixed_steps, 1);
+    }
+
+    #[test]
+    fn renderer_enable_degrades_without_an_adapter() {
+        // The demo scene has an active camera and renderable geometry, so a
+        // successful renderer should produce a frame.
+        let mut assets = AssetRegistry::with_defaults();
+        let scene = crate::demo::demo_scene(&mut assets);
+        let mut runtime = Runtime::from_parts(
+            scene,
+            assets,
+            RuntimeConfig {
+                audio: false,
+                ..RuntimeConfig::default()
+            },
+            NoopHost,
+        );
+        match runtime.enable_renderer(RendererConfig::default()) {
+            Ok(()) => {
+                runtime.run_headless(2, 1.0 / 60.0);
+                assert!(runtime.last_frame().is_some(), "a frame was rendered");
+            }
+            Err(RenderError::NoAdapter) => {
+                // Expected on headless machines: rendering is simply skipped.
+                assert!(runtime.last_frame().is_none());
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        }
+    }
+
+    #[test]
+    fn summary_display_is_one_line() {
+        let summary = RunSummary {
+            frames: 60,
+            elapsed_seconds: 1.0,
+            entities: 4,
+            fixed_steps: 60,
+        };
+        let line = summary.to_string();
+        assert!(!line.contains('\n'));
+        assert!(line.contains("frames=60"));
+        assert!(line.contains("entities=4"));
+        assert!(!summary.is_empty());
+        assert!(
+            RunSummary {
+                frames: 0,
+                ..summary
+            }
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn gravity_override_is_applied() {
+        let config = RuntimeConfig {
+            audio: false,
+            gravity: math::vec3(0.0, -1.62, 0.0),
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, RecordingHost::new());
+        assert!(vec3_approx_eq(
+            runtime.physics().gravity(),
+            math::vec3(0.0, -1.62, 0.0),
+            1e-6
+        ));
+        assert_eq!(runtime.run_headless(1, 1.0 / 60.0).frames, 1);
+    }
+
+    #[test]
+    fn physics_body_count_tracks_the_scene() {
+        let mut runtime = Runtime::with_host(
+            load_scene(),
+            RuntimeConfig {
+                audio: false,
+                ..RuntimeConfig::default()
+            },
+            RecordingHost::new(),
+        );
+        runtime.run_headless(1, 1.0 / 60.0);
+        assert_eq!(runtime.physics().body_count(), 2);
+        assert_eq!(runtime.physics().collider_count(), 2);
+        assert!(vec3_approx_eq(
+            runtime.physics().gravity(),
+            math::vec3(0.0, -9.81, 0.0),
+            1e-6
+        ));
+    }
+}

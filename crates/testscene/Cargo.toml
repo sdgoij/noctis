@@ -1,0 +1,19 @@
+[package]
+name = "testscene"
+description = "The engine's all-features test scene: every component and the whole scripting API."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+math.workspace = true
+ecs.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+render.workspace = true
+physics.workspace = true
+audio.workspace = true
+script.workspace = true

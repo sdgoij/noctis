@@ -1,0 +1,13 @@
+[package]
+name = "physics"
+description = "Rapier-based 3D physics integration for the Noctis engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+math.workspace = true
+ecs.workspace = true
+rapier3d.workspace = true

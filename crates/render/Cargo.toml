@@ -1,0 +1,19 @@
+[package]
+name = "render"
+description = "wgpu-based PBR renderer for the Noctis engine: glTF import, IBL, shadow maps, SSAO, HDR tonemapping."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+math.workspace = true
+ecs.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+gltf.workspace = true
+image.workspace = true
+pollster.workspace = true
+log.workspace = true
+half = { version = "2", features = ["bytemuck"] }

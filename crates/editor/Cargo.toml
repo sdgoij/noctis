@@ -1,0 +1,20 @@
+[package]
+name = "editor"
+description = "Scene editor and AI-controllable authoring API for the Noctis engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "noctis-editor"
+path = "src/main.rs"
+
+[dependencies]
+math.workspace = true
+ecs.workspace = true
+render.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

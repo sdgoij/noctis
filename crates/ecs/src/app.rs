@@ -1,0 +1,320 @@
+//! The application loop and system scheduling.
+//!
+//! [`App`] owns an [`EngineContext`] (scene, assets, time, input) and a set of
+//! systems grouped into stages. Each frame runs, in order:
+//!
+//! 1. `startup` (once, on the first frame),
+//! 2. `fixed` (zero or more times, for physics/stable logic),
+//! 3. `update` (once),
+//! 4. `late` (once, after transforms propagate),
+//! 5. transform propagation and event buffer rotation.
+//!
+//! Systems are plain closures, which keeps the engine testable headlessly.
+
+use crate::assets::AssetRegistry;
+use crate::resources::{ActionMap, Events, InputState, Time};
+use crate::scene::{Scene, propagate_transforms};
+use crate::world::Entity;
+
+pub use crate::resources::{Key, MouseButton, MouseState};
+
+/// Events produced by the engine itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EngineEvent {
+    /// An entity was spawned.
+    Spawned(Entity),
+    /// An entity was despawned.
+    Destroyed(Entity),
+    /// A scene (or prefab) finished loading.
+    Loaded(String),
+    /// Free-form event for scripts and gameplay code.
+    Custom {
+        /// The event name.
+        name: String,
+        /// A JSON payload.
+        payload: String,
+    },
+}
+
+/// Everything a system can touch.
+pub struct EngineContext {
+    /// The active scene.
+    pub scene: Scene,
+    /// The asset registry.
+    pub assets: AssetRegistry,
+    /// Frame timing.
+    pub time: Time,
+    /// Input for this frame.
+    pub input: InputState,
+    /// Named input actions.
+    pub actions: ActionMap,
+    /// Engine and custom events.
+    pub events: Events<EngineEvent>,
+    /// Set to request that the loop stop after this frame.
+    pub exit_requested: bool,
+}
+
+impl EngineContext {
+    /// A context with an empty scene named `name`.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            scene: Scene::new(name),
+            assets: AssetRegistry::with_defaults(),
+            time: Time::new(),
+            input: InputState::new(),
+            actions: ActionMap::new(),
+            events: Events::new(),
+            exit_requested: false,
+        }
+    }
+
+    /// Request that the loop stop.
+    pub fn request_exit(&mut self) {
+        self.exit_requested = true;
+    }
+}
+
+impl Default for EngineContext {
+    fn default() -> Self {
+        Self::new("Main")
+    }
+}
+
+/// A system is a closure over the engine context.
+pub type System = Box<dyn FnMut(&mut EngineContext) + Send + Sync>;
+
+/// A named group of systems.
+#[derive(Default)]
+pub struct Stage {
+    systems: Vec<(String, System)>,
+}
+
+impl Stage {
+    /// Register a system.
+    pub fn add(
+        &mut self,
+        name: impl Into<String>,
+        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+    ) {
+        self.systems.push((name.into(), Box::new(system)));
+    }
+
+    /// The number of registered systems.
+    pub fn len(&self) -> usize {
+        self.systems.len()
+    }
+
+    /// `true` if no systems are registered.
+    pub fn is_empty(&self) -> bool {
+        self.systems.is_empty()
+    }
+
+    /// The system names, in registration order.
+    pub fn names(&self) -> Vec<&str> {
+        self.systems.iter().map(|(n, _)| n.as_str()).collect()
+    }
+}
+
+/// The application: a context plus staged systems.
+pub struct App {
+    /// The shared engine context.
+    pub context: EngineContext,
+    /// Systems that run once, before the first frame.
+    pub startup: Stage,
+    /// Systems that run at the fixed timestep.
+    pub fixed: Stage,
+    /// Systems that run every frame.
+    pub update: Stage,
+    /// Systems that run every frame after transform propagation.
+    pub late: Stage,
+    started: bool,
+    fixed_steps_taken: u64,
+}
+
+impl App {
+    /// An app with an empty scene.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            context: EngineContext::new(name),
+            startup: Stage::default(),
+            fixed: Stage::default(),
+            update: Stage::default(),
+            late: Stage::default(),
+            started: false,
+            fixed_steps_taken: 0,
+        }
+    }
+
+    /// Register a startup system.
+    pub fn on_startup(
+        &mut self,
+        name: impl Into<String>,
+        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.startup.add(name, system);
+        self
+    }
+
+    /// Register a fixed-update system.
+    pub fn on_fixed(
+        &mut self,
+        name: impl Into<String>,
+        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.fixed.add(name, system);
+        self
+    }
+
+    /// Register a per-frame update system.
+    pub fn on_update(
+        &mut self,
+        name: impl Into<String>,
+        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.update.add(name, system);
+        self
+    }
+
+    /// Register a late-update system.
+    pub fn on_late(
+        &mut self,
+        name: impl Into<String>,
+        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+    ) -> &mut Self {
+        self.late.add(name, system);
+        self
+    }
+
+    /// `true` if the startup stage has run.
+    pub fn has_started(&self) -> bool {
+        self.started
+    }
+
+    /// The total number of fixed steps taken.
+    pub fn fixed_steps_taken(&self) -> u64 {
+        self.fixed_steps_taken
+    }
+
+    /// Advance the simulation by one frame with the given raw delta time.
+    pub fn tick(&mut self, raw_delta: f32) {
+        self.context.input.begin_frame();
+        self.context.time.advance(raw_delta);
+
+        let App {
+            context,
+            startup,
+            fixed,
+            update,
+            late,
+            started,
+            fixed_steps_taken,
+        } = self;
+
+        if !*started {
+            run_stage(startup, context);
+            *started = true;
+        }
+
+        while context.time.step_fixed().is_some() {
+            run_stage(fixed, context);
+            *fixed_steps_taken += 1;
+        }
+
+        run_stage(update, context);
+        propagate_transforms(&mut context.scene.world);
+        run_stage(late, context);
+
+        context.events.update();
+    }
+
+    /// Run the loop up to `max_frames` frames (or until an exit is requested),
+    /// using a fixed `dt` per frame. Returns the number of frames run. This is
+    /// the headless driver used by tests and by the `--headless` engine mode.
+    pub fn run_headless(&mut self, max_frames: u32, dt: f32) -> u32 {
+        let mut frames = 0;
+        while frames < max_frames && !self.context.exit_requested {
+            self.tick(dt);
+            frames += 1;
+        }
+        frames
+    }
+}
+
+fn run_stage(stage: &mut Stage, context: &mut EngineContext) {
+    for (_, system) in stage.systems.iter_mut() {
+        system(context);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{GlobalTransform, LocalTransform, Name};
+    use math::vec3;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn startup_runs_once() {
+        let mut app = App::new("t");
+        let count = Arc::new(AtomicU32::new(0));
+        let c = Arc::clone(&count);
+        app.on_startup("init", move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        app.tick(0.016);
+        app.tick(0.016);
+        app.tick(0.016);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(app.has_started());
+    }
+
+    #[test]
+    fn update_runs_every_frame_and_fixed_accumulates() {
+        let mut app = App::new("t");
+        let updates = Arc::new(AtomicU32::new(0));
+        let u = Arc::clone(&updates);
+        app.on_update("u", move |_| {
+            u.fetch_add(1, Ordering::SeqCst);
+        });
+        // 3 frames at exactly one fixed step each.
+        let dt = app.context.time.fixed_delta();
+        app.tick(dt);
+        app.tick(dt);
+        app.tick(dt);
+        assert_eq!(updates.load(Ordering::SeqCst), 3);
+        assert_eq!(app.fixed_steps_taken(), 3);
+    }
+
+    #[test]
+    fn systems_can_mutate_the_scene() {
+        let mut app = App::new("t");
+        app.on_startup("spawn", |ctx| {
+            let e = ctx.scene.world.spawn();
+            ctx.scene.world.insert(e, Name::new("thing"));
+            ctx.scene
+                .world
+                .insert(e, LocalTransform::from_translation(vec3(0.0, 0.0, 1.0)));
+        });
+        app.tick(0.016);
+        assert_eq!(app.context.scene.world.count::<Name>(), 1);
+        // Transforms propagate during the frame.
+        let e = app.context.scene.world.entities_with::<Name>()[0];
+        assert!(app.context.scene.world.has::<GlobalTransform>(e));
+    }
+
+    #[test]
+    fn exit_request_stops_headless_run() {
+        let mut app = App::new("t");
+        let frames = Arc::new(AtomicU32::new(0));
+        let f = Arc::clone(&frames);
+        app.on_update("stop", move |ctx| {
+            let n = f.fetch_add(1, Ordering::SeqCst) + 1;
+            if n >= 5 {
+                ctx.request_exit();
+            }
+        });
+        let ran = app.run_headless(100, 0.016);
+        assert_eq!(ran, 5);
+    }
+}
