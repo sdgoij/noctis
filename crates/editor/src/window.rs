@@ -36,6 +36,10 @@ const GIZMO_SCREEN_FRACTION: f32 = 0.15;
 const GIZMO_HIT_FRACTION: f32 = 0.09;
 
 /// An in-progress gizmo drag.
+///
+/// The gizmo is *frozen* for the duration of a drag: its origin, frame, length
+/// and handle directions are captured at grab time and reused every frame, so
+/// the handles do not chase the entity as it moves.
 #[derive(Clone, Copy, Debug)]
 struct GizmoDrag {
     /// The entity being transformed.
@@ -44,21 +48,30 @@ struct GizmoDrag {
     mode: GizmoMode,
     /// The handle being dragged.
     axis: GizmoAxis,
+    /// Whether the gizmo used the entity's own frame at grab time.
+    local: bool,
+    /// The gizmo frame's world rotation at grab time (identity when world-aligned).
+    frame: Mat4,
+    /// The gizmo's world origin at grab time.
+    origin: Vec3,
     /// The (unit) world direction of the handle: the axis for translate and
     /// scale, the ring normal for rotate.
     direction: Vec3,
-    /// The entity's world position when the drag began.
-    start_world: Vec3,
-    /// The entity's local rotation when the drag began.
-    start_rotation: Quat,
-    /// The entity's local scale when the drag began.
-    start_scale: Vec3,
+    /// The ring basis at grab time (rotate only), frozen in world space.
+    ring_u: Vec3,
+    ring_v: Vec3,
+    /// The rotation axis in the space `start_rotation` lives (rotate only).
+    rotate_axis: Vec3,
     /// The gizmo shaft length at grab time (the scale drag reference).
     length: f32,
     /// The axis parameter at grab time (translate and scale).
     grab_linear: f32,
     /// The ring angle at grab time (rotate).
     grab_angle: f32,
+    /// The entity's local rotation at grab time.
+    start_rotation: Quat,
+    /// The entity's local scale at grab time.
+    start_scale: Vec3,
     /// The parent's world matrix at grab time, for world-to-local conversion.
     parent: Option<Mat4>,
 }
@@ -72,6 +85,7 @@ pub struct EditorDriver {
     show_inspector: bool,
     fly_speed: f32,
     gizmo_mode: GizmoMode,
+    gizmo_orientation: gizmo::GizmoOrientation,
     hovered_axis: Option<GizmoAxis>,
     drag: Option<GizmoDrag>,
 }
@@ -84,6 +98,7 @@ impl std::fmt::Debug for EditorDriver {
             .field("show_inspector", &self.show_inspector)
             .field("fly_speed", &self.fly_speed)
             .field("gizmo_mode", &self.gizmo_mode)
+            .field("gizmo_orientation", &self.gizmo_orientation)
             .field("hovered_axis", &self.hovered_axis)
             .field("drag", &self.drag)
             .finish_non_exhaustive()
@@ -101,6 +116,7 @@ impl EditorDriver {
             show_inspector: true,
             fly_speed: 6.0,
             gizmo_mode: GizmoMode::Translate,
+            gizmo_orientation: gizmo::GizmoOrientation::World,
             hovered_axis: None,
             drag: None,
         }
@@ -134,6 +150,28 @@ impl EditorDriver {
             self.gizmo_mode = mode;
             self.hovered_axis = None;
         }
+    }
+
+    /// Whether the gizmo handles follow the world axes or the entity's frame.
+    pub fn gizmo_orientation(&self) -> gizmo::GizmoOrientation {
+        self.gizmo_orientation
+    }
+
+    /// Set whether the gizmo handles follow the world axes or the entity frame.
+    pub fn set_gizmo_orientation(&mut self, orientation: gizmo::GizmoOrientation) {
+        if self.gizmo_orientation != orientation {
+            self.gizmo_orientation = orientation;
+            self.hovered_axis = None;
+        }
+    }
+
+    /// Re-point the driver's selection at the editor's, and drop any transient
+    /// interaction state. Undo/redo rebuild the world with fresh entity ids, so
+    /// the previously selected id is stale afterwards.
+    fn sync_selection(&mut self) {
+        self.selected = self.editor.selection().first().copied();
+        self.drag = None;
+        self.hovered_axis = None;
     }
 
     fn axis(&self, positive: Key, negative: Key) -> f32 {
@@ -434,23 +472,30 @@ impl EditorDriver {
             .map(|g| g.matrix)
     }
 
-    /// The unit world directions of the three gizmo handles for `entity`.
+    /// Whether the gizmo uses the entity's own frame for `mode`.
     ///
-    /// Translate and rotate handles are world-oriented; scale handles follow the
-    /// entity's own frame.
-    fn gizmo_axes(&self, entity: Entity) -> [Vec3; 3] {
-        if self.gizmo_mode != GizmoMode::Scale {
-            return gizmo::world_axes();
-        }
+    /// Scale is *always* local: scaling a rotated object along an arbitrary world
+    /// axis is not representable without shear, so the scale handles follow the
+    /// entity regardless of the orientation setting.
+    fn uses_local_frame(&self, mode: GizmoMode) -> bool {
+        mode == GizmoMode::Scale || self.gizmo_orientation == gizmo::GizmoOrientation::Local
+    }
+
+    /// The entity's world rotation matrix (identity if it has no world transform).
+    fn frame_of(&self, entity: Entity) -> Mat4 {
         match self.world_matrix(entity) {
-            Some(matrix) => {
-                let rotation = gizmo::rotation_of(&matrix);
-                [0, 1, 2].map(|i| {
-                    let c = rotation[i];
-                    vec3(c.x, c.y, c.z)
-                })
-            }
-            None => gizmo::world_axes(),
+            Some(matrix) => gizmo::rotation_of(&matrix),
+            None => math::identity(),
+        }
+    }
+
+    /// The unit world direction of handle `axis` for `entity` under `mode`.
+    fn handle_direction(&self, entity: Entity, axis: GizmoAxis, mode: GizmoMode) -> Vec3 {
+        let base = gizmo::axis_vector(axis);
+        if self.uses_local_frame(mode) {
+            gizmo::rotate_axis(&self.frame_of(entity), base)
+        } else {
+            base
         }
     }
 
@@ -459,44 +504,74 @@ impl EditorDriver {
         let origin = self.world_position(entity)?;
         let length = self.gizmo_length(origin);
         let threshold = length * GIZMO_HIT_FRACTION;
+        let dirs = gizmo::AXES.map(|axis| self.handle_direction(entity, axis, self.gizmo_mode));
         match self.gizmo_mode {
-            GizmoMode::Rotate => {
-                gizmo::pick_ring(ray, origin, gizmo::world_axes(), length, threshold)
-            }
-            _ => gizmo::pick_axis(ray, origin, self.gizmo_axes(entity), length, threshold),
+            GizmoMode::Rotate => gizmo::pick_ring(ray, origin, dirs, length, threshold),
+            _ => gizmo::pick_axis(ray, origin, dirs, length, threshold),
         }
     }
 
-    /// Capture the state a drag needs, or `None` if the grab ray is degenerate.
+    /// Capture the state a drag needs, freezing the gizmo, or `None` if the grab
+    /// ray is degenerate.
     fn begin_drag(
         &self,
         entity: Entity,
         axis: GizmoAxis,
         ray: &crate::picking::Ray,
     ) -> Option<GizmoDrag> {
-        let start_world = self.world_position(entity)?;
-        let direction = match self.gizmo_mode {
-            GizmoMode::Rotate => gizmo::axis_vector(axis),
-            _ => self.gizmo_axes(entity)[gizmo::axis_index(axis)],
+        let mode = self.gizmo_mode;
+        let local = self.uses_local_frame(mode);
+        let frame = if local {
+            self.frame_of(entity)
+        } else {
+            math::identity()
         };
-        let (grab_linear, grab_angle) = match self.gizmo_mode {
-            GizmoMode::Rotate => {
-                let (u, v) = gizmo::basis_for_axis(axis);
-                (0.0, gizmo::ring_angle(ray, start_world, direction, u, v)?)
-            }
-            _ => (gizmo::axis_parameter(ray, start_world, direction)?, 0.0),
+        let origin = self.world_position(entity)?;
+        let direction = self.handle_direction(entity, axis, mode);
+        let (ring_u, ring_v, rotate_axis) = if mode == GizmoMode::Rotate {
+            let (u, v) = gizmo::basis_for_axis(axis);
+            let (u, v) = if local {
+                (gizmo::rotate_axis(&frame, u), gizmo::rotate_axis(&frame, v))
+            } else {
+                (u, v)
+            };
+            // The rotation axis, expressed in the space `start_rotation` lives.
+            let rotate_axis = if local {
+                gizmo::axis_vector(axis)
+            } else {
+                match self.parent_world(entity) {
+                    Some(parent) => gizmo::axis_into_frame(&gizmo::rotation_of(&parent), direction),
+                    None => direction,
+                }
+            };
+            (u, v, rotate_axis)
+        } else {
+            (math::zero3(), math::zero3(), math::zero3())
+        };
+        let (grab_linear, grab_angle) = if mode == GizmoMode::Rotate {
+            (
+                0.0,
+                gizmo::ring_angle(ray, origin, direction, ring_u, ring_v)?,
+            )
+        } else {
+            (gizmo::axis_parameter(ray, origin, direction)?, 0.0)
         };
         Some(GizmoDrag {
             entity,
-            mode: self.gizmo_mode,
+            mode,
             axis,
+            local,
+            frame,
+            origin,
             direction,
-            start_world,
-            start_rotation: self.editor.rotation(entity)?,
-            start_scale: self.editor.scale(entity)?,
-            length: self.gizmo_length(start_world),
+            ring_u,
+            ring_v,
+            rotate_axis,
+            length: self.gizmo_length(origin),
             grab_linear,
             grab_angle,
+            start_rotation: self.editor.rotation(entity)?,
+            start_scale: self.editor.scale(entity)?,
             parent: self.parent_world(entity),
         })
     }
@@ -505,42 +580,28 @@ impl EditorDriver {
     fn update_drag(&mut self, drag: GizmoDrag, ray: &crate::picking::Ray) {
         match drag.mode {
             GizmoMode::Translate => {
-                let Some(current) = gizmo::axis_parameter(ray, drag.start_world, drag.direction)
-                else {
+                let Some(current) = gizmo::axis_parameter(ray, drag.origin, drag.direction) else {
                     return;
                 };
-                let world = gizmo::dragged_position(
-                    drag.start_world,
-                    drag.direction,
-                    drag.grab_linear,
-                    current,
-                );
+                let world =
+                    gizmo::dragged_position(drag.origin, drag.direction, drag.grab_linear, current);
                 let local = gizmo::local_from_world(drag.parent.as_ref(), world);
                 let _ = self.editor.set_translation(drag.entity, local);
             }
             GizmoMode::Rotate => {
-                let (u, v) = gizmo::basis_for_axis(drag.axis);
-                let Some(now) = gizmo::ring_angle(ray, drag.start_world, drag.direction, u, v)
+                let Some(now) =
+                    gizmo::ring_angle(ray, drag.origin, drag.direction, drag.ring_u, drag.ring_v)
                 else {
                     return;
                 };
                 let angle = gizmo::wrap_angle(now - drag.grab_angle);
-                // Rotate about the world axis, expressed in the parent's frame,
-                // so the result is correct for a parented entity.
-                let local_axis = match drag.parent.as_ref() {
-                    Some(parent) => {
-                        gizmo::axis_into_frame(&gizmo::rotation_of(parent), drag.direction)
-                    }
-                    None => drag.direction,
-                };
-                let delta = Quat::from_axis_angle(local_axis, angle);
+                let delta = Quat::from_axis_angle(drag.rotate_axis, angle);
                 let _ = self
                     .editor
                     .set_rotation_quat(drag.entity, delta * drag.start_rotation);
             }
             GizmoMode::Scale => {
-                let Some(current) = gizmo::axis_parameter(ray, drag.start_world, drag.direction)
-                else {
+                let Some(current) = gizmo::axis_parameter(ray, drag.origin, drag.direction) else {
                     return;
                 };
                 let factor = (1.0 + (current - drag.grab_linear) / drag.length).max(0.01);
@@ -661,19 +722,24 @@ impl AppDriver for EditorDriver {
     }
 
     fn gizmo(&self) -> Option<(GizmoGeometry, Mat4)> {
+        // While dragging, the gizmo is frozen at its grab-time pose so the handles
+        // do not chase the entity as it moves.
+        if let Some(drag) = self.drag {
+            let geometry = render::build_gizmo(drag.mode, drag.length, Some(drag.axis));
+            let mut transform = math::translation(drag.origin);
+            if drag.local {
+                transform = transform * drag.frame;
+            }
+            return Some((geometry, transform));
+        }
         let entity = self.selected?;
         let origin = self.world_position(entity)?;
         let length = self.gizmo_length(origin);
         let geometry = render::build_gizmo(self.gizmo_mode, length, self.hovered_axis);
-        // Scale handles follow the entity's frame; the others are world-aligned.
-        let transform = if self.gizmo_mode == GizmoMode::Scale {
-            match self.world_matrix(entity) {
-                Some(matrix) => math::translation(origin) * gizmo::rotation_of(&matrix),
-                None => math::translation(origin),
-            }
-        } else {
-            math::translation(origin)
-        };
+        let mut transform = math::translation(origin);
+        if self.uses_local_frame(self.gizmo_mode) {
+            transform = transform * self.frame_of(entity);
+        }
         Some((geometry, transform))
     }
 
@@ -690,23 +756,67 @@ impl AppDriver for EditorDriver {
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "Rotate (2)");
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Scale, "Scale (3)");
                 ui.separator();
+                ui.label("Frame:");
+                ui.selectable_value(
+                    &mut self.gizmo_orientation,
+                    gizmo::GizmoOrientation::World,
+                    "World",
+                );
+                ui.selectable_value(
+                    &mut self.gizmo_orientation,
+                    gizmo::GizmoOrientation::Local,
+                    "Local",
+                );
+                ui.separator();
+                if ui
+                    .add_enabled(self.editor.can_undo(), egui::Button::new("Undo"))
+                    .clicked()
+                    && self.editor.undo()
+                {
+                    self.sync_selection();
+                }
+                if ui
+                    .add_enabled(self.editor.can_redo(), egui::Button::new("Redo"))
+                    .clicked()
+                    && self.editor.redo()
+                {
+                    self.sync_selection();
+                }
+                ui.separator();
                 ui.label(format!("{} entities", self.editor.list_entities().len()));
                 ui.label("|  WASD: fly camera");
             });
         });
 
-        // The digit keys switch tools. They are handled through egui's input (not
-        // the engine's key state) so they are properly edge-triggered, and are
-        // ignored while a text field has focus. W/E/R cannot be used because
-        // WASD flies the camera.
+        // Tool and edit shortcuts. These go through egui's input (not the engine's
+        // key state) so they are properly edge-triggered, and are ignored while a
+        // text field has focus. The tools use 1/2/3 because W/E/R would collide
+        // with the WASD fly camera.
         if !ui.ctx().egui_wants_keyboard_input() {
-            let pressed = |key: egui::Key| ui.ctx().input(|input| input.key_pressed(key));
-            if pressed(egui::Key::Num1) {
-                self.set_gizmo_mode(GizmoMode::Translate);
-            } else if pressed(egui::Key::Num2) {
-                self.set_gizmo_mode(GizmoMode::Rotate);
-            } else if pressed(egui::Key::Num3) {
-                self.set_gizmo_mode(GizmoMode::Scale);
+            let (tool, undo, redo) = ui.ctx().input(|input| {
+                let key = |k: egui::Key| input.key_pressed(k);
+                let tool = if key(egui::Key::Num1) {
+                    Some(GizmoMode::Translate)
+                } else if key(egui::Key::Num2) {
+                    Some(GizmoMode::Rotate)
+                } else if key(egui::Key::Num3) {
+                    Some(GizmoMode::Scale)
+                } else {
+                    None
+                };
+                let command = input.modifiers.command;
+                let shift = input.modifiers.shift;
+                let z = key(egui::Key::Z);
+                (tool, command && z && !shift, command && z && shift)
+            });
+            if let Some(mode) = tool {
+                self.set_gizmo_mode(mode);
+            }
+            if undo && self.editor.undo() {
+                self.sync_selection();
+            }
+            if redo && self.editor.redo() {
+                self.sync_selection();
             }
         }
 

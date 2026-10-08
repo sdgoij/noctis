@@ -28,6 +28,26 @@ use render::{CameraView, GizmoAxis};
 /// The three gizmo axes, in picking-priority order.
 pub const AXES: [GizmoAxis; 3] = [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z];
 
+/// Whether the gizmo's handles follow the world axes or the entity's own frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GizmoOrientation {
+    /// Handles are aligned to the world axes.
+    #[default]
+    World,
+    /// Handles follow the entity's own frame.
+    Local,
+}
+
+impl GizmoOrientation {
+    /// The human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            GizmoOrientation::World => "World",
+            GizmoOrientation::Local => "Local",
+        }
+    }
+}
+
 /// The index of `axis` within [`AXES`].
 pub fn axis_index(axis: GizmoAxis) -> usize {
     match axis {
@@ -81,6 +101,13 @@ pub fn rotation_of(world: &Mat4) -> Mat4 {
 /// inverse of an orthonormal rotation (see [`rotation_of`]).
 pub fn axis_into_frame(frame: &Mat4, axis: Vec3) -> Vec3 {
     let v = math::transpose(frame) * math::vec4(axis.x, axis.y, axis.z, 0.0);
+    vec3(v.x, v.y, v.z)
+}
+
+/// Rotate a vector by a frame's rotation (see [`rotation_of`]), the inverse of
+/// [`axis_into_frame`].
+pub fn rotate_axis(frame: &Mat4, axis: Vec3) -> Vec3 {
+    let v = *frame * math::vec4(axis.x, axis.y, axis.z, 0.0);
     vec3(v.x, v.y, v.z)
 }
 
@@ -360,6 +387,16 @@ mod tests {
         let world_axis = q.rotate_vec3(vec3(1.0, 0.0, 0.0));
         let local = axis_into_frame(&frame, world_axis);
         assert!(math::vec3_approx_eq(local, vec3(1.0, 0.0, 0.0), 1e-4));
+    }
+
+    #[test]
+    fn rotate_axis_inverts_axis_into_frame() {
+        let q = Quat::from_rotation_y(0.8);
+        let frame = math::from_quat(q);
+        let axis = vec3(0.2, 0.9, -0.3);
+        let local = axis_into_frame(&frame, axis);
+        let round = rotate_axis(&frame, local);
+        assert!(math::vec3_approx_eq(round, axis, 1e-4), "got {round:?}");
     }
 
     #[test]

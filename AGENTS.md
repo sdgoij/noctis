@@ -32,7 +32,7 @@ cargo test  --workspace                 # run the whole suite (required before c
 cargo test  -p ecs                      # one crate
 cargo clippy --workspace --all-targets  # lints
 cargo fmt --all                         # format (max_width = 100)
-cargo build -p script --features slag   # enable the real JavaScript backend
+cargo test  -p script --features slag   # real JavaScript backend + its smoke tests
 ```
 
 ## Non-negotiable standards
@@ -74,15 +74,24 @@ cargo build -p script --features slag   # enable the real JavaScript backend
 
 - `render`: `sample_count > 1` (MSAA) is clamped to 1; IBL is precomputed on the
   CPU at load time; one shadow-casting directional/spot light at a time.
-- `script`: the real Slag backend is the optional `slag` feature (its build
-  fetches a large `test262` submodule); the default build uses a testable host.
+- `script`: the real Slag backend is the `slag` feature (off by default). It
+  builds from the pinned `github.com/sdgoij/slag` and its smoke tests pass
+  (`cargo test -p script --features slag`); the default build uses the testable
+  `NoopHost`/`RecordingHost`. `runtime` cannot yet *host* Slag: `App`'s systems
+  are `Send + Sync` and `SlagHost` is `!Send`, so a game run by `noctis-runtime`
+  uses `NoopHost` (scripts are discovered and tracked but not executed). Relaxing
+  that bound is a deliberate `ecs` contract change, not made yet.
 - `editor`/`runtime` open a live windowed viewport (`--window`). The editor draws
   egui panels (outliner, inspector, transform editing), supports click-to-select
-  viewport picking (a ray vs. mesh AABBs), and spawns primitive objects
-  (cube/sphere/plane/light/camera) from the Outliner's **Add** buttons;
-  `--testscene` loads the all-features test scene. There is no gizmo/handle
-  dragging yet, and the windowed loop is not unit-tested (it blocks and needs a
-  display).
+  viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
+  Rotate / Scale handles, drawn world- or entity-oriented, one undo step per
+  drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. It
+  spawns primitive objects (cube/sphere/plane/light/camera) from the Outliner's
+  **Add** buttons and `--testscene` loads the all-features test scene.
+  `noctis-runtime --export <dir> --scene <file>` writes a self-contained game
+  folder (a copy of the executable, `scene.json`, and a manifest) that loads its
+  bundled scene when run with no arguments. The windowed loop is not unit-tested
+  (it blocks and needs a display).
 
 ## Commit messages
 

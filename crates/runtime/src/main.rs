@@ -12,13 +12,18 @@
 
 #![forbid(unsafe_code)]
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ecs::assets::AssetRegistry;
 use ecs::scene::Scene;
 use platform::WindowConfig;
 use render::RendererConfig;
-use runtime::{RunSummary, Runtime, RuntimeConfig, demo, run_in_window};
+use runtime::{
+    ExportReport, RunSummary, Runtime, RuntimeConfig, bundled_scene, demo, export_game,
+    run_in_window,
+};
 
 /// Parsed command-line arguments.
 #[derive(Clone, Debug)]
@@ -30,6 +35,8 @@ struct Args {
     render: bool,
     window: bool,
     audio: bool,
+    export: Option<String>,
+    name: Option<String>,
     print_summary: bool,
     quiet: bool,
 }
@@ -44,6 +51,8 @@ impl Default for Args {
             render: false,
             window: false,
             audio: true,
+            export: None,
+            name: None,
             print_summary: false,
             quiet: false,
         }
@@ -67,6 +76,14 @@ impl Args {
                     let value = it.next().ok_or("--scene requires a file path")?;
                     args.scene = Some(value);
                 }
+                "--export" => {
+                    let value = it.next().ok_or("--export requires a directory")?;
+                    args.export = Some(value);
+                }
+                "--name" => {
+                    let value = it.next().ok_or("--name requires a value")?;
+                    args.name = Some(value);
+                }
                 "--frames" => {
                     let value = it.next().ok_or("--frames requires a number")?;
                     args.frames = value
@@ -89,11 +106,8 @@ impl Args {
         if args.demo && args.scene.is_some() {
             return Err("--demo and --scene are mutually exclusive".into());
         }
-        // With no scene, fall back to the built-in demo so the binary always
-        // does something useful instead of erroring.
-        if !args.demo && args.scene.is_none() {
-            args.demo = true;
-        }
+        // No scene is not an error: `load_scene` falls back to a scene bundled
+        // next to the executable, then to the built-in demo.
         Ok(Some(args))
     }
 }
@@ -108,12 +122,14 @@ USAGE:
 
 OPTIONS:
     --scene <path>     Load and run a scene JSON file (optional).
-    --demo             Run a small built-in scene (the default when --scene is omitted).
+    --demo             Run a small built-in scene (the default when no scene is given).
     --frames <N>       Number of frames to run (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
     --render           Render frames with a headless GPU (skipped if unavailable).
     --window           Open a window and run with a live viewport (blocks).
     --no-audio         Do not open an audio device (use silent audio).
+    --export <dir>     Export a self-contained game folder (requires --scene).
+    --name <name>      Exported executable name (default: the scene file stem).
     --print-summary    Print the run summary (printed by default).
     --quiet            Suppress the run summary.
     -h, --help         Show this help.
@@ -122,7 +138,7 @@ ENVIRONMENT:
     NOCTIS_LOG         error | warn | info (default) | debug | trace | off"
 }
 
-/// Build the runtime for the requested scene (demo or file).
+/// Build the runtime for the requested scene.
 fn build_runtime(args: &Args) -> Result<Runtime, String> {
     let config = RuntimeConfig {
         audio: args.audio,
@@ -131,23 +147,7 @@ fn build_runtime(args: &Args) -> Result<Runtime, String> {
     };
 
     let mut assets = AssetRegistry::with_defaults();
-    let scene = if args.demo {
-        demo::demo_scene(&mut assets)
-    } else {
-        let path = args
-            .scene
-            .as_deref()
-            .ok_or("no scene path (internal error: pass --scene or --demo)")?;
-        if std::path::Path::new(path).exists() {
-            let json = std::fs::read_to_string(path)
-                .map_err(|err| format!("failed to read scene '{path}': {err}"))?;
-            Scene::from_json(&json, &assets)
-                .map_err(|err| format!("failed to load scene '{path}': {err}"))?
-        } else {
-            log::warn!("scene '{path}' not found; using the built-in demo scene");
-            demo::demo_scene(&mut assets)
-        }
-    };
+    let scene = load_scene(args, &mut assets)?;
 
     let mut runtime: Runtime = Runtime::from_assets(scene, assets, config);
 
@@ -159,6 +159,66 @@ fn build_runtime(args: &Args) -> Result<Runtime, String> {
     }
 
     Ok(runtime)
+}
+
+/// Load the scene to run: an explicit file, a `scene.json` bundled next to the
+/// executable (an exported game), or the built-in demo.
+fn load_scene(args: &Args, assets: &mut AssetRegistry) -> Result<Scene, String> {
+    if args.demo {
+        return Ok(demo::demo_scene(assets));
+    }
+
+    let path = args
+        .scene
+        .clone()
+        .map(PathBuf::from)
+        .or_else(bundled_next_to_exe);
+    let Some(path) = path else {
+        log::info!("no scene specified; using the built-in demo scene");
+        return Ok(demo::demo_scene(assets));
+    };
+    if !path.is_file() {
+        log::warn!(
+            "scene '{}' not found; using the built-in demo scene",
+            path.display()
+        );
+        return Ok(demo::demo_scene(assets));
+    }
+    let json = fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read scene '{}': {err}", path.display()))?;
+    Scene::from_json(&json, assets)
+        .map_err(|err| format!("failed to load scene '{}': {err}", path.display()))
+}
+
+/// A `scene.json` sitting next to the running executable, if any.
+fn bundled_next_to_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    bundled_scene(exe.parent()?)
+}
+
+/// Export a self-contained game folder for `destination`.
+fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
+    let scene_path = args
+        .scene
+        .as_deref()
+        .ok_or("--export requires --scene <path>: an exported game needs a scene file")?;
+    let scene_json = fs::read_to_string(scene_path)
+        .map_err(|err| format!("failed to read scene '{scene_path}': {err}"))?;
+    let name = args
+        .name
+        .clone()
+        .unwrap_or_else(|| default_game_name(scene_path));
+    export_game(Path::new(destination), &name, &scene_json).map_err(|err| err.to_string())
+}
+
+/// The default exported game name: the scene file's stem, when it is usable.
+fn default_game_name(scene_path: &str) -> String {
+    Path::new(scene_path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| runtime::export::valid_name(stem))
+        .unwrap_or("game")
+        .to_string()
 }
 
 /// Load the scene and run the loop headlessly. Returns the run summary.
@@ -198,6 +258,19 @@ fn main() -> ExitCode {
     if args.window {
         return match run_windowed(&args) {
             Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("noctis-runtime: {message}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
+    if let Some(destination) = args.export.clone() {
+        return match do_export(&args, &destination) {
+            Ok(report) => {
+                println!("{report}");
+                ExitCode::SUCCESS
+            }
             Err(message) => {
                 eprintln!("noctis-runtime: {message}");
                 ExitCode::from(1)

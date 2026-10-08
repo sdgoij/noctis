@@ -6,10 +6,16 @@
 //! selection must hand it none.
 
 use ecs::components::GlobalTransform;
-use editor::Editor;
 use editor::window::EditorDriver;
+use editor::{Editor, GizmoOrientation};
+use math::Vec3;
 use platform::AppDriver;
 use render::GizmoMode;
+
+fn column(matrix: &math::Mat4, index: usize) -> Vec3 {
+    let c = matrix[index];
+    math::vec3(c.x, c.y, c.z)
+}
 
 fn testscene_editor() -> Editor {
     let mut editor = Editor::new();
@@ -69,6 +75,53 @@ fn every_tool_yields_a_gizmo_at_the_entities_world_position() {
         assert!(
             math::vec3_approx_eq(placed, expected, 1e-4),
             "{mode:?} gizmo placed at {placed:?}, expected {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn local_orientation_aligns_the_gizmo_with_the_entity() {
+    let mut editor = testscene_editor();
+    let info = editor
+        .list_entities()
+        .into_iter()
+        .find(|info| info.components.contains(&"MeshRenderer"))
+        .expect("the test scene contains a mesh entity");
+    editor
+        .set_rotation_euler(info.entity, math::vec3(0.0, 90.0, 0.0))
+        .expect("rotate the entity");
+    editor.scene_mut().update_transforms();
+    let world = editor
+        .scene()
+        .world
+        .get::<GlobalTransform>(info.entity)
+        .expect("world transform")
+        .matrix;
+    let expected = editor::gizmo::rotation_of(&world);
+
+    let mut driver = EditorDriver::new(editor);
+    driver.select(info.entity);
+    assert_eq!(driver.gizmo_orientation(), GizmoOrientation::World);
+
+    // World orientation: the translate handles are axis-aligned.
+    let (_, world_transform) = driver.gizmo().expect("gizmo");
+    assert!(math::vec3_approx_eq(
+        column(&world_transform, 0),
+        math::vec3(1.0, 0.0, 0.0),
+        1e-4
+    ));
+
+    // Local orientation: the handles follow the entity's rotated frame.
+    driver.set_gizmo_orientation(GizmoOrientation::Local);
+    let (_, local_transform) = driver.gizmo().expect("gizmo");
+    for index in 0..3 {
+        assert!(
+            math::vec3_approx_eq(
+                column(&local_transform, index),
+                column(&expected, index),
+                1e-4
+            ),
+            "handle {index} misaligned"
         );
     }
 }

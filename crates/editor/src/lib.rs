@@ -59,6 +59,7 @@ pub use command::{
 };
 pub use editor::{Editor, parse_commands};
 pub use error::EditorError;
+pub use gizmo::GizmoOrientation;
 pub use info::{EntityDto, EntityInfo};
 
 /// The JSON schema/help document for the command API.

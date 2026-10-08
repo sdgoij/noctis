@@ -40,12 +40,14 @@
 #![forbid(unsafe_code)]
 
 mod config;
+pub mod export;
 mod runtime;
 
 pub mod demo;
 pub mod window;
 
 pub use config::RuntimeConfig;
+pub use export::{ExportError, ExportReport, bundled_scene, export_game};
 pub use runtime::{RunSummary, Runtime};
 pub use window::run_in_window;
 
