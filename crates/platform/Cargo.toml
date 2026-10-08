@@ -8,6 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+math.workspace = true
 ecs.workspace = true
 render.workspace = true
 winit.workspace = true

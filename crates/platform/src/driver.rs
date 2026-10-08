@@ -3,6 +3,7 @@
 use ecs::assets::AssetRegistry;
 use ecs::resources::InputState;
 use ecs::world::{Entity, World};
+use render::GizmoGeometry;
 
 /// Something the window host can drive: a simulation plus the data needed to
 /// render it.
@@ -41,6 +42,14 @@ pub trait AppDriver {
     ///
     /// `Ui` derefs to `egui::Context`, so `ui.ctx()` is available if needed.
     fn ui(&mut self, _ui: &mut egui::Ui) {}
+
+    /// An editor gizmo to draw over the scene this frame: its geometry and the
+    /// world transform that places it. The host uploads it right before
+    /// presenting, so a driver can drive it from state it computes in
+    /// [`AppDriver::ui`]. Defaults to no gizmo.
+    fn gizmo(&self) -> Option<(GizmoGeometry, math::Mat4)> {
+        None
+    }
 
     /// Whether the driver has requested the application exit.
     fn should_exit(&self) -> bool {

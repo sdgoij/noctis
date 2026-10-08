@@ -149,6 +149,16 @@ impl<D: AppDriver> WindowHost<D> {
         }
     }
 
+    /// Upload the driver's editor gizmo (if any) to the renderer. Called after
+    /// the driver's UI has run, so interaction state (a hovered handle) is
+    /// current.
+    fn apply_gizmo(&self, renderer: &mut Renderer) {
+        match self.driver.gizmo() {
+            Some((geometry, transform)) => renderer.set_gizmo(&geometry, &transform),
+            None => renderer.clear_gizmo(),
+        }
+    }
+
     fn redraw(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32().clamp(0.0, 0.1);
@@ -204,6 +214,7 @@ impl<D: AppDriver> WindowHost<D> {
             }
 
             if let Some(camera) = camera {
+                self.apply_gizmo(&mut renderer);
                 let result = renderer.present_with_overlay(
                     self.driver.world(),
                     self.driver.assets(),
@@ -243,6 +254,7 @@ impl<D: AppDriver> WindowHost<D> {
             output.textures_delta.clear();
             self.egui = Some(egui);
         } else if let Some(camera) = camera {
+            self.apply_gizmo(&mut renderer);
             if let Err(err) = renderer.present(self.driver.world(), self.driver.assets(), camera) {
                 log::warn!("present failed: {err}");
             }

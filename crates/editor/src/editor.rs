@@ -153,6 +153,10 @@ pub struct Editor {
     selection: Vec<Entity>,
     undo_stack: Vec<SceneDesc>,
     redo_stack: Vec<SceneDesc>,
+    /// An open interactive edit (a gizmo drag): the snapshot taken when it began,
+    /// and whether any command has changed the scene since. See
+    /// [`Editor::begin_interactive_edit`].
+    interactive: Option<(SceneDesc, bool)>,
 }
 
 impl Default for Editor {
@@ -190,6 +194,7 @@ impl Editor {
             selection: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            interactive: None,
         }
     }
 
@@ -309,6 +314,42 @@ impl Editor {
         self.redo_stack.clear();
     }
 
+    /// Record `before` as an undo step, or fold it into the open interactive edit
+    /// so a multi-frame interaction (a gizmo drag) leaves one history entry.
+    fn record_history(&mut self, before: SceneDesc) {
+        match self.interactive.as_mut() {
+            Some((_, changed)) => *changed = true,
+            None => self.push_history(before),
+        }
+    }
+
+    /// Begin an interactive, multi-frame edit such as a gizmo drag.
+    ///
+    /// While an interactive edit is open, every scene-mutating command is folded
+    /// into a *single* undo step, recorded when [`Editor::end_interactive_edit`]
+    /// is called. That makes a drag undo in one step rather than one step per
+    /// frame. Interactive edits do not nest: opening one replaces any previous
+    /// session, and every [`Editor::begin_interactive_edit`] should be paired
+    /// with an [`Editor::end_interactive_edit`].
+    pub fn begin_interactive_edit(&mut self) {
+        self.interactive = Some((self.snapshot(), false));
+    }
+
+    /// Finish an interactive edit, recording one undo step if the scene changed
+    /// since [`Editor::begin_interactive_edit`]. Does nothing if no edit is open.
+    pub fn end_interactive_edit(&mut self) {
+        if let Some((before, changed)) = self.interactive.take()
+            && changed
+        {
+            self.push_history(before);
+        }
+    }
+
+    /// Whether an interactive edit is currently open.
+    pub fn in_interactive_edit(&self) -> bool {
+        self.interactive.is_some()
+    }
+
     /// Whether there is anything to undo.
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
@@ -389,7 +430,7 @@ impl Editor {
         match self.dispatch(&command) {
             Ok(outcome) => {
                 self.prune_selection();
-                self.push_history(before);
+                self.record_history(before);
                 Ok(outcome)
             }
             Err(err) => {
@@ -1826,6 +1867,66 @@ mod tests {
         assert!(ed.undo());
         let e2 = ed.find_by_name("E").unwrap();
         assert!(!ed.has_component(e2, ComponentName::Light));
+    }
+
+    #[test]
+    fn interactive_edit_folds_commands_into_one_undo_step() {
+        let mut ed = editor();
+        let e = ed.spawn("E", None);
+        let baseline = ed.history_len();
+
+        ed.begin_interactive_edit();
+        assert!(ed.in_interactive_edit());
+        for _ in 0..5 {
+            ed.translate(e, vec3(1.0, 0.0, 0.0)).unwrap();
+        }
+        assert_eq!(ed.history_len(), baseline, "nothing recorded mid-drag");
+        assert_eq!(ed.translation(e), Some(vec3(5.0, 0.0, 0.0)));
+
+        ed.end_interactive_edit();
+        assert!(!ed.in_interactive_edit());
+        assert_eq!(
+            ed.history_len(),
+            baseline + 1,
+            "one step for the whole drag"
+        );
+
+        assert!(ed.undo());
+        let e2 = ed.find_by_name("E").unwrap();
+        assert_eq!(ed.translation(e2), Some(vec3(0.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn interactive_edit_without_changes_records_nothing() {
+        let mut ed = editor();
+        ed.spawn("E", None);
+        let baseline = ed.history_len();
+        ed.begin_interactive_edit();
+        ed.end_interactive_edit();
+        assert_eq!(ed.history_len(), baseline);
+    }
+
+    #[test]
+    fn end_interactive_edit_without_begin_is_a_no_op() {
+        let mut ed = editor();
+        ed.spawn("E", None);
+        let baseline = ed.history_len();
+        ed.end_interactive_edit();
+        assert_eq!(ed.history_len(), baseline);
+    }
+
+    #[test]
+    fn commands_after_an_interaction_record_history_again() {
+        let mut ed = editor();
+        let e = ed.spawn("E", None);
+        ed.begin_interactive_edit();
+        ed.translate(e, vec3(1.0, 0.0, 0.0)).unwrap();
+        ed.end_interactive_edit();
+        let after_drag = ed.history_len();
+
+        let e2 = ed.find_by_name("E").unwrap();
+        ed.translate(e2, vec3(0.0, 1.0, 0.0)).unwrap();
+        assert_eq!(ed.history_len(), after_drag + 1);
     }
 
     #[test]
