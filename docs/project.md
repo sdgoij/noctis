@@ -291,6 +291,19 @@ one.
 The exported game loads its bundled default scene when run with no arguments
 (already true today).
 
+*Implemented*: `noctis build --project <dir> [--target <name>]` (and
+`noctis-runtime --project <dir> --export <dir> [--target <name>]`) resolves the
+target's scene (or `--scene`, or the project default), imports the assets, and
+bundles every file the scene references — resolved by
+`project::referenced_files` through the import index, so a glTF sub-asset
+referenced by name maps back to its file. Engine built-ins (`$…`,
+`primitives/…`) are not bundled; they are recreated at load time. The folder gets
+the runtime executable, `scene.json`, the referenced files at their relative
+paths, a generated `noctis.toml` (so the exported runtime imports its assets and
+runs the bundled scene), and `noctis-game.json`. Step 3 is partial: window/size
+come from the manifest via the bundled `noctis.toml`, but per-target render/input
+overrides are not yet applied.
+
 ## Version control
 
 - Manifests, scenes, prefabs, and import settings are **text** (TOML/JSON) and
@@ -307,14 +320,16 @@ The exported game loads its bundled default scene when run with no arguments
 ## Command line (planned)
 
 ```
-noctis-editor  --project <dir> [--scene <path>] [--window]
-noctis-runtime --project <dir> [--scene <path>] [--window] [--export ...]
-noctis build   --project <dir> --target <name>
+noctis-editor  --project <dir> [--scene <path>] [--window] [--mode 2d|3d]
+noctis-runtime --project <dir> [--scene <path>] [--window] [--export ...] [--target <name>]
+noctis build   --project <dir> [--target <name>] [--scene <path>] [--out <dir>]
 ```
 
 `--project` locates the manifest, loads the project registry, and makes
 `--scene` a project-relative path. `--scene` alone still works for a loose,
-self-contained scene file (the current behaviour).
+self-contained scene file (the current behaviour). `noctis build` and
+`noctis-runtime --target` honor `[[build]]` targets (the target's scene, name, and
+output directory).
 
 ## What already exists
 
@@ -335,9 +350,9 @@ Built on (reuse, do not reinvent):
 New work this design implies (✔ = implemented):
 
 - ✔ A `project` crate depending on `ecs`/`render`: manifest parsing, asset-path
-  canonicalization, discovery, and asset import. Remaining: the resolver as a
-  public API (path + fragment → handle is currently done by registering assets
-  under both names), the `.noctis/` cache, and build.
+  canonicalization, discovery, asset import, the resolver (`referenced_files`:
+  a scene's asset references → the project files behind them), and build.
+  Remaining: the `.noctis/` import cache.
 - ✔ Missing asset references are a load error that names the path (the built-in
   primitives moved to `ecs::primitives` and are installed by
   `AssetRegistry::with_builtins()`).
@@ -347,8 +362,9 @@ New work this design implies (✔ = implemented):
   importer that bakes a glyph atlas into the cache.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
-- ✔ `--project` in `noctis-editor` / `noctis-runtime` (both now import the
-  project's assets). Remaining: a `noctis` build CLI and the UI project picker.
+- ✔ `--project` in `noctis-editor` / `noctis-runtime` (both import the project's
+  assets), and a `noctis build` CLI that bundles a project's referenced assets.
+  Remaining: the UI project picker.
 
 Deterministic serialization already holds for `SceneDesc`/`Prefab` and is locked
 by tests; keep it that way as the project model is added.

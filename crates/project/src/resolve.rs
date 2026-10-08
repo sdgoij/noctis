@@ -1,0 +1,160 @@
+//! Resolving a scene's asset references to the project files that back them.
+//!
+//! A scene document references assets by path: a file path
+//! (`assets/textures/wood.png`), a `file#kind/name` fragment
+//! (`assets/models/robot.glb#mesh/Torso`), or — for a glTF saved from the editor
+//! — a bare sub-asset name (`Torso`). [`referenced_files`] maps every such
+//! reference to the source file a build must bundle, using the [`lookup`] index
+//! produced by [`Project::import_assets`].
+//!
+//! Engine built-ins (`$…` placeholders and `primitives/…` meshes) are not files:
+//! they are recreated at load time by `AssetRegistry::with_builtins`, so they are
+//! skipped. A non-built-in reference that resolves to no file is an error naming
+//! it — a build never silently ships a scene with a dangling reference.
+//!
+//! [`lookup`]: crate::ImportedAssets::lookup
+//! [`Project::import_assets`]: crate::Project::import_assets
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use ecs::scene::{ComponentDesc, SceneDesc};
+
+use crate::error::ProjectError;
+use crate::path::AssetPath;
+
+/// Whether `reference` names an engine built-in rather than a project file.
+pub fn is_builtin(reference: &str) -> bool {
+    reference.starts_with('$') || reference.starts_with("primitives/")
+}
+
+/// The asset references carried by one component.
+fn component_references(component: &ComponentDesc) -> Vec<&str> {
+    match component {
+        ComponentDesc::MeshRenderer { mesh, material, .. } => {
+            [mesh.as_deref(), material.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+        ComponentDesc::AudioSource { clip, .. } => clip.as_deref().into_iter().collect(),
+        ComponentDesc::Script { path, .. } => path.as_deref().into_iter().collect(),
+        // Cameras, lights, physics, and inline scripts carry no asset references.
+        _ => Vec::new(),
+    }
+}
+
+/// Every asset reference in `scene`, in document order (with duplicates).
+pub fn scene_references(scene: &SceneDesc) -> Vec<&str> {
+    scene
+        .entities
+        .iter()
+        .flat_map(|entity| entity.components.iter())
+        .flat_map(component_references)
+        .collect()
+}
+
+/// Map every asset reference in `scene` to the project file that backs it,
+/// sorted and deduplicated.
+///
+/// `lookup` maps a registry key (a file path, a fragment, or a sub-asset name) to
+/// the source file, as produced by [`Project::import_assets`]. Built-in
+/// references are skipped; any other reference that is absent from `lookup` is a
+/// [`ProjectError::MissingAsset`].
+///
+/// [`Project::import_assets`]: crate::Project::import_assets
+pub fn referenced_files(
+    scene: &SceneDesc,
+    lookup: &BTreeMap<String, AssetPath>,
+) -> Result<Vec<AssetPath>, ProjectError> {
+    let mut files: BTreeSet<AssetPath> = BTreeSet::new();
+    for reference in scene_references(scene) {
+        if is_builtin(reference) {
+            continue;
+        }
+        match lookup.get(reference) {
+            Some(file) => {
+                files.insert(file.clone());
+            }
+            None => return Err(ProjectError::MissingAsset(reference.to_string())),
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ecs::scene::SceneDesc;
+
+    fn scene_with(component_json: &str) -> SceneDesc {
+        let json = format!(
+            r#"{{ "name": "S", "entities": [{{ "id": 0, "transform": {{ "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] }}, "components": [{component_json}] }}] }}"#
+        );
+        serde_json::from_str(&json).expect("scene parses")
+    }
+
+    fn lookup(pairs: &[(&str, &str)]) -> BTreeMap<String, AssetPath> {
+        pairs
+            .iter()
+            .map(|(key, file)| (key.to_string(), AssetPath::parse(file).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn builtins_are_recognised() {
+        assert!(is_builtin("$default"));
+        assert!(is_builtin("primitives/cube"));
+        assert!(!is_builtin("assets/models/robot.glb"));
+        assert!(!is_builtin("Torso"));
+    }
+
+    #[test]
+    fn references_resolve_to_the_backing_files() {
+        let scene = scene_with(
+            r#"{ "type": "mesh_renderer", "mesh": "Torso", "material": "assets/materials/steel.mat", "cast_shadows": true, "receive_shadows": true }"#,
+        );
+        let index = lookup(&[
+            ("Torso", "assets/models/robot.glb"),
+            ("assets/materials/steel.mat", "assets/materials/steel.mat"),
+        ]);
+        let files = referenced_files(&scene, &index).expect("resolve");
+        assert_eq!(
+            files,
+            vec![
+                AssetPath::parse("assets/materials/steel.mat").unwrap(),
+                AssetPath::parse("assets/models/robot.glb").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn builtin_references_are_skipped_and_duplicates_collapse() {
+        let scene = scene_with(
+            r#"{ "type": "mesh_renderer", "mesh": "primitives/cube", "material": "$default", "cast_shadows": true, "receive_shadows": true }"#,
+        );
+        assert!(
+            referenced_files(&scene, &BTreeMap::new())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_reference_is_an_error_naming_it() {
+        let scene = scene_with(
+            r#"{ "type": "audio_source", "clip": "audio/gone.wav", "volume": 1.0, "pitch": 1.0, "looped": false, "playing": true, "spatial": true, "max_distance": 20.0, "rolloff": 1.0 }"#,
+        );
+        let err = referenced_files(&scene, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(err, ProjectError::MissingAsset(ref r) if r == "audio/gone.wav"));
+    }
+
+    #[test]
+    fn a_script_path_is_bundled_too() {
+        let scene = scene_with(
+            r#"{ "type": "script", "source": null, "path": "scripts/player.js", "enabled": true }"#,
+        );
+        let index = lookup(&[("scripts/player.js", "scripts/player.js")]);
+        let files = referenced_files(&scene, &index).unwrap();
+        assert_eq!(files, vec![AssetPath::parse("scripts/player.js").unwrap()]);
+    }
+}

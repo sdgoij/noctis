@@ -66,3 +66,9 @@ Both CLIs accept `--project <dir>`: it opens a project (a directory with a
 one shared registry, and makes `--scene` project-relative. A scene carries a
 presentation `mode` (`2d` | `3d`); the editor creates new scenes in the project's
 mode (or `--mode`), and a 2D scene's default camera is orthographic.
+
+`noctis build --project <dir> [--target <name>]` exports a project into a
+self-contained game folder: the runtime executable, the scene, every asset the
+scene references (resolved transitively through the import index), and a
+generated `noctis.toml` so the exported game imports its bundled assets and runs
+its bundled scene when launched.

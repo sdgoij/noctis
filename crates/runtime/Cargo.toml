@@ -16,6 +16,10 @@ slag = ["script/slag"]
 name = "noctis-runtime"
 path = "src/main.rs"
 
+[[bin]]
+name = "noctis"
+path = "src/bin/noctis.rs"
+
 [dependencies]
 math.workspace = true
 ecs.workspace = true

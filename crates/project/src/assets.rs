@@ -8,6 +8,7 @@
 //! registry resolves those references. A glTF's sub-assets are additionally
 //! registered under their `file#kind/name` fragment path.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ecs::assets::{AssetRegistry, ScriptAsset};
@@ -80,6 +81,10 @@ pub struct ImportedAssets {
     pub files: usize,
     /// Files that could not be imported.
     pub errors: Vec<AssetImportError>,
+    /// Every registry lookup key mapped to the source file's asset path: a
+    /// file's own path, a `file#kind/name` fragment, or a glTF sub-asset's
+    /// in-file name. Lets a caller resolve a scene reference to a file to bundle.
+    pub lookup: BTreeMap<String, AssetPath>,
 }
 
 impl std::fmt::Debug for ImportedAssets {
@@ -90,6 +95,7 @@ impl std::fmt::Debug for ImportedAssets {
             .field("materials", &self.registry.materials.len())
             .field("textures", &self.registry.textures.len())
             .field("scripts", &self.registry.scripts.len())
+            .field("lookup", &self.lookup.len())
             .field("errors", &self.errors)
             .finish()
     }
@@ -125,8 +131,11 @@ impl Project {
         let map = self.asset_map()?;
         let mut registry = AssetRegistry::with_builtins();
         let mut errors = Vec::new();
+        let mut lookup = BTreeMap::new();
         for entry in map.entries() {
-            if let Err(message) = import_entry(&mut registry, entry) {
+            // The file is always bundleable, even if decoding it fails.
+            lookup.insert(entry.path.as_str().to_string(), entry.path.clone());
+            if let Err(message) = import_entry(&mut registry, entry, &mut lookup) {
                 errors.push(AssetImportError {
                     path: entry.path.clone(),
                     message,
@@ -137,14 +146,19 @@ impl Project {
             registry,
             files: map.len(),
             errors,
+            lookup,
         })
     }
 }
 
 /// Import one file into `registry`. A kind with no importer yet is a no-op.
-fn import_entry(registry: &mut AssetRegistry, entry: &AssetMapEntry) -> Result<(), String> {
+fn import_entry(
+    registry: &mut AssetRegistry,
+    entry: &AssetMapEntry,
+    lookup: &mut BTreeMap<String, AssetPath>,
+) -> Result<(), String> {
     match entry.kind {
-        AssetKind::Model => import_model(registry, &entry.path, &entry.file),
+        AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
         AssetKind::Texture => import_texture(registry, &entry.path, &entry.file),
         AssetKind::Script => import_script(registry, &entry.path, &entry.file),
         // Audio and fonts have no importer yet; scenes and prefabs are not assets.
@@ -179,26 +193,33 @@ fn import_script(
 }
 
 /// Import a glTF model, registering its sub-assets under both their in-file names
-/// (what a scene saved from the editor references) and their fragment paths.
-fn import_model(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> Result<(), String> {
+/// (what a scene saved from the editor references) and their fragment paths. Each
+/// key is recorded in `lookup` so it can be resolved back to `path`.
+fn import_model(
+    registry: &mut AssetRegistry,
+    path: &AssetPath,
+    file: &Path,
+    lookup: &mut BTreeMap<String, AssetPath>,
+) -> Result<(), String> {
     let loaded = render::load_gltf(file).map_err(|error| error.to_string())?;
     let registered = loaded.register(registry);
     for (mesh, handle) in loaded.meshes.iter().zip(&registered.meshes) {
-        registry
-            .meshes
-            .insert_alias(fragment_path(path.as_str(), "mesh", &mesh.name), *handle);
+        let fragment = fragment_path(path.as_str(), "mesh", &mesh.name);
+        registry.meshes.insert_alias(&fragment, *handle);
+        lookup.insert(fragment, path.clone());
+        lookup.insert(mesh.name.clone(), path.clone());
     }
     for (material, handle) in loaded.materials.iter().zip(&registered.materials) {
-        registry.materials.insert_alias(
-            fragment_path(path.as_str(), "material", &material.name),
-            *handle,
-        );
+        let fragment = fragment_path(path.as_str(), "material", &material.name);
+        registry.materials.insert_alias(&fragment, *handle);
+        lookup.insert(fragment, path.clone());
+        lookup.insert(material.name.clone(), path.clone());
     }
     for (texture, handle) in loaded.textures.iter().zip(&registered.textures) {
-        registry.textures.insert_alias(
-            fragment_path(path.as_str(), "texture", &texture.name),
-            *handle,
-        );
+        let fragment = fragment_path(path.as_str(), "texture", &texture.name);
+        registry.textures.insert_alias(&fragment, *handle);
+        lookup.insert(fragment, path.clone());
+        lookup.insert(texture.name.clone(), path.clone());
     }
     Ok(())
 }

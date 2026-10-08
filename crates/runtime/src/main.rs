@@ -23,8 +23,8 @@ use platform::WindowConfig;
 use project::Project;
 use render::RendererConfig;
 use runtime::{
-    ExportReport, RunSummary, Runtime, RuntimeConfig, bundled_scene, demo, export_game,
-    run_in_window,
+    BuildOptions, ExportReport, RunSummary, Runtime, RuntimeConfig, build_project, bundled_scene,
+    demo, export_game, run_in_window,
 };
 
 /// Parsed command-line arguments.
@@ -32,6 +32,7 @@ use runtime::{
 struct Args {
     scene: Option<String>,
     project: Option<String>,
+    target: Option<String>,
     demo: bool,
     frames: u32,
     dt: f32,
@@ -50,6 +51,7 @@ impl Default for Args {
         Self {
             scene: None,
             project: None,
+            target: None,
             demo: false,
             frames: 300,
             dt: 1.0 / 60.0,
@@ -85,6 +87,10 @@ impl Args {
                 "--project" => {
                     let value = it.next().ok_or("--project requires a directory")?;
                     args.project = Some(value);
+                }
+                "--target" => {
+                    let value = it.next().ok_or("--target requires a name")?;
+                    args.target = Some(value);
                 }
                 "--export" => {
                     let value = it.next().ok_or("--export requires a directory")?;
@@ -142,6 +148,8 @@ OPTIONS:
     --project <dir>    Open a project (its noctis.toml); --scene is then a
                        project-relative path and the default scene is used when no
                        --scene is given.
+    --target <name>    Export the named [[build]] target from the project (its
+                       scene, name, and output directory are used).
     --demo             Run a small built-in scene (the default when no scene is given).
     --frames <N>       Number of frames to run (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
@@ -302,31 +310,37 @@ fn bundled_next_to_exe() -> Option<PathBuf> {
 
 /// Export a self-contained game folder for `destination`.
 fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
-    let project = open_project(args)?;
-    let scene_path = match args.scene.as_deref() {
-        Some(scene) => match &project {
-            Some(project) => project.resolve_path(scene),
-            None => PathBuf::from(scene),
-        },
-        None => project
-            .as_ref()
-            .and_then(Project::default_scene_file)
-            .ok_or("--export requires --scene <path>, or a project with a default scene")?,
-    };
-    let scene_json = fs::read_to_string(&scene_path)
-        .map_err(|err| format!("failed to read scene '{}': {err}", scene_path.display()))?;
+    // A project build bundles the referenced assets; a loose scene does not.
+    if let Some(dir) = export_project_dir(args) {
+        let options = BuildOptions {
+            destination: Some(PathBuf::from(destination)),
+            name: args.name.clone(),
+            scene: args.scene.clone(),
+            runtime: None,
+        };
+        return build_project(Path::new(&dir), args.target.as_deref(), &options);
+    }
+
+    let scene = args
+        .scene
+        .clone()
+        .ok_or("--export requires --scene <path>, or a project with a default scene")?;
+    let scene_json = fs::read_to_string(&scene)
+        .map_err(|err| format!("failed to read scene '{scene}': {err}"))?;
     let name = args
         .name
         .clone()
-        .or_else(|| {
-            // Prefer the project's name for an export of a project.
-            project
-                .as_ref()
-                .map(|project| project.name().to_string())
-                .filter(|name| runtime::export::valid_name(name))
-        })
-        .unwrap_or_else(|| default_game_name(scene_path.to_string_lossy().as_ref()));
-    export_game(Path::new(destination), &name, &scene_json).map_err(|err| err.to_string())
+        .unwrap_or_else(|| default_game_name(&scene));
+    export_game(Path::new(destination), &name, &scene_json, &[], None)
+        .map_err(|err| err.to_string())
+}
+
+/// The directory of the project to export from: `--project`, else a bundled one
+/// (an exported game re-exporting itself).
+fn export_project_dir(args: &Args) -> Option<String> {
+    args.project
+        .clone()
+        .or_else(|| bundled_project_dir().map(|dir| dir.to_string_lossy().into_owned()))
 }
 
 /// The default exported game name: the scene file's stem, when it is usable.
@@ -339,14 +353,30 @@ fn default_game_name(scene_path: &str) -> String {
         .to_string()
 }
 
-/// Open the project named by `--project`, if any.
+/// Open the project named by `--project`, if any, else an exported game's
+/// bundled project (a `noctis.toml` next to the executable, used when no
+/// `--scene` is given).
 fn open_project(args: &Args) -> Result<Option<Project>, String> {
-    match &args.project {
-        Some(dir) => Project::open(dir)
+    if let Some(dir) = &args.project {
+        return Project::open(dir)
             .map(Some)
-            .map_err(|error| format!("failed to open project {dir:?}: {error}")),
-        None => Ok(None),
+            .map_err(|error| format!("failed to open project {dir:?}: {error}"));
     }
+    if args.scene.is_none()
+        && let Some(dir) = bundled_project_dir()
+    {
+        return Project::open(&dir)
+            .map(Some)
+            .map_err(|error| format!("failed to open the bundled project: {error}"));
+    }
+    Ok(None)
+}
+
+/// The directory of a project manifest bundled next to the running executable.
+fn bundled_project_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    runtime::export::bundled_project(&dir).map(|_| dir)
 }
 
 /// The window config: the project's `[window]` when a project is open, else a

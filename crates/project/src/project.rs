@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use ecs::scene::SceneMode;
 
 use crate::error::ProjectError;
-use crate::manifest::ProjectManifest;
+use crate::manifest::{BuildTarget, ProjectManifest};
 use crate::path::AssetPath;
 
 /// The manifest file name.
@@ -64,6 +64,20 @@ impl Project {
     /// The default presentation mode for new scenes.
     pub fn mode(&self) -> SceneMode {
         self.manifest.project.settings.mode
+    }
+
+    /// The `[[build]]` targets, in manifest order.
+    pub fn build_targets(&self) -> &[BuildTarget] {
+        &self.manifest.build_targets
+    }
+
+    /// A build target by name.
+    pub fn build_target(&self, name: &str) -> Result<&BuildTarget, ProjectError> {
+        self.manifest
+            .build_targets
+            .iter()
+            .find(|target| target.name == name)
+            .ok_or_else(|| ProjectError::Manifest(format!("no build target named {name:?}")))
     }
 
     /// The `default_scene` setting, as a raw project-relative path.

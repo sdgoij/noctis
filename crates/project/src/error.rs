@@ -11,6 +11,8 @@ pub enum ProjectError {
     Manifest(String),
     /// An asset path was not a canonical, project-relative path.
     Path(String),
+    /// A scene or prefab referenced an asset that resolves to no project file.
+    MissingAsset(String),
 }
 
 impl fmt::Display for ProjectError {
@@ -19,6 +21,12 @@ impl fmt::Display for ProjectError {
             ProjectError::Io(message) => write!(f, "io error: {message}"),
             ProjectError::Manifest(message) => write!(f, "manifest error: {message}"),
             ProjectError::Path(message) => write!(f, "asset path error: {message}"),
+            ProjectError::MissingAsset(reference) => {
+                write!(
+                    f,
+                    "no project file resolves the asset reference {reference:?}"
+                )
+            }
         }
     }
 }

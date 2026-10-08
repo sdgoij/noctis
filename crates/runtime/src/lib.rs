@@ -60,16 +60,19 @@ mod config;
 pub mod export;
 mod runtime;
 
+pub mod build;
 pub mod demo;
 pub mod window;
 
+pub use build::{BuildOptions, build_project};
 pub use config::RuntimeConfig;
-pub use export::{ExportError, ExportReport, bundled_scene, export_game};
+pub use export::{ExportError, ExportFile, ExportReport, bundled_scene, export_game};
 pub use runtime::{RunSummary, Runtime};
 pub use window::run_in_window;
 
 /// The most commonly used imports.
 pub mod prelude {
+    pub use crate::build::{BuildOptions, build_project};
     pub use crate::config::RuntimeConfig;
     pub use crate::demo::demo_scene;
     pub use crate::runtime::{RunSummary, Runtime};

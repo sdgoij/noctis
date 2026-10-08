@@ -26,6 +26,7 @@ mod error;
 mod manifest;
 mod path;
 mod project;
+mod resolve;
 
 pub use assets::{AssetImportError, AssetMap, AssetMapEntry, ImportedAssets, fragment_path};
 pub use ecs::scene::SceneMode;
@@ -36,3 +37,4 @@ pub use manifest::{
 };
 pub use path::{AssetKind, AssetPath, detect};
 pub use project::{MANIFEST_FILE, Project};
+pub use resolve::{is_builtin, referenced_files, scene_references};
