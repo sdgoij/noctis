@@ -181,6 +181,12 @@ dropping on the **outliner** instantiates (a model or prefab); dropping anywhere
 else just imports the file into the project. If a file with the target name
 exists, import must not clobber it — suffix a counter or ask.
 
+*Implemented*: `Project::import_file(source)` detects the kind, copies the file
+into the kind's conventional directory, and never clobbers (a `-1`, `-2`, … suffix
+on collision); an unrecognised type is an error. The editor's drop targets
+(viewport → instantiate, outliner → instantiate) and the winit file-drop event
+are not yet wired.
+
 ### Import pipeline and cache
 
 Importing decodes a source file into engine assets and records how. Because
@@ -188,13 +194,13 @@ decoding can be expensive (a glTF with textures), the results are cached under
 `.noctis/` keyed by the source file's content hash plus import settings. The cache
 is generated and gitignored.
 
-*Implemented today without the cache*: `Project::asset_map` scans `assets/` and
-`scripts/`, classifies each file by extension, and `Project::import_assets`
-decodes models (via `render::load_gltf`, registering each sub-asset under both its
-in-file name and its `file#kind/name` fragment path) and scripts, into a registry
-seeded with the engine defaults. A file that fails to import is recorded in
+*Implemented*: `Project::asset_map` scans `assets/` and `scripts/`, classifies
+each file by extension, and `Project::import_assets` decodes models (via
+`render::load_gltf`, registering each sub-asset under both its in-file name and
+its `file#kind/name` fragment path), textures, and scripts into a registry seeded
+with the engine defaults. A file that fails to import is recorded in
 `ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset does
-ot stop a project from opening. Audio and fonts are classified but not yet
+not stop a project from opening. Audio and fonts are classified but not yet
 decoded. Both `noctis-editor` and `noctis-runtime` build their registry from
 `import_assets()` when `--project` is given.
 
@@ -203,6 +209,15 @@ decoding: a texture is sRGB (color) or linear (data) — the inspector already h
 this toggle; a model may set scale and up-axis. The project records settings as
 sidecar metadata next to the asset (e.g. `wood.png.import.toml`) so they are
 versioned and portable.
+
+*Implemented*: texture import settings are read from a sidecar
+(`<file>.import.toml`, `srgb = true|false`; an unknown key is an error), so a data
+texture imports linear, and decoded textures are cached under
+`<project>/.noctis/textures/` keyed by the file's content (a 64-bit FNV-1a hash
+plus its byte length) and the sRGB setting — a changed file or setting misses and
+re-decodes, and a corrupt entry is treated as a miss. Model import settings
+(scale, up-axis) and model/audio caching are not yet implemented. `.noctis/` is
+created on demand and belongs in the project's `.gitignore`.
 
 ## Scenes
 
@@ -359,14 +374,16 @@ New work this design implies (✔ = implemented):
 
 - ✔ A `project` crate depending on `ecs`/`render`: manifest parsing, asset-path
   canonicalization, discovery, asset import, the resolver (`referenced_files`:
-  a scene's asset references → the project files behind them), and build.
-  Remaining: the `.noctis/` import cache.
+  a scene's asset references → the project files behind them), build, and the
+  `.noctis/` cache (texture decoding; sidecar `*.import.toml` settings).
 - ✔ Missing asset references are a load error that names the path (the built-in
   primitives moved to `ecs::primitives` and are installed by
   `AssetRegistry::with_builtins()`).
 - ✔ Rename-rewrite across scene/prefab documents (`Project::rename_asset`, the
   `noctis rename` command).
-- Drag & drop in the editor, wired to project import.
+- Drag & drop in the editor: `Project::import_file` (the import half,
+  auto-detect + place + no-clobber) is ✔; wiring the winit file-drop event and the
+  viewport/outliner drop targets is remaining.
 - A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
   importer that bakes a glyph atlas into the cache.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their

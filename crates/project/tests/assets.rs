@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ecs::assets::TextureFormat;
 use ecs::components::MeshRenderer;
 use ecs::scene::Scene;
 use project::{AssetKind, Project};
@@ -81,6 +82,49 @@ fn scans_textures_and_scripts_and_imports_them_by_path() {
             .handle("scripts/player.js")
             .is_some()
     );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn importing_a_texture_populates_the_generated_cache() {
+    let dir = temp_project("cache");
+    write(&dir.join("noctis.toml"), manifest().as_bytes());
+    write(&dir.join("assets/textures/wood.png"), &png_bytes(2, 2));
+
+    let project = Project::open(&dir).expect("open");
+    let imported = project.import_assets().expect("import");
+    assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+
+    // The decoded texture is cached under `.noctis/textures/`.
+    let cache = dir.join(project::CACHE_DIR).join("textures");
+    assert!(cache.is_dir(), "the cache directory was created");
+    assert_eq!(std::fs::read_dir(&cache).expect("read cache").count(), 1);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_sidecar_import_setting_controls_srgb() {
+    let dir = temp_project("sidecar");
+    write(&dir.join("noctis.toml"), manifest().as_bytes());
+    write(&dir.join("assets/textures/data.png"), &png_bytes(2, 2));
+    // A data texture (normal map, roughness, ...) is linear, not sRGB.
+    write(
+        &dir.join("assets/textures/data.png.import.toml"),
+        b"srgb = false\n",
+    );
+
+    let project = Project::open(&dir).expect("open");
+    let imported = project.import_assets().expect("import");
+    assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+
+    let texture = imported
+        .registry
+        .textures
+        .get_by_path("assets/textures/data.png")
+        .expect("texture imported");
+    assert_eq!(texture.format, TextureFormat::Rgba8Unorm);
 
     std::fs::remove_dir_all(&dir).ok();
 }

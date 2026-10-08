@@ -13,9 +13,11 @@ use std::path::{Path, PathBuf};
 
 use ecs::assets::{AssetRegistry, ScriptAsset};
 
+use crate::cache::{ImportCache, texture_key};
 use crate::error::ProjectError;
 use crate::path::{AssetKind, AssetPath, detect};
 use crate::project::{Project, relative_asset_path, walk_files};
+use crate::settings::TextureImportSettings;
 
 /// One importable file in the project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,12 +132,13 @@ impl Project {
     pub fn import_assets(&self) -> Result<ImportedAssets, ProjectError> {
         let map = self.asset_map()?;
         let mut registry = AssetRegistry::with_builtins();
+        let cache = ImportCache::new(self.root());
         let mut errors = Vec::new();
         let mut lookup = BTreeMap::new();
         for entry in map.entries() {
             // The file is always bundleable, even if decoding it fails.
             lookup.insert(entry.path.as_str().to_string(), entry.path.clone());
-            if let Err(message) = import_entry(&mut registry, entry, &mut lookup) {
+            if let Err(message) = import_entry(&mut registry, entry, &mut lookup, &cache) {
                 errors.push(AssetImportError {
                     path: entry.path.clone(),
                     message,
@@ -156,23 +159,40 @@ fn import_entry(
     registry: &mut AssetRegistry,
     entry: &AssetMapEntry,
     lookup: &mut BTreeMap<String, AssetPath>,
+    cache: &ImportCache,
 ) -> Result<(), String> {
     match entry.kind {
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
-        AssetKind::Texture => import_texture(registry, &entry.path, &entry.file),
+        AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache),
         AssetKind::Script => import_script(registry, &entry.path, &entry.file),
         // Audio and fonts have no importer yet; scenes and prefabs are not assets.
         _ => Ok(()),
     }
 }
 
-/// Import an image file, registered under its asset path as an sRGB texture.
+/// Import an image file, registered under its asset path. The texture's sRGB-ness
+/// comes from its sidecar import settings (`<file>.import.toml`), defaulting to
+/// sRGB. Decoding is cached under `.noctis/` keyed by the file's content and the
+/// setting.
 fn import_texture(
     registry: &mut AssetRegistry,
     path: &AssetPath,
     file: &Path,
+    cache: &ImportCache,
 ) -> Result<(), String> {
-    let texture = render::load_texture(file, true).map_err(|error| error.to_string())?;
+    let settings = TextureImportSettings::load(file)?;
+    let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+    let key = texture_key(&bytes, settings.srgb);
+
+    let texture = match cache.load_texture(&key) {
+        Some(texture) => texture,
+        None => {
+            let texture = render::load_texture(file, settings.srgb).map_err(|e| e.to_string())?;
+            // A cache write failure is not fatal: we already have the texture.
+            let _ = cache.store_texture(&key, &texture);
+            texture
+        }
+    };
     registry.textures.insert_named(path.as_str(), texture);
     Ok(())
 }

@@ -13,23 +13,27 @@
 //!   fragments), the form asset references take in scene and prefab documents.
 //! * [`detect`] / [`AssetKind`] — kind detection by extension, for drag & drop.
 //! * [`Project`] — an open manifest, its directories (convention plus `[paths]`
-//!   overrides), and scene/prefab discovery.
-//!
-//! Asset import (with the `.noctis/` cache), the resolver (asset path → registry
-//! handle), and build are the following slices.
+//!   overrides), scene/prefab discovery, asset import (with the `.noctis/` cache
+//!   and sidecar [`TextureImportSettings`]), [`Project::import_file`] (a loose
+//!   file → an asset), and [`Project::rename_asset`] with reference rewriting.
+//! * [`referenced_files`] — a scene's asset references → the files to bundle.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
 mod assets;
+mod cache;
 mod error;
+mod import;
 mod manifest;
 mod path;
 mod project;
 mod rename;
 mod resolve;
+mod settings;
 
 pub use assets::{AssetImportError, AssetMap, AssetMapEntry, ImportedAssets, fragment_path};
+pub use cache::{CACHE_DIR, ImportCache, texture_key};
 pub use ecs::scene::SceneMode;
 pub use error::ProjectError;
 pub use manifest::{
@@ -40,3 +44,4 @@ pub use path::{AssetKind, AssetPath, detect};
 pub use project::{MANIFEST_FILE, Project};
 pub use rename::{RenameReport, rewrite_references};
 pub use resolve::{is_builtin, referenced_files, scene_references};
+pub use settings::{SIDECAR_SUFFIX, TextureImportSettings};
