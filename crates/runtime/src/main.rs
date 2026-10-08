@@ -191,6 +191,26 @@ fn make_host() -> Result<Host, String> {
     Ok(script::NoopHost)
 }
 
+/// The entities in `scene` that attach a script with something to run.
+///
+/// Only used to warn when this build has no scripting backend, so that "my
+/// scripts do nothing" is never a silent surprise.
+#[cfg(not(feature = "slag"))]
+fn attached_scripts(scene: &Scene) -> usize {
+    use ecs::components::Script;
+    scene
+        .world
+        .entities_with::<Script>()
+        .into_iter()
+        .filter(|entity| {
+            scene
+                .world
+                .get::<Script>(*entity)
+                .is_some_and(Script::has_code)
+        })
+        .count()
+}
+
 /// Build the runtime for the requested scene.
 fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>, String> {
     let mut config = RuntimeConfig {
@@ -240,6 +260,20 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
 
     register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, project, &mut assets)?;
+
+    // Warn when a scene is full of scripts this build cannot run, so that a game
+    // sitting perfectly still is explained rather than mysterious.
+    #[cfg(not(feature = "slag"))]
+    {
+        let attached = attached_scripts(&scene);
+        if attached > 0 {
+            log::warn!(
+                "this scene attaches {attached} script(s) but this build has no scripting \
+                 backend, so they will not run; rebuild with `--features slag` to execute them"
+            );
+        }
+    }
+
     let host = make_host()?;
 
     let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
@@ -549,5 +583,28 @@ mod tests {
     #[test]
     fn a_missing_project_value_is_an_error() {
         assert!(parse(&["--project"]).is_err());
+    }
+
+    #[cfg(not(feature = "slag"))]
+    #[test]
+    fn attached_scripts_counts_only_scripts_with_code() {
+        use ecs::components::Script;
+
+        let mut scene = Scene::new("counted");
+        let with_source = scene.world.spawn();
+        scene
+            .world
+            .insert(with_source, Script::from_source("function on_update() {}"));
+        let with_path = scene.world.spawn();
+        scene
+            .world
+            .insert(with_path, Script::from_path("scripts/x.js"));
+        // A default `Script` has neither source nor path, so it has nothing to run.
+        let empty = scene.world.spawn();
+        scene.world.insert(empty, Script::default());
+        // An entity with no script component at all is not counted either.
+        scene.world.spawn();
+
+        assert_eq!(attached_scripts(&scene), 2);
     }
 }

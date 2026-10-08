@@ -72,6 +72,10 @@ viewport (WASD/QE to fly, middle-mouse to orbit/pan, wheel to dolly):
 cargo run -p editor -- --project examples/showcase --window
 ```
 
+The editor viewport is authoring-only: it does not run scripts, so a scene with
+behaviours looks static there. Use the runtime (with `--features slag`) to watch
+them run.
+
 The editor is fully drivable by an agent through its JSON command API — spawn
 entities, set transforms, add components, import a glTF, save a prefab, and write
 the scene back:
