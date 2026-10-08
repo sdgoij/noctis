@@ -89,8 +89,10 @@ impl Args {
         if args.demo && args.scene.is_some() {
             return Err("--demo and --scene are mutually exclusive".into());
         }
+        // With no scene, fall back to the built-in demo so the binary always
+        // does something useful instead of erroring.
         if !args.demo && args.scene.is_none() {
-            return Err("--scene <path> is required unless --demo is given".into());
+            args.demo = true;
         }
         Ok(Some(args))
     }
@@ -102,11 +104,11 @@ noctis-runtime — run a Noctis scene headlessly
 
 USAGE:
     noctis-runtime --scene <path> [OPTIONS]
-    noctis-runtime --demo [OPTIONS]
+    noctis-runtime [OPTIONS]                 # runs the built-in demo scene
 
 OPTIONS:
-    --scene <path>     Load and run a scene JSON file.
-    --demo             Run a small built-in scene (no input files needed).
+    --scene <path>     Load and run a scene JSON file (optional).
+    --demo             Run a small built-in scene (the default when --scene is omitted).
     --frames <N>       Number of frames to run (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
     --render           Render frames with a headless GPU (skipped if unavailable).
@@ -136,10 +138,15 @@ fn build_runtime(args: &Args) -> Result<Runtime, String> {
             .scene
             .as_deref()
             .ok_or("no scene path (internal error: pass --scene or --demo)")?;
-        let json = std::fs::read_to_string(path)
-            .map_err(|err| format!("failed to read scene '{path}': {err}"))?;
-        Scene::from_json(&json, &assets)
-            .map_err(|err| format!("failed to load scene '{path}': {err}"))?
+        if std::path::Path::new(path).exists() {
+            let json = std::fs::read_to_string(path)
+                .map_err(|err| format!("failed to read scene '{path}': {err}"))?;
+            Scene::from_json(&json, &assets)
+                .map_err(|err| format!("failed to load scene '{path}': {err}"))?
+        } else {
+            log::warn!("scene '{path}' not found; using the built-in demo scene");
+            demo::demo_scene(&mut assets)
+        }
     };
 
     let mut runtime: Runtime = Runtime::from_assets(scene, assets, config);

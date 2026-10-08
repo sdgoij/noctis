@@ -26,13 +26,17 @@ USAGE:
     noctis-editor [OPTIONS]
 
 OPTIONS:
-    -s, --scene <PATH>      Open a scene document before applying commands
+    -s, --scene <PATH>      Open a scene; if the file does not exist, start a new
+                            empty scene instead (written when you pass --out)
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
         --window            Open the scene in a window with a live viewport
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
+
+With no options, a new empty scene is opened and its (empty) entity list is
+printed. `--scene` and `--command` are both optional.
 
 The batch is a JSON array of commands; a single command object is also
 accepted. On success the resulting entity list is printed as JSON.";
@@ -119,7 +123,7 @@ fn run(args: &[String]) -> Result<String, CliError> {
 
     if let Some(scene) = &options.scene {
         editor
-            .open(scene)
+            .open_or_new(scene)
             .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
     }
 
@@ -195,14 +199,9 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
         index += 1;
     }
 
-    if !options.help
-        && !options.print_schema
-        && options.scene.is_none()
-        && options.command.is_none()
-    {
-        return Err(CliError::Usage(
-            "nothing to do: pass --scene and/or --command".into(),
-        ));
+    if !options.help && !options.print_schema {
+        // Every option is optional: with no arguments we work on a new, empty
+        // scene. No argument combination is a usage error here.
     }
 
     Ok(options)
@@ -245,7 +244,7 @@ fn run_windowed(options: &Options) -> Result<(), CliError> {
     let mut editor = Editor::new();
     if let Some(scene) = &options.scene {
         editor
-            .open(scene)
+            .open_or_new(scene)
             .map_err(|e| CliError::Message(format!("failed to open scene {scene:?}: {e}")))?;
     }
     if let Some(source) = &options.command {
@@ -341,9 +340,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_invocation_is_a_usage_error() {
-        let err = parse_args(&args(&[])).unwrap_err();
-        assert!(matches!(err, CliError::Usage(_)));
+    fn empty_invocation_opens_a_new_scene() {
+        // No options is not an error: it opens an empty scene and prints `[]`.
+        let options = parse_args(&args(&[])).unwrap();
+        assert!(options.scene.is_none());
+        let output = run(&args(&[])).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 0);
     }
 
     #[test]

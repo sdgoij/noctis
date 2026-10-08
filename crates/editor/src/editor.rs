@@ -199,6 +199,26 @@ impl Editor {
         self.load_json(&text)
     }
 
+    /// Open `path` if it exists, otherwise start a new (empty) scene named after
+    /// the file stem.
+    ///
+    /// This is what the CLI uses, so opening a scene that has not been created
+    /// yet does something sensible instead of failing.
+    pub fn open_or_new(&mut self, path: impl AsRef<Path>) -> Result<(), EditorError> {
+        let path = path.as_ref();
+        if path.exists() {
+            self.open(path)
+        } else {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|stem| !stem.is_empty())
+                .unwrap_or("Untitled");
+            self.new_scene(name);
+            Ok(())
+        }
+    }
+
     /// Load a scene from a JSON string, replacing the current scene and history.
     pub fn load_json(&mut self, json: &str) -> Result<(), EditorError> {
         let scene =
