@@ -440,6 +440,34 @@ pub struct ScriptAsset {
     pub source: String,
 }
 
+/// A font source asset: the font file's bytes, ready for an atlas builder.
+///
+/// Glyph rasterization (the atlas) is produced on demand and cached; this type
+/// holds the versioned source the engine reads it from.
+#[derive(Clone, Debug)]
+pub struct FontAsset {
+    /// A human-readable name (usually the file path).
+    pub name: String,
+    /// The font file's bytes (TrueType/OpenType).
+    pub data: Vec<u8>,
+}
+
+impl FontAsset {
+    /// `true` if the bytes begin with a recognised font signature
+    /// (`0x00010000`, `OTTO`, `true`, `ttcf`, `wOFF`, or `wOF2`).
+    pub fn is_font_data(data: &[u8]) -> bool {
+        matches!(
+            data.get(..4),
+            Some([0x00, 0x01, 0x00, 0x00])
+                | Some(b"OTTO")
+                | Some(b"true")
+                | Some(b"ttcf")
+                | Some(b"wOFF")
+                | Some(b"wOF2")
+        )
+    }
+}
+
 /// Bundles the asset stores the engine uses.
 #[derive(Default)]
 pub struct AssetRegistry {
@@ -453,6 +481,8 @@ pub struct AssetRegistry {
     pub audio: Assets<AudioClip>,
     /// Script assets.
     pub scripts: Assets<ScriptAsset>,
+    /// Font assets.
+    pub fonts: Assets<FontAsset>,
     /// HDR environment assets.
     pub hdr: Assets<HdrTexture>,
 }
@@ -520,6 +550,7 @@ impl AssetRegistry {
             + self.textures.len()
             + self.audio.len()
             + self.scripts.len()
+            + self.fonts.len()
             + self.hdr.len()
     }
 
@@ -639,6 +670,15 @@ mod tests {
             samples: vec![0.0; 48_000 * 2],
         };
         assert!((clip.duration() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn font_signatures_are_recognised() {
+        assert!(FontAsset::is_font_data(&[0x00, 0x01, 0x00, 0x00, 0x00]));
+        assert!(FontAsset::is_font_data(b"OTTO...."));
+        assert!(FontAsset::is_font_data(b"true...."));
+        assert!(!FontAsset::is_font_data(b"not a font"));
+        assert!(!FontAsset::is_font_data(b"OT"));
     }
 
     #[test]

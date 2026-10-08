@@ -32,8 +32,8 @@ pub mod world;
 pub mod prelude {
     pub use crate::app::{App, EngineContext, EngineEvent, Stage, System};
     pub use crate::assets::{
-        AssetHandle, AssetId, AssetRegistry, Assets, AudioClip, HdrTexture, Material, Mesh,
-        ScriptAsset, Texture, TextureFormat, Vertex,
+        AssetHandle, AssetId, AssetRegistry, Assets, AudioClip, FontAsset, HdrTexture, Material,
+        Mesh, ScriptAsset, Texture, TextureFormat, Vertex,
     };
     pub use crate::components::{
         Active, AudioSource, BodyType, Camera, Children, Collider, ColliderShape, GlobalTransform,

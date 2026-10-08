@@ -107,8 +107,8 @@ Component types must be `Send + Sync + 'static`.
   `handle(path: &str) -> Option<AssetHandle<T>>`, `get_by_path`,
   `path_of(handle) -> Option<&str>`, `remove(handle) -> bool`, `len`, `is_empty`,
   `iter() -> impl Iterator<Item = (AssetId, Option<&str>, &T)>`.
-- `AssetRegistry { meshes, materials, textures, audio, scripts, hdr }` — each the
-  corresponding `Assets<_>`; `new()`, `with_defaults()` (registers `$white`,
+- `AssetRegistry { meshes, materials, textures, audio, scripts, fonts, hdr }` — each
+  the corresponding `Assets<_>`; `new()`, `with_defaults()` (registers `$white`,
   `$normal` textures and a `$default` material),
   `with_builtins()` (the defaults plus the six primitive meshes under
   `primitives/<name>`; use it when loading scene documents so a built-in mesh
@@ -126,6 +126,9 @@ Component types must be `Send + Sync + 'static`.
 - `HdrTexture { name, width, height, data: Vec<f32> }` — linear RGB, `width*height*3` floats (equirectangular).
 - `AudioClip { name, sample_rate: u32, channels: u16, samples: Vec<f32> }` — `duration()`.
 - `ScriptAsset { name, source }`.
+- `FontAsset { name, data: Vec<u8> }` — a font file's bytes; `is_font_data(&[u8])`
+  recognises TrueType/OpenType signatures. Glyph rasterization (an atlas) is not
+  built yet.
 
 ### Resources & app
 

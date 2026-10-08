@@ -87,6 +87,42 @@ fn scans_textures_and_scripts_and_imports_them_by_path() {
 }
 
 #[test]
+fn imports_a_font_and_rejects_a_non_font() {
+    let dir = temp_project("font");
+    write(&dir.join("noctis.toml"), manifest().as_bytes());
+    let mut ttf = vec![0x00, 0x01, 0x00, 0x00];
+    ttf.extend_from_slice(b"pretend tables");
+    write(&dir.join("assets/fonts/body.ttf"), &ttf);
+    write(&dir.join("assets/fonts/broken.otf"), b"not a font");
+
+    let project = Project::open(&dir).expect("open");
+    let imported = project.import_assets().expect("import");
+
+    assert!(
+        imported
+            .registry
+            .fonts
+            .handle("assets/fonts/body.ttf")
+            .is_some(),
+        "the font is registered"
+    );
+    assert_eq!(
+        imported
+            .registry
+            .fonts
+            .get_by_path("assets/fonts/body.ttf")
+            .unwrap()
+            .data,
+        ttf
+    );
+    // The malformed font is recorded, not fatal.
+    assert_eq!(imported.errors.len(), 1);
+    assert_eq!(imported.errors[0].path.as_str(), "assets/fonts/broken.otf");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn importing_a_texture_populates_the_generated_cache() {
     let dir = temp_project("cache");
     write(&dir.join("noctis.toml"), manifest().as_bytes());

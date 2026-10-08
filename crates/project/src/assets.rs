@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ecs::assets::{AssetRegistry, ScriptAsset};
+use ecs::assets::{AssetRegistry, FontAsset, ScriptAsset};
 
 use crate::cache::{ImportCache, texture_key};
 use crate::error::ProjectError;
@@ -97,6 +97,7 @@ impl std::fmt::Debug for ImportedAssets {
             .field("materials", &self.registry.materials.len())
             .field("textures", &self.registry.textures.len())
             .field("scripts", &self.registry.scripts.len())
+            .field("fonts", &self.registry.fonts.len())
             .field("lookup", &self.lookup.len())
             .field("errors", &self.errors)
             .finish()
@@ -165,7 +166,8 @@ fn import_entry(
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
         AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache),
         AssetKind::Script => import_script(registry, &entry.path, &entry.file),
-        // Audio and fonts have no importer yet; scenes and prefabs are not assets.
+        AssetKind::Font => import_font(registry, &entry.path, &entry.file),
+        // Audio has no importer yet; scenes and prefabs are not assets.
         _ => Ok(()),
     }
 }
@@ -209,6 +211,23 @@ fn import_script(
         source,
     };
     registry.scripts.insert_named(path.as_str(), asset);
+    Ok(())
+}
+
+/// Import a font file: validate its signature and register the source bytes.
+///
+/// Glyph rasterization (a glyph atlas) is the next step and is not yet built; a
+/// `fonts` asset is the versioned source an atlas is baked from.
+fn import_font(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> Result<(), String> {
+    let data = std::fs::read(file).map_err(|error| error.to_string())?;
+    if !FontAsset::is_font_data(&data) {
+        return Err("not a recognised font file (expected TrueType or OpenType)".to_string());
+    }
+    let asset = FontAsset {
+        name: path.as_str().to_string(),
+        data,
+    };
+    registry.fonts.insert_named(path.as_str(), asset);
     Ok(())
 }
 

@@ -200,9 +200,9 @@ each file by extension, and `Project::import_assets` decodes models (via
 its `file#kind/name` fragment path), textures, and scripts into a registry seeded
 with the engine defaults. A file that fails to import is recorded in
 `ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset does
-not stop a project from opening. Audio and fonts are classified but not yet
-decoded. Both `noctis-editor` and `noctis-runtime` build their registry from
-`import_assets()` when `--project` is given.
+not stop a project from opening. Audio is classified but not yet decoded; fonts are
+registered as validated source bytes. Both `noctis-editor` and `noctis-runtime`
+build their registry from `import_assets()` when `--project` is given.
 
 Per-asset **import settings** (persisted, not in the gitignored cache) control
 decoding: a texture is sRGB (color) or linear (data) — the inspector already has
@@ -281,6 +281,12 @@ produced on demand and cached under `.noctis/` like other decoded assets.
 
 Adding a `fonts` store to `AssetRegistry` is a deliberate, additive extension of
 the `ecs` core API; it is listed here so it is a contract change, not a surprise.
+
+*Implemented*: the `fonts` store exists on `AssetRegistry`, holding a
+`FontAsset { name, data }` (the font bytes, validated by signature) that the
+project registers from `assets/fonts/*.ttf|*.otf`. The glyph atlas and a text
+component/renderer are not yet built, so font assets are currently inert beyond
+being imported and versioned.
 
 ## Asset registry ownership
 
@@ -362,7 +368,7 @@ Built on (reuse, do not reinvent):
   serialize as **paths** (`Scene::to_json` / `from_json` take an `AssetRegistry`).
 - `ecs::scene::Prefab` — `{ name, scene: SceneDesc }`, `to_json` / `from_json`.
 - `ecs::assets::AssetRegistry` — typed stores: `meshes`, `materials`, `textures`,
-  `audio`, `scripts` (a `fonts` store is new, see [Fonts](#fonts)).
+  `audio`, `scripts`, `fonts`, `hdr`.
 - `runtime::export_game` — writes `scene.json` + `noctis-game.json` + the exe
   (to be extended to bundle assets).
 - `RuntimeConfig` — `physics`, `audio`, `gravity`, `timestep`.
@@ -384,8 +390,8 @@ New work this design implies (✔ = implemented):
 - Drag & drop in the editor: `Project::import_file` (the import half,
   auto-detect + place + no-clobber) is ✔; wiring the winit file-drop event and the
   viewport/outliner drop targets is remaining.
-- A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
-  importer that bakes a glyph atlas into the cache.
+- ✔ A `fonts` asset store on `AssetRegistry` (additive core-API change). Remaining:
+  a font importer that bakes a glyph atlas into the cache, and a text component.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
 - ✔ `--project` in `noctis-editor` / `noctis-runtime` (both import the project's
