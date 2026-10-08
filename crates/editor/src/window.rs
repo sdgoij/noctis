@@ -843,6 +843,10 @@ impl AppDriver for EditorDriver {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) {
+        // The editor's text is read-only chrome, not content: don't let the user
+        // drag-select the labels. Panels created from this `ui` inherit the style.
+        ui.style_mut().interaction.selectable_labels = false;
+
         egui::Panel::top("noctis_menu").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("Noctis Editor");
@@ -973,4 +977,32 @@ pub fn run_with_controls(
     let mut driver = EditorDriver::new(editor);
     *driver.camera_controls_mut() = controls;
     platform::run(driver, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run one editor frame against a headless egui context and report whether
+    /// the root UI's labels were left selectable.
+    fn selectable_after_a_frame(driver: &mut EditorDriver, ctx: &egui::Context) -> bool {
+        let mut selectable = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            driver.ui(ui);
+            selectable = Some(ui.style().interaction.selectable_labels);
+        });
+        output.drop_without_applying_deltas();
+        selectable.expect("the editor UI ran")
+    }
+
+    #[test]
+    fn editor_labels_are_not_selectable() {
+        let mut driver = EditorDriver::new(Editor::new());
+        let ctx = egui::Context::default();
+
+        // The editor disables selectable labels each frame, so it holds across
+        // frames rather than just the first.
+        assert!(!selectable_after_a_frame(&mut driver, &ctx));
+        assert!(!selectable_after_a_frame(&mut driver, &ctx));
+    }
 }
