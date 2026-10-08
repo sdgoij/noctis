@@ -4,7 +4,7 @@
 //! physics, audio, and scripting crates read and write them; the editor and the
 //! scripting API expose them by name.
 
-use crate::assets::{AssetHandle, AudioClip, Material, Mesh};
+use crate::assets::{AssetHandle, AudioClip, FontAsset, Material, Mesh};
 use crate::world::Entity;
 use math::{Mat4, Quat, Transform, Vec3, vec3};
 
@@ -512,6 +512,74 @@ pub struct PrefabInstance {
     pub prefab: String,
 }
 
+/// Where a text label sits relative to its entity's position.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAnchor {
+    /// Centred, with the middle of the text at the entity (the default).
+    #[default]
+    Center,
+    /// The top-left corner at the entity.
+    TopLeft,
+    /// The top edge centred horizontally.
+    TopCenter,
+    /// The top-right corner at the entity.
+    TopRight,
+    /// The middle of the left edge at the entity.
+    MiddleLeft,
+    /// The middle of the right edge at the entity.
+    MiddleRight,
+    /// The bottom-left corner at the entity.
+    BottomLeft,
+    /// The bottom edge centred horizontally.
+    BottomCenter,
+    /// The bottom-right corner at the entity.
+    BottomRight,
+}
+
+/// A text label drawn at the entity's position (in-world game text, not UI).
+///
+/// The glyphs are rasterized on demand from the [`font`](Self::font) asset; the
+/// renderer builds and caches an atlas per font and size. `size` is the height of
+/// one line in world units, so the label scales with the scene.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Text {
+    /// The string to draw (`\n` starts a new line).
+    pub text: String,
+    /// The font to draw it with.
+    pub font: AssetHandle<FontAsset>,
+    /// The height of one line, in world units.
+    pub size: f32,
+    /// The linear RGBA colour.
+    pub color: [f32; 4],
+    /// Where the text sits relative to the entity's position.
+    pub anchor: TextAnchor,
+    /// Whether geometry in front of the text hides it.
+    pub depth_test: bool,
+}
+
+impl Default for Text {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            font: AssetHandle::NONE,
+            size: 1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            anchor: TextAnchor::Center,
+            depth_test: true,
+        }
+    }
+}
+
+impl Text {
+    /// A label with `text` in the default colour at the default size.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+}
+
 /// The engine's list of "registered" component names, used by the editor and
 /// the scripting layer to build a stable, human-readable component index.
 pub mod component_index {
@@ -543,6 +611,8 @@ pub mod component_index {
         AudioSource,
         /// [`super::Script`]
         Script,
+        /// [`super::Text`]
+        Text,
     }
 
     impl ComponentKind {
@@ -561,6 +631,7 @@ pub mod component_index {
                 ComponentKind::Collider => "Collider",
                 ComponentKind::AudioSource => "AudioSource",
                 ComponentKind::Script => "Script",
+                ComponentKind::Text => "Text",
             }
         }
 
@@ -579,12 +650,13 @@ pub mod component_index {
                 "Collider" => ComponentKind::Collider,
                 "AudioSource" => ComponentKind::AudioSource,
                 "Script" => ComponentKind::Script,
+                "Text" | "TextRenderer" => ComponentKind::Text,
                 _ => return None,
             })
         }
 
         /// Every kind, in a stable order.
-        pub const ALL: [ComponentKind; 12] = [
+        pub const ALL: [ComponentKind; 13] = [
             ComponentKind::LocalTransform,
             ComponentKind::GlobalTransform,
             ComponentKind::Name,
@@ -597,6 +669,7 @@ pub mod component_index {
             ComponentKind::Collider,
             ComponentKind::AudioSource,
             ComponentKind::Script,
+            ComponentKind::Text,
         ];
     }
 }

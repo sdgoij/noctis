@@ -306,9 +306,14 @@ the `ecs` core API; it is listed here so it is a contract change, not a surprise
 
 *Implemented*: the `fonts` store exists on `AssetRegistry`, holding a
 `FontAsset { name, data }` (the font bytes, validated by signature) that the
-project registers from `assets/fonts/*.ttf|*.otf`. The glyph atlas and a text
-component/renderer are not yet built, so font assets are currently inert beyond
-being imported and versioned.
+project registers from `assets/fonts/*.ttf|*.otf`. `render::text` bakes a glyph
+atlas on demand (`FontAtlas::bake`, byte-coverage atlas + per-glyph metrics using
+`ab_glyph`), lays text out (`measure`/`layout`), and builds billboarded glyph
+quads; the renderer keeps a baked atlas per font and caches it for its lifetime,
+and draws every `Text` component in a dedicated depth-tested, alpha-blended pass.
+Still pending: persisting the baked atlas under `.noctis/` (it is currently
+re-baked per process), a non-billboard/attached orientation, and a 2D UI text
+layer.
 
 ## Asset registry ownership
 
@@ -415,8 +420,9 @@ New work this design implies (✔ = implemented):
   auto-detect + place + no-clobber) and the winit `DroppedFile` → `AppDriver::drop_file`
   → project-import path. Remaining: the viewport/outliner **drop-target**
   distinction (needs the drop position).
-- ✔ A `fonts` asset store on `AssetRegistry` (additive core-API change). Remaining:
-  a font importer that bakes a glyph atlas into the cache, and a text component.
+- ✔ A `fonts` asset store on `AssetRegistry` (additive core-API change) and a
+  glyph-atlas + text renderer (`render::text`, the `Text` component). Remaining:
+  persisting the atlas to `.noctis/`, and a 2D UI text layer.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
 - ✔ An explicit `[[scene]]` list in the manifest (`Project::scenes`): names and
@@ -447,7 +453,7 @@ by tests; keep it that way as the project model is added.
 - **UI project picker**: `--project` is the entry point today; opening a project
   from the editor UI (rather than a flag) is designed but not built, so
   `Project::open` remains the single drop-in point.
-- **Fonts**: the store and source bytes are in; bitmap atlas vs. signed-distance
-  field, whether the baked atlas is a cache entry (regenerated) or a committed
-  asset, and which text components ship first (`TextRenderer` in 3D vs. a 2D UI
-  layer) are still open.
+- **Fonts**: *partly resolved* — a bitmap coverage atlas (not SDF), baked on
+  demand at a fixed pixel size and scaled per label; the atlas is cached in the
+  renderer for the process, not yet persisted to `.noctis/` or committed. The
+  in-world `Text` component ships first; a 2D UI text layer is future.

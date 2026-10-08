@@ -40,9 +40,10 @@ use crate::ibl::{IblConfig, IblData};
 use crate::lights::{LightsUniform, MAX_LIGHTS, extract_lights, primary_shadow_light};
 use crate::tonemap::Tonemap;
 use ecs::assets::{AssetId, AssetRegistry, HdrTexture, Material};
-use ecs::components::LightKind;
+use ecs::components::{GlobalTransform, LightKind, Text};
 use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 /// Records an overlay pass (e.g. an egui UI) into a frame's encoder and target.
@@ -116,6 +117,13 @@ struct PreparedDraw {
     material: wgpu::BindGroup,
 }
 
+/// A font atlas uploaded to the GPU, with the CPU atlas kept for layout.
+struct TextAtlas {
+    _texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    atlas: crate::text::FontAtlas,
+}
+
 /// The offscreen PBR renderer.
 pub struct Renderer {
     config: RendererConfig,
@@ -143,6 +151,12 @@ pub struct Renderer {
     gizmo_lines: Option<(wgpu::Buffer, u32)>,
     gizmo_triangles: Option<(wgpu::Buffer, u32)>,
     gizmo_triangle_indices: Option<wgpu::Buffer>,
+    /// The sampler shared by every font atlas.
+    text_sampler: wgpu::Sampler,
+    /// Baked font atlases, uploaded on first use and keyed by font asset id.
+    text_atlases: HashMap<AssetId, TextAtlas>,
+    /// One vertex buffer per font used this frame.
+    text_batches: Vec<(AssetId, wgpu::Buffer, u32)>,
     ambient: [f32; 4],
     exposure: f32,
     tonemap_mode: Tonemap,
@@ -258,6 +272,15 @@ impl Renderer {
         );
         let gizmo_view_bind_group =
             make_view_bind_group(&device, &layouts.view, &gizmo_view_buffer);
+        let text_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("text.sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         let ssao_buffer = uniform_buffer(
             &device,
@@ -329,6 +352,9 @@ impl Renderer {
             gizmo_lines: None,
             gizmo_triangles: None,
             gizmo_triangle_indices: None,
+            text_sampler,
+            text_atlases: HashMap::new(),
+            text_batches: Vec::new(),
             ambient: [1.0, 1.0, 1.0, 1.0],
             exposure: 1.0,
             tonemap_mode: Tonemap::Aces,
@@ -453,6 +479,157 @@ impl Renderer {
         self.gizmo_triangle_indices = None;
     }
 
+    /// The number of font atlases currently uploaded.
+    pub fn cached_font_atlases(&self) -> usize {
+        self.text_atlases.len()
+    }
+
+    /// Bake (or fetch) every font a `Text` component uses, lay the text out, and
+    /// upload one vertex buffer per font for this frame.
+    fn build_text_batches(&mut self, world: &World, assets: &AssetRegistry, view: &CameraView) {
+        self.text_batches.clear();
+
+        // The characters each font must cover: the default set plus everything the
+        // scene draws with it.
+        let mut wanted: HashMap<AssetId, std::collections::BTreeSet<char>> = HashMap::new();
+        for entity in world.entities_with::<Text>() {
+            let Some(text) = world.get::<Text>(entity) else {
+                continue;
+            };
+            if text.text.is_empty() || text.font.is_none() {
+                continue;
+            }
+            let set = wanted.entry(text.font.id()).or_default();
+            set.extend(crate::text::DEFAULT_CHARS.chars());
+            set.extend(text.text.chars());
+        }
+
+        // Bake any missing atlas (one per font, cached for the renderer's life).
+        for (id, chars) in &wanted {
+            if self.text_atlases.contains_key(id) {
+                continue;
+            }
+            let handle = ecs::assets::AssetHandle::<ecs::assets::FontAsset>::new(*id);
+            let Some(font) = assets.fonts.get(handle) else {
+                continue;
+            };
+            if font.data.is_empty() {
+                continue;
+            }
+            let chars: Vec<char> = chars.iter().copied().collect();
+            match crate::text::FontAtlas::bake(&font.data, crate::text::DEFAULT_PX_SIZE, &chars) {
+                Ok(atlas) => {
+                    let (texture, bind_group) = self.upload_atlas(&atlas);
+                    self.text_atlases.insert(
+                        *id,
+                        TextAtlas {
+                            _texture: texture,
+                            bind_group,
+                            atlas,
+                        },
+                    );
+                }
+                Err(error) => log::warn!("font '{}' could not be baked: {error}", font.name),
+            }
+        }
+
+        // Build each label's billboarded quads, grouped by font.
+        let mut by_font: HashMap<AssetId, Vec<crate::text::TextVertex>> = HashMap::new();
+        for entity in world.entities_with::<Text>() {
+            let Some(text) = world.get::<Text>(entity) else {
+                continue;
+            };
+            let Some(atlas) = self.text_atlases.get(&text.font.id()) else {
+                continue;
+            };
+            // Use the propagated transform if present, else the local one (as the
+            // draw list does), so a label need not be part of a propagated world.
+            let origin = if let Some(global) = world.get::<GlobalTransform>(entity) {
+                global.position()
+            } else if let Some(local) = world.get::<ecs::components::LocalTransform>(entity) {
+                local.translation
+            } else {
+                continue;
+            };
+            let vertices = crate::text::build_vertices(
+                &atlas.atlas,
+                &text.text,
+                text.anchor,
+                origin,
+                view.right,
+                view.up,
+                text.size,
+                text.color,
+            );
+            by_font.entry(text.font.id()).or_default().extend(vertices);
+        }
+
+        for (id, vertices) in by_font {
+            if vertices.is_empty() {
+                continue;
+            }
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("text.vertices"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            self.text_batches.push((id, buffer, vertices.len() as u32));
+        }
+    }
+
+    /// Upload a CPU font atlas and build its bind group.
+    fn upload_atlas(&self, atlas: &crate::text::FontAtlas) -> (wgpu::Texture, wgpu::BindGroup) {
+        let texture = &atlas.texture;
+        let size = wgpu::Extent3d {
+            width: texture.width.max(1),
+            height: texture.height.max(1),
+            depth_or_array_layers: 1,
+        };
+        let gpu = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("text.atlas"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gpu,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texture.data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.width * 4),
+                rows_per_image: Some(size.height),
+            },
+            size,
+        );
+        let view = gpu.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("text.atlas_bind_group"),
+            layout: &self.layouts.text,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
+            ],
+        });
+        (gpu, bind_group)
+    }
+
     /// Render one frame offscreen and read the pixels back as RGBA8.
     pub fn render_frame(
         &mut self,
@@ -484,6 +661,7 @@ impl Renderer {
         let lights = extract_lights(world);
         let lights_uniform = LightsUniform::from_lights(&lights);
         let draw_list = extract_draw_list(world, assets, &view);
+        self.build_text_batches(world, assets, &view);
 
         // ---- shadow matrix -------------------------------------------------
         let (shadow_uniform, shadow_matrix, has_shadow) = self.build_shadow(&lights, &draw_list);
@@ -603,8 +781,10 @@ impl Renderer {
             }
         }
 
-        // 2. Depth prepass.
-        if !prepared_opaque.is_empty() {
+        // 2. Depth prepass. This always runs: even an empty scene must leave the
+        // depth buffer defined (cleared to far), or a later depth-tested pass (the
+        // text pass) would compare against undefined depth.
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("depth.pass"),
                 color_attachments: &[],
@@ -748,7 +928,44 @@ impl Renderer {
             }
         }
 
-        // 6. Tonemap.
+        // 6. World-space text (depth-tested, alpha-blended, one pass per font).
+        if !self.text_batches.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("text.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.targets.hdr.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.targets.depth.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipelines.text);
+            pass.set_bind_group(0, &self.gizmo_view_bind_group, &[]);
+            for (font, buffer, count) in &self.text_batches {
+                let Some(atlas) = self.text_atlases.get(font) else {
+                    continue;
+                };
+                pass.set_bind_group(1, &atlas.bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
+        }
+
+        // 7. Tonemap.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tonemap.pass"),
@@ -1455,5 +1672,99 @@ mod tests {
         renderer
             .render_frame(&world, &assets, camera)
             .expect("render frame without gizmo");
+    }
+
+    /// A real font to draw with, if the host has one; `None` skips the test.
+    fn system_font() -> Option<Vec<u8>> {
+        const CANDIDATES: &[&str] = &[
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ];
+        CANDIDATES.iter().find_map(|path| std::fs::read(path).ok())
+    }
+
+    #[test]
+    fn text_renders_or_reports_no_adapter() {
+        use ecs::components::{Camera, Text};
+        use math::vec3;
+
+        let Some(font_data) = system_font() else {
+            eprintln!("skipping text render test: no font on this host");
+            return;
+        };
+        let config = RendererConfig {
+            width: 96,
+            height: 96,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let font = assets.fonts.insert_named(
+            "fonts/body",
+            ecs::assets::FontAsset {
+                name: "body".into(),
+                data: font_data,
+            },
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera {
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            ..Camera::default()
+        });
+        let label = world.spawn_with(Text {
+            text: "Hello".into(),
+            font,
+            size: 1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            anchor: ecs::components::TextAnchor::Center,
+            depth_test: true,
+        });
+        world.insert(
+            label,
+            math::Transform::from_translation(vec3(0.0, 0.0, -3.0)),
+        );
+
+        let with_text = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render with text");
+        assert_eq!(renderer.cached_font_atlases(), 1);
+        assert!(
+            !renderer.text_batches.is_empty(),
+            "the text pass must have a batch to draw"
+        );
+
+        // Removing the label changes the frame, so the text pass drew something.
+        world.despawn(label);
+        let without_text = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render without text");
+
+        let brightest = |frame: &Frame| {
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(
+            brightest(&with_text) > brightest(&without_text) + 32,
+            "the text drawn must be visibly brighter: {} vs {}",
+            brightest(&with_text),
+            brightest(&without_text)
+        );
     }
 }

@@ -9,7 +9,7 @@
 use ecs::assets::{AlphaMode, AssetHandle, AssetId, Assets, Material};
 use ecs::components::{
     Active, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind, MeshRenderer,
-    Projection, RigidBody, Script, Visible,
+    Projection, RigidBody, Script, Text, Visible,
 };
 use ecs::world::Entity;
 use math::{Quat, Vec3, degrees, radians, vec3};
@@ -719,6 +719,9 @@ fn add_component(editor: &mut Editor, entity: Entity, name: ComponentName) {
         }
         ComponentName::Script => {
             editor.insert_component(entity, Script::from_source(NEW_SCRIPT));
+        }
+        ComponentName::Text => {
+            editor.insert_component(entity, Text::new("Text"));
         }
         ComponentName::Active => {
             editor.insert_component(entity, Active(true));

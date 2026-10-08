@@ -15,5 +15,6 @@ bytemuck.workspace = true
 gltf.workspace = true
 image.workspace = true
 pollster.workspace = true
+ab_glyph.workspace = true
 log.workspace = true
 half = { version = "2", features = ["bytemuck"] }

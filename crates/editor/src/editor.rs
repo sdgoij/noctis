@@ -27,7 +27,7 @@ use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture};
 use ecs::components::component_index::ComponentKind;
 use ecs::components::{
     Active, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
-    LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, Visible,
+    LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, Text, Visible,
 };
 use ecs::scene::{Prefab, Scene, SceneDesc, SceneMode, set_parent};
 use ecs::world::{Entity, World};
@@ -1026,6 +1026,7 @@ impl Editor {
             ComponentKind::Collider => self.scene.world.has::<Collider>(entity),
             ComponentKind::AudioSource => self.scene.world.has::<AudioSource>(entity),
             ComponentKind::Script => self.scene.world.has::<Script>(entity),
+            ComponentKind::Text => self.scene.world.has::<Text>(entity),
         }
     }
 
@@ -1595,6 +1596,9 @@ impl Editor {
             }
             ComponentKind::Script => {
                 world.remove::<Script>(entity);
+            }
+            ComponentKind::Text => {
+                world.remove::<Text>(entity);
             }
         }
     }

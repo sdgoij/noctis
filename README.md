@@ -73,3 +73,7 @@ scene references (resolved transitively through the import index), and a
 generated `noctis.toml` so the exported game imports its bundled assets and runs
 its bundled scene when launched. `noctis rename --project <dir> <from> <to>` moves
 an asset and rewrites every reference to it in the project's scenes and prefabs.
+
+In-world text renders: a `Text` component draws billboarded glyphs from a font
+asset (`render::text` bakes a glyph atlas on demand, using
+[`ab_glyph`](https://docs.rs/ab_glyph)), in a depth-tested, alpha-blended pass.

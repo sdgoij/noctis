@@ -443,6 +443,16 @@ fn component_descs(world: &World, entity: Entity, assets: &AssetRegistry) -> Vec
             enabled: s.enabled,
         });
     }
+    if let Some(t) = world.get::<Text>(entity) {
+        out.push(ComponentDesc::Text {
+            text: t.text.clone(),
+            font: assets.fonts.path_of(t.font).map(str::to_string),
+            size: t.size,
+            color: t.color,
+            anchor: TextAnchorDesc::from(&t.anchor),
+            depth_test: t.depth_test,
+        });
+    }
     out
 }
 
@@ -460,6 +470,9 @@ fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<
             }),
         ComponentDesc::AudioSource { clip, .. } => {
             clip.as_deref().filter(|p| assets.audio.handle(p).is_none())
+        }
+        ComponentDesc::Text { font, .. } => {
+            font.as_deref().filter(|p| assets.fonts.handle(p).is_none())
         }
         _ => None,
     }
@@ -624,6 +637,30 @@ fn apply_component(
                     source: source.clone(),
                     path: path.clone(),
                     enabled: *enabled,
+                },
+            );
+        }
+        ComponentDesc::Text {
+            text,
+            font,
+            size,
+            color,
+            anchor,
+            depth_test,
+        } => {
+            let font = font
+                .as_deref()
+                .and_then(|p| assets.fonts.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                Text {
+                    text: text.clone(),
+                    font,
+                    size: *size,
+                    color: *color,
+                    anchor: TextAnchor::from(anchor),
+                    depth_test: *depth_test,
                 },
             );
         }
@@ -928,6 +965,62 @@ impl From<&ColliderShapeDesc> for ColliderShape {
     }
 }
 
+/// A serializable text anchor.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAnchorDesc {
+    /// Centred on the entity.
+    Center,
+    /// The top-left corner at the entity.
+    TopLeft,
+    /// The top edge centred.
+    TopCenter,
+    /// The top-right corner at the entity.
+    TopRight,
+    /// The middle-left edge at the entity.
+    MiddleLeft,
+    /// The middle-right edge at the entity.
+    MiddleRight,
+    /// The bottom-left corner at the entity.
+    BottomLeft,
+    /// The bottom edge centred.
+    BottomCenter,
+    /// The bottom-right corner at the entity.
+    BottomRight,
+}
+
+impl From<&TextAnchor> for TextAnchorDesc {
+    fn from(anchor: &TextAnchor) -> Self {
+        match anchor {
+            TextAnchor::Center => TextAnchorDesc::Center,
+            TextAnchor::TopLeft => TextAnchorDesc::TopLeft,
+            TextAnchor::TopCenter => TextAnchorDesc::TopCenter,
+            TextAnchor::TopRight => TextAnchorDesc::TopRight,
+            TextAnchor::MiddleLeft => TextAnchorDesc::MiddleLeft,
+            TextAnchor::MiddleRight => TextAnchorDesc::MiddleRight,
+            TextAnchor::BottomLeft => TextAnchorDesc::BottomLeft,
+            TextAnchor::BottomCenter => TextAnchorDesc::BottomCenter,
+            TextAnchor::BottomRight => TextAnchorDesc::BottomRight,
+        }
+    }
+}
+
+impl From<&TextAnchorDesc> for TextAnchor {
+    fn from(desc: &TextAnchorDesc) -> Self {
+        match desc {
+            TextAnchorDesc::Center => TextAnchor::Center,
+            TextAnchorDesc::TopLeft => TextAnchor::TopLeft,
+            TextAnchorDesc::TopCenter => TextAnchor::TopCenter,
+            TextAnchorDesc::TopRight => TextAnchor::TopRight,
+            TextAnchorDesc::MiddleLeft => TextAnchor::MiddleLeft,
+            TextAnchorDesc::MiddleRight => TextAnchor::MiddleRight,
+            TextAnchorDesc::BottomLeft => TextAnchor::BottomLeft,
+            TextAnchorDesc::BottomCenter => TextAnchor::BottomCenter,
+            TextAnchorDesc::BottomRight => TextAnchor::BottomRight,
+        }
+    }
+}
+
 /// A serializable component.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1024,6 +1117,21 @@ pub enum ComponentDesc {
         path: Option<String>,
         /// Whether enabled.
         enabled: bool,
+    },
+    /// A text label.
+    Text {
+        /// The string to draw.
+        text: String,
+        /// Font asset path.
+        font: Option<String>,
+        /// Line height, in world units.
+        size: f32,
+        /// Linear RGBA colour.
+        color: [f32; 4],
+        /// Where the text sits relative to the entity's position.
+        anchor: TextAnchorDesc,
+        /// Whether geometry in front hides the text.
+        depth_test: bool,
     },
 }
 

@@ -27,7 +27,8 @@ pub use ecs::primitives;
 use std::f32::consts::TAU;
 
 use ecs::assets::{
-    AlphaMode, AssetRegistry, AudioClip, HdrTexture, Material, ScriptAsset, Texture, TextureFormat,
+    AlphaMode, AssetRegistry, AudioClip, FontAsset, HdrTexture, Material, ScriptAsset, Texture,
+    TextureFormat,
 };
 use ecs::components::component_index::ComponentKind;
 use ecs::prelude::*;
@@ -290,6 +291,17 @@ pub fn build_named(name: impl Into<String>) -> (Scene, AssetRegistry) {
 
     // -- environment -------------------------------------------------------
     assets.hdr.insert_named("env/sky", sky_gradient(64, 32));
+
+    // -- fonts -------------------------------------------------------------
+    // In-world text needs a font; use a host font when one is available, else an
+    // empty font (the label is then skipped when rendering).
+    let font_body = assets.fonts.insert_named(
+        "fonts/body",
+        FontAsset {
+            name: "body".to_string(),
+            data: system_font_bytes().unwrap_or_default(),
+        },
+    );
 
     // =====================================================================
     // Entities
@@ -653,6 +665,20 @@ pub fn build_named(name: impl Into<String>) -> (Scene, AssetRegistry) {
     let script_mover = named(world, "ScriptMover", at(1.0, 0.0, 3.0));
     world.insert(script_mover, Script::from_path("scripts/mover.js"));
 
+    // -- text --------------------------------------------------------------
+    let label = named(world, "Label", at(0.0, 2.0, 3.0));
+    world.insert(
+        label,
+        Text {
+            text: "Noctis".to_string(),
+            font: font_body,
+            size: 0.6,
+            color: [1.0, 0.9, 0.4, 1.0],
+            anchor: TextAnchor::Center,
+            depth_test: true,
+        },
+    );
+
     // -- prefab ------------------------------------------------------------
     // Build a small prop subtree, turn it into a prefab, and re-instantiate it
     // under the hierarchy root.
@@ -718,12 +744,27 @@ pub fn coverage_of(world: &World) -> Vec<&'static str> {
             ComponentKind::Collider => world.count::<Collider>() > 0,
             ComponentKind::AudioSource => world.count::<AudioSource>() > 0,
             ComponentKind::Script => world.count::<Script>() > 0,
+            ComponentKind::Text => world.count::<Text>() > 0,
         };
         if has {
             present.push(kind.name());
         }
     }
     present
+}
+
+/// The bytes of a font available on the host, if any. Used to give the
+/// all-features scene a real label; tests stay portable by skipping when none is
+/// found.
+fn system_font_bytes() -> Option<Vec<u8>> {
+    const CANDIDATES: &[&str] = &[
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ];
+    CANDIDATES.iter().find_map(|path| std::fs::read(path).ok())
 }
 
 #[cfg(test)]

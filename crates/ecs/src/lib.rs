@@ -38,7 +38,7 @@ pub mod prelude {
     pub use crate::components::{
         Active, AudioSource, BodyType, Camera, Children, Collider, ColliderShape, GlobalTransform,
         Light, LightKind, LocalTransform, MeshRenderer, Name, Parent, PrefabInstance, Projection,
-        RigidBody, Script, Visible,
+        RigidBody, Script, Text, TextAnchor, Visible,
     };
     pub use crate::resources::{ActionMap, Events, InputState, Key, MouseButton, MouseState, Time};
     pub use crate::scene::{

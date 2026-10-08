@@ -25,6 +25,8 @@ pub struct BindGroupLayouts {
     pub material: wgpu::BindGroupLayout,
     /// A single-matrix layout used by the depth and gizmo passes.
     pub view: wgpu::BindGroupLayout,
+    /// Group 1 of the text pass: the font atlas texture and its sampler.
+    pub text: wgpu::BindGroupLayout,
     /// Group 0 of the SSAO pass.
     pub ssao: wgpu::BindGroupLayout,
     /// Group 0 of the tonemap pass.
@@ -154,6 +156,11 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         )],
     });
 
+    let text = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("text.atlas_layout"),
+        entries: &[texture(0), sampler(1, false)],
+    });
+
     let ssao = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("ssao.layout"),
         entries: &[uniform(0, wgpu::ShaderStages::FRAGMENT), depth_texture(1)],
@@ -178,6 +185,7 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         object,
         material,
         view,
+        text,
         ssao,
         tonemap,
         present,
@@ -199,6 +207,8 @@ pub struct Pipelines {
     pub gizmo_line: wgpu::RenderPipeline,
     /// Gizmo triangle list.
     pub gizmo_triangle: wgpu::RenderPipeline,
+    /// World-space text glyph quads.
+    pub text: wgpu::RenderPipeline,
     /// HDR -> LDR tonemap.
     pub tonemap: wgpu::RenderPipeline,
 }
@@ -393,6 +403,47 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
     let gizmo_line = gizmo("gizmo.line", wgpu::PrimitiveTopology::LineList);
     let gizmo_triangle = gizmo("gizmo.triangle", wgpu::PrimitiveTopology::TriangleList);
 
+    let text = {
+        let text_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/text.wgsl"));
+        let layout = pipeline_layout(device, "text.layout", &[&layouts.view, &layouts.text]);
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("text"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &text_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(crate::text::TextVertex::layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            // Depth-tested against the scene, but never writes depth.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &text_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+
     let tonemap = {
         let layout = pipeline_layout(device, "tonemap.layout", &[&layouts.tonemap]);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -433,6 +484,7 @@ pub fn create_pipelines(device: &wgpu::Device, layouts: &BindGroupLayouts) -> Pi
         pbr_transparent,
         gizmo_line,
         gizmo_triangle,
+        text,
         tonemap,
     }
 }

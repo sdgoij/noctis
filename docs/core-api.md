@@ -95,6 +95,12 @@ Component types must be `Send + Sync + 'static`.
 - `ColliderShape::Cuboid { half_extents: Vec3 } | Ball { radius: f32 } | Capsule { half_height, radius } | Cylinder { half_height, radius }`.
 - `AudioSource { clip: AssetHandle<AudioClip>, volume, pitch, looped, playing, spatial, max_distance, rolloff }`.
 - `Script { source: Option<String>, path: Option<String>, enabled: bool }` — `from_source`, `from_path`, `has_code`.
+- `Text { text, font: AssetHandle<FontAsset>, size, color, anchor, depth_test }` —
+  `new`, `Default`; in-world billboarded text (not UI). `TextAnchor`
+  (`Center` (default), `TopLeft`/`TopCenter`/`TopRight`, `MiddleLeft`/`MiddleRight`,
+  `BottomLeft`/`BottomCenter`/`BottomRight`) places the label relative to the
+  entity. `size` is the line height in world units; glyphs are rasterized on
+  demand by the renderer.
 
 ### Assets (`ecs::assets`)
 
@@ -116,6 +122,7 @@ Component types must be `Send + Sync + 'static`.
 - `ecs::primitives` — procedural mesh generators (`cube`, `plane`, `sphere`,
   `cylinder`, `capsule`, `torus`), each returning a `Mesh` with positions,
   normals, UVs, tangents, indices, and bounds.
+- `ecs::scene::ComponentDesc` includes `Text { text, font, size, color, anchor: TextAnchorDesc, depth_test }`; a `Text` font reference is validated at load like a mesh or clip.
 - `Vertex { position: [f32;3], normal: [f32;3], uv: [f32;2], tangent: [f32;4] }` (`#[repr(C)]`, `Pod`-friendly).
 - `Mesh { name: String, vertices: Vec<Vertex>, indices: Vec<u32>, bounds: Option<Aabb> }`
   — `compute_bounds()`, `triangle_count()`.

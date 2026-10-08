@@ -163,6 +163,8 @@ pub enum ComponentName {
     AudioSource,
     /// [`ecs::components::Script`]
     Script,
+    /// [`ecs::components::Text`]
+    Text,
 }
 
 impl ComponentName {
@@ -181,6 +183,7 @@ impl ComponentName {
             ComponentName::Collider => ComponentKind::Collider,
             ComponentName::AudioSource => ComponentKind::AudioSource,
             ComponentName::Script => ComponentKind::Script,
+            ComponentName::Text => ComponentKind::Text,
         }
     }
 
@@ -204,6 +207,7 @@ impl ComponentName {
             ComponentKind::Collider => ComponentName::Collider,
             ComponentKind::AudioSource => ComponentName::AudioSource,
             ComponentKind::Script => ComponentName::Script,
+            ComponentKind::Text => ComponentName::Text,
         })
     }
 }
