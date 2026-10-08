@@ -368,6 +368,115 @@ def hum_samples() -> list[float]:
 
 
 # ---------------------------------------------------------------------------
+# HDR environment (Radiance .hdr)
+# ---------------------------------------------------------------------------
+
+# A sunny-late-afternoon key light, so the environment has a *direction*: the sky
+# gradient lights from above, and the sun gives the specular highlights the
+# neutral white fallback could never produce.
+SUN_ELEVATION = math.radians(35.0)
+SUN_AZIMUTH = math.radians(130.0)
+SUN_DIRECTION = (
+    math.cos(SUN_ELEVATION) * math.cos(SUN_AZIMUTH),
+    math.sin(SUN_ELEVATION),
+    math.cos(SUN_ELEVATION) * math.sin(SUN_AZIMUTH),
+)
+SUN_ENERGY = 40.0
+
+
+def sky_radiance(x: int, y: int, width: int, height: int) -> tuple[float, float, float]:
+    """Linear radiance for one equirectangular texel.
+
+    Row 0 is the zenith, matching `ibl::dir_to_equirect_uv` and how Radiance HDRIs
+    are stored (so the engine needs no flip on import).
+    """
+    u = (x + 0.5) / width
+    v = (y + 0.5) / height
+    phi = (0.5 - v) * math.pi          # +pi/2 zenith .. -pi/2 nadir
+    theta = (u - 0.5) * math.tau
+    cz = math.cos(phi)
+    dx = cz * math.cos(theta)
+    dy = math.sin(phi)
+    dz = cz * math.sin(theta)
+
+    if dy >= 0.0:
+        # Pale, hazy horizon warming to a deep blue zenith.
+        t = dy
+        r = 0.85 * (1.0 - t) + 0.12 * t
+        g = 0.80 * (1.0 - t) + 0.28 * t
+        b = 0.72 * (1.0 - t) + 0.72 * t
+        haze = math.exp(-((dy - 0.06) ** 2) / 0.004)
+        r += 0.25 * haze
+        g += 0.22 * haze
+        b += 0.12 * haze
+    else:
+        # Dull ground so floors are not lit from below.
+        t = -dy
+        r = 0.16 * (1.0 - t) + 0.04 * t
+        g = 0.15 * (1.0 - t) + 0.04 * t
+        b = 0.13 * (1.0 - t) + 0.05 * t
+
+    # The sun: a bright disc with a soft glow around it.
+    d = dx * SUN_DIRECTION[0] + dy * SUN_DIRECTION[1] + dz * SUN_DIRECTION[2]
+    if d > 0.0:
+        disc = d**400
+        glow = d**24
+        r += SUN_ENERGY * disc + 0.50 * glow
+        g += 0.90 * SUN_ENERGY * disc + 0.42 * glow
+        b += 0.70 * SUN_ENERGY * disc + 0.30 * glow
+    return (r, g, b)
+
+
+def _rgbe(r: float, g: float, b: float) -> bytes:
+    """Encode a linear RGB triple as Radiance RGBE (shared exponent)."""
+    peak = max(r, g, b)
+    if peak < 1e-32:
+        return bytes((0, 0, 0, 0))
+    _mantissa, exponent = math.frexp(peak)
+    scale = math.ldexp(1.0, 8 - exponent)
+    return bytes(
+        (
+            min(255, int(r * scale)),
+            min(255, int(g * scale)),
+            min(255, int(b * scale)),
+            min(255, max(0, exponent + 128)),
+        )
+    )
+
+
+def build_sky_hdr(width: int = 256, height: int = 128) -> bytes:
+    """A Radiance `.hdr` panorama, written in the new-style per-component RLE.
+
+    The `image` crate's HDR decoder implements only the run-length encodings (it
+    has no uncompressed path), so every scanline is written as a
+    `2, 2, width-hi, width-lo` header followed by four channels of
+    `(count, bytes...)` literal runs.
+    """
+    out = bytearray()
+    out += b"#?RADIANCE\n"
+    out += b"FORMAT=32-bit_rle_rgbe\n"
+    out += b"SOFTWARE=noctis showcase generator\n"
+    out += b"\n"
+    out += f"-Y {height} +X {width}\n".encode("ascii")
+
+    for y in range(height):
+        out += bytes((2, 2, (width >> 8) & 0xFF, width & 0xFF))
+        channels = [[0] * width for _ in range(4)]
+        for x in range(width):
+            r, g, b = sky_radiance(x, y, width, height)
+            pixel = _rgbe(r, g, b)
+            for c in range(4):
+                channels[c][x] = pixel[c]
+        for c in range(4):
+            channel = channels[c]
+            i = 0
+            while i < width:
+                chunk = channel[i : i + 128]
+                out.append(len(chunk))
+                out.extend(chunk)
+                i += len(chunk)
+    return bytes(out)
+
 
 def write_bytes(relative: str, data: bytes) -> None:
     path = os.path.join(ROOT, relative)
@@ -392,6 +501,7 @@ def main() -> int:
     )
     write_bytes("assets/audio/chime.wav", _wav_bytes(chime_samples()))
     write_bytes("assets/audio/engine_hum.wav", _wav_bytes(hum_samples()))
+    write_bytes("assets/hdris/sky.hdr", build_sky_hdr())
     return 0
 
 

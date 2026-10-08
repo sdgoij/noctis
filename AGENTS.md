@@ -80,7 +80,11 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
 ## Known limitations (tracked, not hidden)
 
 - `render`: `sample_count > 1` (MSAA) is clamped to 1; IBL is precomputed on the
-  CPU at load time; one shadow-casting directional/spot light at a time. In-world
+  CPU at load time from the `[render] environment` a project names (a `.hdr`
+  equirectangular map decoded into the `hdr` store) — there is no GPU precompute,
+  no `.exr` decode, and no live re-bake, and an unset environment falls back to a
+  neutral (fully white) one; one shadow-casting directional/spot light at a time.
+  In-world
   text (`ecs::components::Text`) is drawn billboarded by a dedicated pass,
   rasterized from a font atlas baked on demand (`ab_glyph`); the atlas is cached
   per process, not yet persisted under `.noctis/`.
@@ -112,8 +116,9 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
 - `editor`/`runtime` open a live windowed viewport (`--window`). Both CLIs accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):
   it makes `--scene` project-relative, supplies the default scene when `--scene`
-  is omitted, and drives the window title/size and (for the runtime) gravity from
-  the manifest; `--scene` alone still opens a loose scene file. The editor draws
+  is omitted, and drives the window title/size, gravity (for the runtime), and the
+  `[render]` environment both CLIs precompute image-based lighting from, from the
+  manifest; `--scene` alone still opens a loose scene file. The editor draws
   egui panels (outliner, inspector, transform editing), supports click-to-select
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per

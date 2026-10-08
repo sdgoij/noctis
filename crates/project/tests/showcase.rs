@@ -172,3 +172,42 @@ fn the_generated_font_bakes() {
     }
     assert_eq!(atlas.glyph(' ').size, [0.0, 0.0], "a space draws nothing");
 }
+
+#[test]
+fn the_environment_imports_and_feeds_the_ibl_precompute() {
+    let (project, imported) = open();
+
+    // The manifest names it, and it is a project asset, not a scene reference.
+    let path = project
+        .manifest()
+        .render
+        .environment
+        .as_deref()
+        .expect("the showcase names an environment");
+    let environment = imported
+        .registry
+        .hdr
+        .get_by_path(path)
+        .unwrap_or_else(|| panic!("{path:?} imported into the hdr store"));
+
+    assert_eq!((environment.width, environment.height), (256, 128));
+    assert_eq!(environment.data.len(), 256 * 128 * 3);
+    assert!(
+        environment.data.iter().all(|s| s.is_finite() && *s >= 0.0),
+        "every sample is usable radiance"
+    );
+    // A real panorama is *not* uniform: a flat image would be another white
+    // fallback by another name.
+    let min = environment.data.iter().copied().fold(f32::MAX, f32::min);
+    let max = environment.data.iter().copied().fold(f32::MIN, f32::max);
+    assert!(max - min > 0.1, "range {min}..{max}");
+
+    // The environment is usable end to end: the CPU precompute the renderer
+    // uploads runs on it and produces a lit (non-black) irradiance cube.
+    let ibl = render::IblData::generate(environment, render::IblConfig::tiny());
+    assert_eq!(ibl.irradiance.size, 4);
+    assert!(!ibl.prefiltered.is_empty());
+    assert_eq!(ibl.brdf_lut.len(), 8 * 8 * 2);
+    let energy: f32 = ibl.irradiance.faces.iter().map(|texel| texel[0]).sum();
+    assert!(energy > 0.0, "the irradiance cube is black");
+}

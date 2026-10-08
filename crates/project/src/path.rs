@@ -123,8 +123,10 @@ fn has_drive_prefix(path: &str) -> bool {
 pub enum AssetKind {
     /// A model (`.glb`, `.gltf`, `.fbx`).
     Model,
-    /// An image (`.png`, `.jpg`, `.hdr`, ...).
+    /// A 2D image (`.png`, `.jpg`, `.bmp`, `.tga`).
     Texture,
+    /// An equirectangular HDR environment map (`.hdr`) for image-based lighting.
+    Environment,
     /// An audio clip (`.wav`, `.ogg`, `.mp3`).
     Audio,
     /// A font (`.ttf`, `.otf`).
@@ -147,6 +149,7 @@ impl AssetKind {
             self,
             AssetKind::Model
                 | AssetKind::Texture
+                | AssetKind::Environment
                 | AssetKind::Audio
                 | AssetKind::Font
                 | AssetKind::Script
@@ -162,6 +165,7 @@ impl AssetKind {
         Some(match self {
             AssetKind::Model => "assets/models",
             AssetKind::Texture => "assets/textures",
+            AssetKind::Environment => "assets/hdris",
             AssetKind::Audio => "assets/audio",
             AssetKind::Font => "assets/fonts",
             AssetKind::Script => "scripts",
@@ -190,7 +194,10 @@ pub fn detect(path: &str) -> AssetKind {
     };
     match extension {
         "glb" | "gltf" | "fbx" => AssetKind::Model,
-        "png" | "jpg" | "jpeg" | "bmp" | "tga" | "hdr" => AssetKind::Texture,
+        "png" | "jpg" | "jpeg" | "bmp" | "tga" => AssetKind::Texture,
+        // A `.hdr` is an *environment*, not a texture: it decodes to linear f32
+        // radiance and is consumed by the IBL precompute, not sampled as colour.
+        "hdr" => AssetKind::Environment,
         "wav" | "ogg" | "mp3" => AssetKind::Audio,
         "ttf" | "otf" => AssetKind::Font,
         "js" | "mjs" | "wasm" => AssetKind::Script,
@@ -275,6 +282,14 @@ mod tests {
         assert_eq!(detect("prefabs/robot.prefab.json"), AssetKind::Prefab);
         assert_eq!(detect("README"), AssetKind::Unknown);
         assert_eq!(detect("archive.tar.gz"), AssetKind::Unknown);
+    }
+
+    #[test]
+    fn an_hdr_is_an_environment_not_a_texture() {
+        assert_eq!(detect("assets/hdris/sky.hdr"), AssetKind::Environment);
+        assert_eq!(detect("assets/hdris/SKY.HDR"), AssetKind::Environment);
+        assert!(AssetKind::Environment.is_asset());
+        assert_eq!(AssetKind::Environment.default_dir(), Some("assets/hdris"));
     }
 
     #[test]

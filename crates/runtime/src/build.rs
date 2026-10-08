@@ -83,21 +83,29 @@ pub fn build_project(
         })
         .unwrap_or_else(|| project.dir("dist").join(&name));
 
-    let files = bundle_files(&project, &scene_json)?;
+    let (files, environment) = bundle_files(&project, &scene_json)?;
     export_game(
         &destination,
         &name,
         &scene_json,
         &files,
+        environment.as_deref(),
         options.runtime.as_deref(),
     )
     .map_err(|error| error.to_string())
 }
 
-/// The project files a scene references, ready to bundle. A file that is
-/// referenced but absent from disk is an error (the build would ship a broken
-/// game).
-fn bundle_files(project: &Project, scene_json: &str) -> Result<Vec<ExportFile>, String> {
+/// The project files a scene references, plus the project's `[render]`
+/// environment, ready to bundle. A file that is referenced but absent from disk
+/// is an error (the build would ship a broken game).
+///
+/// The environment is returned alongside the files because it is referenced by
+/// the *manifest*, not by the scene, so the exported `noctis.toml` has to name it
+/// even though no entity refers to it.
+fn bundle_files(
+    project: &Project,
+    scene_json: &str,
+) -> Result<(Vec<ExportFile>, Option<String>), String> {
     let imported = project
         .import_assets()
         .map_err(|error| format!("failed to import project assets: {error}"))?;
@@ -114,19 +122,39 @@ fn bundle_files(project: &Project, scene_json: &str) -> Result<Vec<ExportFile>, 
         .map_err(|error| format!("cannot bundle the scene: {error}"))?;
     let mut files = Vec::with_capacity(referenced.len());
     for asset in referenced {
-        let source = project.file_for(&asset);
-        if !source.is_file() {
-            return Err(format!(
-                "cannot bundle the scene: '{}' is referenced but missing on disk",
-                asset.as_str()
-            ));
-        }
-        files.push(ExportFile {
-            relative: asset.as_str().to_string(),
-            source,
-        });
+        files.push(export_file(project, &asset)?);
     }
-    Ok(files)
+
+    // The environment is part of the game even though no scene references it.
+    let environment = project
+        .manifest()
+        .render
+        .environment
+        .as_deref()
+        .map(str::to_string);
+    if let Some(path) = &environment {
+        let asset = AssetPath::parse(path).map_err(|error| error.to_string())?;
+        if !files.iter().any(|file| file.relative == asset.as_str()) {
+            files.push(export_file(project, &asset)?);
+        }
+    }
+    Ok((files, environment))
+}
+
+/// A `(relative, source)` pair for one project asset, erroring when the file is
+/// missing on disk.
+fn export_file(project: &Project, asset: &AssetPath) -> Result<ExportFile, String> {
+    let source = project.file_for(asset);
+    if !source.is_file() {
+        return Err(format!(
+            "cannot bundle the game: '{}' is referenced but missing on disk",
+            asset.as_str()
+        ));
+    }
+    Ok(ExportFile {
+        relative: asset.as_str().to_string(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -217,6 +245,67 @@ mod tests {
 
         let error = build_project(&project, None, &options).expect_err("must fail");
         assert!(error.contains("audio/gone.wav"), "{error}");
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    /// A minimal valid Radiance HDR (2x1, new-style per-component RLE).
+    fn tiny_hdr() -> Vec<u8> {
+        let mut out = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n".to_vec();
+        let pixels = [[200u8, 100, 50, 129], [180, 90, 45, 129]];
+        out.extend_from_slice(&[2, 2, 0, 2]); // scanline header: width 2
+        for (first, second) in pixels[0].iter().zip(pixels[1].iter()) {
+            out.push(2);
+            out.push(*first);
+            out.push(*second);
+        }
+        out
+    }
+
+    #[test]
+    fn build_bundles_the_environment_and_names_it_in_the_export() {
+        let project = temp_dir("env-project");
+        write(
+            &project.join("noctis.toml"),
+            "[project]\nname = \"Game\"\n\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n\n[render]\nenvironment = \"assets/hdris/sky.hdr\"\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            "{ \"name\": \"Main\", \"entities\": [] }",
+        );
+        std::fs::create_dir_all(project.join("assets/hdris")).expect("env dir");
+        std::fs::write(project.join("assets/hdris/sky.hdr"), tiny_hdr()).expect("write hdr");
+
+        // The environment is an importable asset (not just a file on disk).
+        let opened = Project::open(&project).expect("open");
+        let imported = opened.import_assets().expect("import");
+        assert!(imported.errors.is_empty(), "{:#?}", imported.errors);
+        let hdr = imported
+            .registry
+            .hdr
+            .get_by_path("assets/hdris/sky.hdr")
+            .expect("the environment imported");
+        assert_eq!((hdr.width, hdr.height), (2, 1));
+
+        let out = temp_dir("env-out");
+        let options = BuildOptions {
+            destination: Some(out.clone()),
+            ..BuildOptions::default()
+        };
+        let report = build_project(&project, None, &options).expect("build");
+
+        // No scene references it, so bundling it is purely the manifest's doing.
+        assert_eq!(report.files, vec!["assets/hdris/sky.hdr".to_string()]);
+        assert_eq!(
+            std::fs::read(out.join("assets/hdris/sky.hdr")).expect("bundled"),
+            tiny_hdr()
+        );
+        let manifest = std::fs::read_to_string(out.join("noctis.toml")).expect("read");
+        assert!(
+            manifest.contains("environment = \"assets/hdris/sky.hdr\""),
+            "{manifest}"
+        );
 
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&out).ok();

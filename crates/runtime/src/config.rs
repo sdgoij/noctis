@@ -1,5 +1,6 @@
 //! Runtime configuration.
 
+use ecs::assets::{AssetHandle, HdrTexture};
 use math::{Vec3, vec3};
 use physics::PhysicsConfig;
 
@@ -30,6 +31,10 @@ pub struct RuntimeConfig {
     pub gravity: Vec3,
     /// Fixed simulation timestep, in seconds.
     pub timestep: f32,
+    /// The equirectangular HDR environment to precompute image-based lighting
+    /// from (the project's `[render] environment`). `None` uses the renderer's
+    /// neutral, fully-lit fallback.
+    pub environment: Option<AssetHandle<HdrTexture>>,
 }
 
 impl Default for RuntimeConfig {
@@ -39,6 +44,7 @@ impl Default for RuntimeConfig {
             audio: true,
             gravity: vec3(0.0, -9.81, 0.0),
             timestep: 1.0 / 60.0,
+            environment: None,
         }
     }
 }
@@ -71,6 +77,12 @@ impl RuntimeConfig {
         self.timestep = timestep;
         self
     }
+
+    /// Builder: set the HDR environment the renderer precomputes IBL from.
+    pub fn with_environment(mut self, environment: AssetHandle<HdrTexture>) -> Self {
+        self.environment = Some(environment);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -84,6 +96,18 @@ mod tests {
         assert!(config.audio);
         assert!(vec3_approx_eq(config.gravity, vec3(0.0, -9.81, 0.0), 1e-6));
         assert!((config.timestep - 1.0 / 60.0).abs() < 1e-9);
+        assert!(config.environment.is_none(), "no environment by default");
+    }
+
+    #[test]
+    fn an_environment_handle_is_carried_through() {
+        let handle = AssetHandle::<HdrTexture>::from_raw(7);
+        let config = RuntimeConfig::default().with_environment(handle);
+        assert_eq!(config.environment, Some(handle));
+        assert_eq!(
+            config.environment.map(AssetHandle::id).map(|id| id.0),
+            Some(7)
+        );
     }
 
     #[test]

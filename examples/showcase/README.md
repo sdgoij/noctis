@@ -26,6 +26,7 @@ showcase/
     models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
     models/palette.glb           # the named PBR material palette the scenes shade with
     textures/panel_normal.png    # a loose normal map (+ a `srgb = false` sidecar)
+    hdris/sky.hdr                # the equirectangular HDR environment (IBL)
     audio/chime.wav              # a one-shot bell arpeggio (non-spatial)
     audio/engine_hum.wav         # a looping drone (spatial)
     fonts/NoctisSans.ttf         # a font, generated from scratch (see below)
@@ -232,7 +233,7 @@ and no third-party art:
 
 ```sh
 python tools/make_font.py        # assets/fonts/NoctisSans.ttf
-python tools/generate_assets.py  # the models, textures, and audio
+python tools/generate_assets.py  # the models, textures, environment, and audio
 ```
 
 `make_font.py` builds a small TrueType font from scratch (a 5×7 pixel bitmap,
@@ -254,12 +255,28 @@ those names, and a scene says `"material": "Gold"`.
 you assign in the editor's material editor, and it demonstrates the texture
 importer, per-asset import settings, and the `.noctis/` decode cache.
 
+`assets/hdris/sky.hdr` is the scene's **image-based lighting**: a real
+Radiance `.hdr` panorama (written in the new-style per-component RLE the decoder
+requires), a hazy sky with a bright sun so the environment has a *direction*. The
+manifest points at it —
+
+```toml
+[render]
+environment = "assets/hdris/sky.hdr"
+```
+
+— and the renderer precomputes the irradiance, prefiltered specular, and BRDF LUT
+from it when the game or the editor viewport opens. It is what makes the metal
+reflect the sky, gives the surfaces a shadowed side, and keeps the floor from
+washing out; without it the renderer falls back to a neutral (fully white)
+environment, which is flat but usable.
+
 ## Notes and limitations
 
-- **IBL/HDRI** is not wired to the project importer yet, so this project does not
-  ship an environment map; the renderer falls back to its *neutral* environment
-  (a fully white one), which is why the scenes read bright and flat-ish rather
-  than studio-lit.
+- **IBL is CPU-precomputed** when the game (or the editor viewport) starts, from
+the `[render] environment` the manifest names; there is no GPU precompute and no
+run-time re-bake, so changing the environment means restarting. An `.exr`
+environment is not decodable yet (only `.hdr`).
 - **`Text.depth_test` is currently ignored** by the renderer: the text pass uses
   a single depth-test-against-the-scene pipeline, so a label *behind* geometry is
   hidden no matter what the flag says. Labels over geometry are placed slightly

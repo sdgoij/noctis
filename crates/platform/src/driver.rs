@@ -16,6 +16,15 @@ pub trait AppDriver {
     /// example, ensuring a camera exists).
     fn prepare(&mut self) {}
 
+    /// Configure the renderer once it exists and before the first frame: upload an
+    /// image-based-lighting environment, set the tonemap exposure, and so on.
+    ///
+    /// The host calls this right after it builds the surface-backed
+    /// [`Renderer`](render::Renderer), so a driver can apply settings the host
+    /// knows nothing about (the open project's `[render] environment`, say). The
+    /// default does nothing.
+    fn configure_renderer(&self, _renderer: &mut render::Renderer) {}
+
     /// Advance the simulation by `dt` seconds.
     fn update(&mut self, dt: f32);
 

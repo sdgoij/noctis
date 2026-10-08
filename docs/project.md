@@ -27,14 +27,14 @@ mygame/
   noctis.toml           # the manifest (required)
   assets/               # imported source files
     models/             #   .glb/.gltf
-    textures/           #   .png/.jpg/.hdr/...
+    textures/           #   .png/.jpg/.jpeg/.bmp/.tga
+    hdris/              #   .hdr equirectangular environments (for IBL)
     audio/              #   .wav/.ogg
     fonts/              #   .ttf/.otf
     materials/          #   material definitions, if authored separately
   scenes/               # *.scene.json
   prefabs/              # *.prefab.json
   scripts/              # *.js / *.wasm
-  .noctis/              # GENERATED import cache, thumbnails (gitignored)
 ```
 
 Every directory is a convention, not a requirement: `[paths]` in the manifest
@@ -70,6 +70,7 @@ height = 720
 [render]
 hdr = true                        # HDR pipeline + tonemapping
 sample_count = 1
+environment = "assets/hdris/sky.hdr"  # IBL source; omit for a neutral environment
 
 # The input bindings the editor viewport loads (see `--controls` today).
 [input]
@@ -173,7 +174,8 @@ Auto-detect by extension, confirm, then import:
 | Extension(s)                         | Kind    | Default location      |
 | ------------------------------------ | ------- | --------------------- |
 | `.glb`, `.gltf`, `.fbx`              | model   | `assets/models/`      |
-| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`, `.hdr` | texture | `assets/textures/`    |
+| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga` | texture | `assets/textures/`    |
+| `.hdr`                               | environment | `assets/hdris/`   |
 | `.wav`, `.ogg`, `.mp3`               | audio   | `assets/audio/`       |
 | `.ttf`, `.otf`                       | font    | `assets/fonts/`       |
 | `.js`, `.mjs`                        | script  | `scripts/`            |
@@ -205,13 +207,24 @@ is generated and gitignored.
 *Implemented*: `Project::asset_map` scans `assets/` and `scripts/`, classifies
 each file by extension, and `Project::import_assets` decodes models (via
 `render::load_gltf`, registering each sub-asset under both its in-file name and
-its `file#kind/name` fragment path), textures, and scripts into a registry seeded
-with the engine defaults. A file that fails to import is recorded in
-`ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset does
-not stop a project from opening. Audio files decode to `AudioClip`s (WAV/Ogg/MP3
-via the `audio` crate); fonts are registered as validated source bytes. Both
-`noctis-editor` and `noctis-runtime` build their registry from `import_assets()`
-when `--project` is given.
+its `file#kind/name` fragment path), textures, environments, and scripts into a
+registry seeded with the engine defaults. A file that fails to import is recorded
+in `ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset
+does not stop a project from opening. Audio files decode to `AudioClip`s
+(WAV/Ogg/MP3 via the `audio` crate); fonts are registered as validated source
+bytes; `.hdr` environments decode via `render::load_hdr` to linear `f32` radiance
+in the `hdr` store, ready for the IBL precompute. Both `noctis-editor` and
+`noctis-runtime` build their registry from `import_assets()` when `--project` is
+given.
+
+*Implemented (environment)*: `[render] environment` names an imported `.hdr`; the
+runtime resolves it to a handle at startup (a named environment that did not
+import is an error, not a silent downgrade) and calls
+`Renderer::set_environment`, so both the headless and the windowed paths
+precompute IBL from it, and the editor previews the same lighting. `noctis build`
+bundles the environment and writes it into the exported `noctis.toml` and
+`noctis-game.json`, so a shipped game keeps its lighting. Without the setting the
+renderer keeps its neutral (fully white) fallback.
 
 Per-asset **import settings** (persisted, not in the gitignored cache) control
 decoding: a texture is sRGB (color) or linear (data) — the inspector already has
@@ -400,7 +413,8 @@ Built on (reuse, do not reinvent):
   (to be extended to bundle assets).
 - `RuntimeConfig` — `physics`, `audio`, `gravity`, `timestep`.
 - `editor::EditorCommand` + `--print-schema` — the agent-drivable edit API.
-- `render::load_gltf` / `load_gltf_bytes`, `render::load_texture` — importers.
+- `render::load_gltf` / `load_gltf_bytes`, `render::load_texture`, `render::load_hdr` — importers.
+- `render::Renderer::set_environment` / `render::IblData::generate` — the IBL precompute, driven by `[render] environment`.
 - `editor --controls <file>` — camera bindings (to move under the project).
 
 New work this design implies (✔ = implemented):

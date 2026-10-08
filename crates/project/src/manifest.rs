@@ -69,6 +69,12 @@ impl ProjectManifest {
             })?;
         }
 
+        if let Some(environment) = &self.render.environment {
+            AssetPath::parse(environment).map_err(|error| {
+                ProjectError::Manifest(format!("[render] environment is invalid: {error}"))
+            })?;
+        }
+
         let mut seen = std::collections::HashSet::new();
         for target in &self.build_targets {
             if target.name.trim().is_empty() {
@@ -250,6 +256,11 @@ pub struct RenderSettings {
     /// MSAA sample count (`1` disables it).
     #[serde(default = "default_one")]
     pub sample_count: u32,
+    /// The equirectangular `.hdr` environment the renderer precomputes image-based
+    /// lighting from, project-relative. When absent the renderer falls back to a
+    /// neutral, fully-lit environment.
+    #[serde(default)]
+    pub environment: Option<String>,
 }
 
 impl Default for RenderSettings {
@@ -257,6 +268,7 @@ impl Default for RenderSettings {
         Self {
             hdr: true,
             sample_count: 1,
+            environment: None,
         }
     }
 }
@@ -448,6 +460,38 @@ platform = "linux"
             manifest.validate(),
             Err(ProjectError::Manifest(_))
         ));
+    }
+
+    #[test]
+    fn validate_rejects_an_escaping_environment() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n[render]\nenvironment = \"../sky.hdr\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            manifest.validate(),
+            Err(ProjectError::Manifest(_))
+        ));
+    }
+
+    #[test]
+    fn parses_a_render_environment() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n[render]\nenvironment = \"assets/hdris/sky.hdr\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.render.environment.as_deref(),
+            Some("assets/hdris/sky.hdr")
+        );
+        assert!(
+            manifest.render.hdr,
+            "the other render keys keep their defaults"
+        );
+        manifest.validate().unwrap();
+
+        let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        assert_eq!(none.render.environment, None);
     }
 
     #[test]

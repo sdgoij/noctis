@@ -96,6 +96,7 @@ impl std::fmt::Debug for ImportedAssets {
             .field("meshes", &self.registry.meshes.len())
             .field("materials", &self.registry.materials.len())
             .field("textures", &self.registry.textures.len())
+            .field("environments", &self.registry.hdr.len())
             .field("audio", &self.registry.audio.len())
             .field("scripts", &self.registry.scripts.len())
             .field("fonts", &self.registry.fonts.len())
@@ -166,12 +167,26 @@ fn import_entry(
     match entry.kind {
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
         AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache),
+        AssetKind::Environment => import_environment(registry, &entry.path, &entry.file),
         AssetKind::Audio => import_audio(registry, &entry.path, &entry.file),
         AssetKind::Script => import_script(registry, &entry.path, &entry.file),
         AssetKind::Font => import_font(registry, &entry.path, &entry.file),
         // Scenes and prefabs are not assets, and an unknown file is not imported.
         _ => Ok(()),
     }
+}
+
+/// Import an equirectangular `.hdr` environment file, registered under its asset
+/// path, so a project can name it in `[render] environment` and the renderer can
+/// precompute image-based lighting from it.
+fn import_environment(
+    registry: &mut AssetRegistry,
+    path: &AssetPath,
+    file: &Path,
+) -> Result<(), String> {
+    let hdr = render::load_hdr(file).map_err(|error| error.to_string())?;
+    registry.hdr.insert_named(path.as_str(), hdr);
+    Ok(())
 }
 
 /// Import an image file, registered under its asset path. The texture's sRGB-ness

@@ -132,7 +132,11 @@ impl<D: AppDriver> WindowHost<D> {
             sample_count: 1,
         };
         match Renderer::for_surface(renderer_config, instance, surface) {
-            Ok(renderer) => {
+            Ok(mut renderer) => {
+                // Let the driver apply the settings the host cannot know about — an
+                // IBL environment named by the open project, for instance — before
+                // the first frame.
+                self.driver.configure_renderer(&mut renderer);
                 let format = renderer
                     .present_format()
                     .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);

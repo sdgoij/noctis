@@ -84,6 +84,22 @@ fn every_showcase_scene_renders() {
             workspace_root().join(path)
         }
     });
+
+    // Apply the project's `[render] environment` the way the runtime does, so the
+    // previews show the lighting the game actually gets rather than the neutral
+    // fallback.
+    let environment = project
+        .manifest()
+        .render
+        .environment
+        .as_deref()
+        .expect("the showcase names an environment");
+    let hdr = imported
+        .registry
+        .hdr
+        .get_by_path(environment)
+        .expect("the environment imported");
+    renderer.set_environment(hdr, render::IblConfig::default());
     if let Some(dir) = &previews {
         std::fs::create_dir_all(dir).expect("preview dir");
     }

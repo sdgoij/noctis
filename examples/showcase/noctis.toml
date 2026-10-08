@@ -28,6 +28,9 @@ height = 900
 [render]
 hdr = true
 sample_count = 1
+# The equirectangular .hdr the renderer precomputes image-based lighting from.
+# Without it the renderer falls back to a neutral (fully white) environment.
+environment = "assets/hdris/sky.hdr"
 
 # Explicit scene list: controls the editor's ordering and the display names.
 [[scene]]

@@ -164,13 +164,16 @@ pub fn bundled_project(directory: &Path) -> Option<PathBuf> {
 /// executable, writes `scene_json` as [`BUNDLED_SCENE`], copies each of `files`
 /// into the folder (preserving its relative path), and writes a [`MANIFEST`].
 /// When any file is bundled, a [`BUNDLED_PROJECT`] manifest is written too, so the
-/// exported runtime imports the bundled assets. Re-exporting over an existing
-/// folder overwrites the executable, scene, manifest, and files.
+/// exported runtime imports the bundled assets and keeps its settings — including
+/// `environment`, the project-relative `.hdr` the game's IBL is precomputed from.
+/// Re-exporting over an existing folder overwrites the executable, scene,
+/// manifest, and files.
 pub fn export_game(
     destination: &Path,
     name: &str,
     scene_json: &str,
     files: &[ExportFile],
+    environment: Option<&str>,
     runtime: Option<&Path>,
 ) -> Result<ExportReport, ExportError> {
     if !valid_name(name) {
@@ -213,12 +216,13 @@ pub fn export_game(
         copied.push(file.relative.clone());
     }
 
-    // A project manifest lets the exported runtime import the bundled assets.
+    // A project manifest lets the exported runtime import the bundled assets and
+    // keep the settings a scene cannot carry (the IBL environment).
     let project_manifest = if copied.is_empty() {
         None
     } else {
         let path = destination.join(BUNDLED_PROJECT);
-        fs::write(&path, bundled_project_toml(name)).map_err(io)?;
+        fs::write(&path, bundled_project_toml(name, environment)).map_err(io)?;
         Some(path)
     };
 
@@ -228,6 +232,7 @@ pub fn export_game(
         "engine": concat!("noctis ", env!("CARGO_PKG_VERSION")),
         "executable": executable_name(name),
         "scene": BUNDLED_SCENE,
+        "environment": environment,
         "assets": copied,
     });
     let text =
@@ -246,13 +251,17 @@ pub fn export_game(
 
 /// The `noctis.toml` an exported folder carries: a project that runs its bundled
 /// scene and imports its bundled assets.
-fn bundled_project_toml(name: &str) -> String {
+fn bundled_project_toml(name: &str, environment: Option<&str>) -> String {
     // `name` is already validated as a single-component file name, but TOML
     // string escaping is not needed for the `[project].name` we write.
-    format!(
+    let mut toml = format!(
         "[project]\nname = {name:?}\n\n[project.settings]\ndefault_scene = {scene:?}\n",
         scene = BUNDLED_SCENE
-    )
+    );
+    if let Some(environment) = environment {
+        toml.push_str(&format!("\n[render]\nenvironment = {environment:?}\n"));
+    }
+    toml
 }
 
 #[cfg(test)]
@@ -292,7 +301,7 @@ mod tests {
     fn export_writes_a_self_contained_folder() {
         let dir = temp_dir("folder");
         let scene_json = r#"{"name":"Level"}"#;
-        let report = export_game(&dir, "my-game", scene_json, &[], None).expect("export");
+        let report = export_game(&dir, "my-game", scene_json, &[], None, None).expect("export");
 
         assert!(report.executable.is_file());
         assert_eq!(
@@ -326,7 +335,7 @@ mod tests {
     #[test]
     fn export_rejects_an_unsafe_name_without_touching_disk() {
         let dir = temp_dir("bad-name");
-        let error = export_game(&dir, "../evil", "{}", &[], None).expect_err("must reject");
+        let error = export_game(&dir, "../evil", "{}", &[], None, None).expect_err("must reject");
         assert!(matches!(error, ExportError::InvalidName(_)));
         assert!(!dir.exists());
     }
@@ -342,8 +351,15 @@ mod tests {
             source: source.join("assets/textures/wood.png"),
         };
 
-        let report =
-            export_game(&dir, "my-game", "{}", std::slice::from_ref(&file), None).expect("export");
+        let report = export_game(
+            &dir,
+            "my-game",
+            "{}",
+            std::slice::from_ref(&file),
+            None,
+            None,
+        )
+        .expect("export");
         assert_eq!(report.files, vec!["assets/textures/wood.png".to_string()]);
         assert_eq!(
             fs::read(dir.join("assets/textures/wood.png")).expect("bundled asset"),
@@ -361,13 +377,53 @@ mod tests {
     }
 
     #[test]
+    fn an_export_keeps_the_environment_it_was_built_with() {
+        let dir = temp_dir("env");
+        let source = temp_dir("env-src");
+        fs::create_dir_all(source.join("assets/hdris")).expect("mkdir");
+        fs::write(source.join("assets/hdris/sky.hdr"), b"HDR").expect("write env");
+        let file = ExportFile {
+            relative: "assets/hdris/sky.hdr".to_string(),
+            source: source.join("assets/hdris/sky.hdr"),
+        };
+
+        let report = export_game(
+            &dir,
+            "my-game",
+            "{}",
+            std::slice::from_ref(&file),
+            Some("assets/hdris/sky.hdr"),
+            None,
+        )
+        .expect("export");
+
+        // The bundled manifest names the environment, so the exported game
+        // precomputes the same image-based lighting.
+        let text = fs::read_to_string(report.project_manifest.expect("manifest")).expect("read");
+        assert!(text.contains("[render]"), "{text}");
+        assert!(
+            text.contains("environment = \"assets/hdris/sky.hdr\""),
+            "{text}"
+        );
+
+        let game: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&report.manifest).expect("read"))
+                .expect("parse");
+        assert_eq!(game["environment"], "assets/hdris/sky.hdr");
+
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&source).ok();
+    }
+
+    #[test]
     fn export_rejects_an_escaping_relative_path() {
         let dir = temp_dir("escape");
         let file = ExportFile {
             relative: "../evil".to_string(),
             source: PathBuf::from("whatever"),
         };
-        let error = export_game(&dir, "my-game", "{}", &[file], None).expect_err("must reject");
+        let error =
+            export_game(&dir, "my-game", "{}", &[file], None, None).expect_err("must reject");
         assert!(matches!(error, ExportError::InvalidPath(_)));
         assert!(!valid_relative_path("../evil"));
         assert!(valid_relative_path("assets/models/a.glb"));

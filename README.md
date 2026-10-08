@@ -60,7 +60,8 @@ mygame/
   noctis.toml           # the manifest (required)
   assets/
     models/             #   .glb/.gltf
-    textures/           #   .png/.jpg/.hdr/...
+    textures/           #   .png/.jpg/...
+    hdris/              #   .hdr equirectangular environments (image-based lighting)
     audio/              #   .wav/.ogg/.mp3
     fonts/              #   .ttf/.otf
   scenes/               #   *.scene.json
@@ -114,16 +115,30 @@ make `--scene` project-relative, and use the project's `default_scene` when
 `--scene` is omitted. `--scene` on its own still works for a loose, self-contained
 scene file.
 
-**Assets** are imported automatically on open: models (glTF), textures, audio
-(WAV/Ogg/MP3), fonts, and scripts. A file that fails to import is reported as a
-warning and does not stop the project opening; a *scene* that references a missing
-asset is a load error naming the path. Texture decoding is cached under `.noctis/`
-(add that directory to your `.gitignore`). Per-asset settings live in a sidecar
-next to the file, for example `assets/textures/wood.png.import.toml`:
+**Assets** are imported automatically on open: models (glTF), textures, HDR
+environments (`.hdr`), audio (WAV/Ogg/MP3), fonts, and scripts. A file that fails
+to import is reported as a warning and does not stop the project opening; a
+*scene* that references a missing asset is a load error naming the path. Texture
+decoding is cached under `.noctis/` (add that directory to your `.gitignore`).
+Per-asset settings live in a sidecar next to the file, for example
+`assets/textures/wood.png.import.toml`:
 
 ```toml
 srgb = false     # a data map (normal/roughness); omit for colour maps
 ```
+
+**Image-based lighting** comes from an HDR environment the manifest names:
+
+```toml
+[render]
+environment = "assets/hdris/sky.hdr"   # equirectangular; omit for a neutral env
+```
+
+The `.hdr` imports into the `hdr` store as linear floats, and the renderer
+precomputes the diffuse irradiance, the prefiltered specular chain, and the BRDF
+LUT on the CPU when the game (or the editor viewport) starts. Drop the setting and
+surfaces fall back to a neutral, fully-lit white environment — flat, and only
+useful as a placeholder.
 
 **Prefabs** live in the project as `prefabs/<name>.prefab.json`. The editor loads
 them on open (so `instantiate_prefab` resolves them) and `--save-prefabs` writes

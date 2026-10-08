@@ -27,7 +27,7 @@ use ecs::app::App;
 use ecs::assets::AssetRegistry;
 use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
-use render::{Frame, RenderError, Renderer, RendererConfig};
+use render::{Frame, IblConfig, RenderError, Renderer, RendererConfig};
 use script::{NoopHost, ScriptHost, ScriptRuntime};
 
 use crate::config::RuntimeConfig;
@@ -260,7 +260,8 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// panics.
     pub fn enable_renderer(&mut self, config: RendererConfig) -> Result<(), RenderError> {
         match Renderer::headless(config) {
-            Ok(renderer) => {
+            Ok(mut renderer) => {
+                self.apply_environment(&mut renderer);
                 self.renderer = Some(renderer);
                 Ok(())
             }
@@ -271,6 +272,35 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             Err(err) => {
                 log::warn!("renderer initialization failed: {err}");
                 Err(err)
+            }
+        }
+    }
+
+    /// Precompute and upload the configured IBL environment into `renderer`.
+    ///
+    /// Called from both renderer paths — the headless one here, and the
+    /// windowed host through [`AppDriver::configure_renderer`] — so a project's
+    /// `[render] environment` applies however the game is run. A configured but
+    /// unloaded environment is a warning, not a failure: the renderer keeps its
+    /// neutral fallback so a game still runs.
+    ///
+    /// [`AppDriver::configure_renderer`]: platform::AppDriver::configure_renderer
+    pub(crate) fn apply_environment(&self, renderer: &mut Renderer) {
+        let Some(handle) = self.config.environment else {
+            return;
+        };
+        match self.app.context.assets.hdr.get(handle) {
+            Some(hdr) => {
+                log::info!(
+                    "precomputing image-based lighting from environment '{}' ({}x{})",
+                    hdr.name,
+                    hdr.width,
+                    hdr.height
+                );
+                renderer.set_environment(hdr, IblConfig::default());
+            }
+            None => {
+                log::warn!("the configured environment is not loaded; keeping the neutral fallback")
             }
         }
     }

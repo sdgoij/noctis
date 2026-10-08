@@ -227,6 +227,17 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
         }
         None => AssetRegistry::with_builtins(),
     };
+
+    // The project's `[render] environment` names the `.hdr` the renderer
+    // precomputes image-based lighting from. A named environment that did not
+    // import is an error: the game would silently lose its lighting.
+    if let Some(path) = project.and_then(|p| p.manifest().render.environment.as_deref()) {
+        let handle = assets.hdr.handle(path).ok_or_else(|| {
+            format!("the project's [render] environment {path:?} is not an importable .hdr asset")
+        })?;
+        config.environment = Some(handle);
+    }
+
     register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, project, &mut assets)?;
     let host = make_host()?;
@@ -331,7 +342,7 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
         .name
         .clone()
         .unwrap_or_else(|| default_game_name(&scene));
-    export_game(Path::new(destination), &name, &scene_json, &[], None)
+    export_game(Path::new(destination), &name, &scene_json, &[], None, None)
         .map_err(|err| err.to_string())
 }
 
