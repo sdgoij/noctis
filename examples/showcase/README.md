@@ -56,8 +56,8 @@ cargo run -p runtime -- --project examples/showcase --scene scenes/menu.scene.js
 `slag` feature (it pulls in the JS engine, so the build is heavier):
 
 ```sh
-cargo run --manifest-path crates/runtime/Cargo.toml --features slag \
-    -- --project examples/showcase --window
+cargo run --manifest-path crates/runtime/Cargo.toml --bin noctis-runtime \
+    --features slag -- --project examples/showcase --window
 ```
 
 Without it, scripts are discovered and attached but not run.
@@ -144,10 +144,10 @@ Everything else in this walkthrough is CLI-only.
 ```sh
 # Bundle the default scene. With no --target the game takes the project's name,
 # so this writes showcase/dist/Noctis Showcase/.
-cargo run -p runtime -- --bin noctis -- build --project examples/showcase
+cargo run -p runtime --bin noctis -- build --project examples/showcase
 
 # A named [[build]] target supplies its own name and output dir, e.g. dist/showcase/.
-cargo run -p runtime -- --bin noctis -- build --project examples/showcase --target showcase
+cargo run -p runtime --bin noctis -- build --project examples/showcase --target showcase
 ```
 
 A build copies the runtime executable, the scene, every asset the scene
@@ -157,7 +157,7 @@ no arguments to play the bundled scene.
 `noctis rename` moves an asset and rewrites every reference to it:
 
 ```sh
-cargo run -p runtime -- --bin noctis -- rename --project examples/showcase \
+cargo run -p runtime --bin noctis -- rename --project examples/showcase \
     assets/textures/panel_normal.png assets/textures/panel_data.png
 ```
 
