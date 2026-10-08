@@ -24,6 +24,7 @@ showcase/
     spinner.js  bobber.js  spin2d.js  orbit_player.js  spawner.js
   assets/
     models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
+    models/palette.glb           # the named PBR material palette the scenes shade with
     textures/panel_normal.png    # a loose normal map (+ a `srgb = false` sidecar)
     audio/chime.wav              # a one-shot bell arpeggio (non-spatial)
     audio/engine_hum.wav         # a looping drone (spatial)
@@ -77,9 +78,66 @@ the scene back:
 ```sh
 cargo run -p editor -- --print-schema
 cargo run -p editor -- --project examples/showcase \
-    --command '[{ "op": "spawn", "name": "Box" }, { "op": "add_rigid_body" }]' \
+    --command '[{ "op": "spawn", "name": "Box" },
+                { "op": "add_rigid_body", "entity": { "name": "Box" } }]' \
     --out scenes/new.scene.json
 ```
+
+Entities are referenced **by name** (or by `{ "index": .., "generation": .. }`),
+so a batch reads like a script: `spawn`, then act on the name.
+
+### Create a 2D scene from the command line
+
+A scene's `mode` is a presentation hint, not a schema fork. `--mode 2d` records
+`"mode": "2d"` on a scene created from scratch, and a 2D scene wants an
+*orthographic* camera. This batch builds a small 2D board from nothing — the
+commands apply in order and address earlier entities by name:
+
+```sh
+cargo run -p editor -- --project examples/showcase \
+    --scene scenes/board.scene.json --mode 2d \
+    --command '[
+      { "op": "spawn", "name": "Camera" },
+      { "op": "set_translation", "entity": { "name": "Camera" }, "translation": [0, 0, 10] },
+      { "op": "add_camera", "entity": { "name": "Camera" }, "params": {
+          "projection": { "type": "orthographic", "height": 10.0, "near": 0.1, "far": 100.0 },
+          "clear_color": [0.03, 0.04, 0.07, 1.0] } },
+
+      { "op": "spawn", "name": "Backdrop" },
+      { "op": "set_translation", "entity": { "name": "Backdrop" }, "translation": [0, 0, -2] },
+      { "op": "set_scale", "entity": { "name": "Backdrop" }, "scale": [20, 12, 0.2] },
+      { "op": "set_mesh_renderer", "entity": { "name": "Backdrop" }, "params": {
+          "mesh": { "path": "primitives/cube" }, "material": { "path": "Ink" },
+          "cast_shadows": false, "receive_shadows": false } },
+
+      { "op": "spawn", "name": "Spinner" },
+      { "op": "set_translation", "entity": { "name": "Spinner" }, "translation": [-4, -3, 0] },
+      { "op": "set_mesh_renderer", "entity": { "name": "Spinner" }, "params": {
+          "mesh": { "path": "primitives/cube" }, "material": { "path": "Gold" } } },
+      { "op": "attach_script_path", "entity": { "name": "Spinner" }, "path": "scripts/spin2d.js" },
+
+      { "op": "spawn", "name": "Fill Light" },
+      { "op": "set_translation", "entity": { "name": "Fill Light" }, "translation": [0, 0, 5] },
+      { "op": "add_light", "entity": { "name": "Fill Light" }, "params": {
+          "kind": { "type": "directional", "direction": [0, 0, -1] },
+          "color": [1, 1, 1], "intensity": 1.0, "cast_shadows": false } }
+    ]' \
+    --out scenes/board.scene.json
+```
+
+That writes `scenes/board.scene.json` with `"mode": "2d"`, an orthographic
+camera, an `Ink` background quad, a spinning `Gold` square, and a light. Open it
+in the editor (`--window`, then pick it in the outliner) or run it directly:
+
+```sh
+cargo run -p runtime -- --project examples/showcase --scene scenes/board.scene.json --window
+```
+
+`Text` is the one exception here: the command API has no `add_text` op (and
+`Text` is missing from the `component_name` list `remove_component` takes), so a
+title is added by selecting an entity and using the inspector's **Add component
+→ Text**, or by copying the `text` component out of `scenes/menu.scene.json`.
+Everything else in this walkthrough is CLI-only.
 
 ## Build it
 
@@ -108,16 +166,17 @@ cargo run -p runtime -- --bin noctis -- rename --project examples/showcase \
 **`scenes/showcase.scene.json`** (the default) — the broad one. A parented
 hierarchy, two cameras (one active, one inactive with a higher render priority),
 the three light kinds (one shadow-casting directional plus a point and a spot),
-every built-in primitive mesh, a glTF mesh with its imported material and
-textures, rigid bodies and all four collider shapes (including a sensor), spatial
-and non-spatial audio, and a billboarded `Text` label drawn from the generated
-font. It also carries entities an editor would toggle: one `active: false`, one
-`visible: false` — the only way `Active` and `Visible` appear in a scene
-document.
+every built-in primitive mesh shaded with the named palette materials, a glTF
+mesh with its imported material and textures, rigid bodies and all four collider
+shapes (including a sensor), spatial and non-spatial audio, and a billboarded
+`Text` label drawn from the generated font. It also carries entities an editor
+would toggle: one `active: false`, one `visible: false` — the only way `Active`
+and `Visible` appear in a scene document.
 
 **`scenes/physics.scene.json`** — a playground: a ground plane, a tilted ramp, a
 stack of dropping cubes, a bouncy and a heavy ball, a capsule, a fixed pillar, a
-**kinematic** platform driven by `bobber.js`, and a sensor volume.
+**kinematic** platform driven by `bobber.js`, and a sensor pad (a flattened
+trigger volume you walk over).
 
 **`scenes/menu.scene.json`** — a 2D scene (`"mode": "2d"`) with an orthographic
 camera, a backdrop, a title and subtitle, a `PLAY` button, and a spinning
@@ -173,7 +232,7 @@ and no third-party art:
 
 ```sh
 python tools/make_font.py        # assets/fonts/NoctisSans.ttf
-python tools/generate_assets.py  # the model, textures, and audio
+python tools/generate_assets.py  # the models, textures, and audio
 ```
 
 `make_font.py` builds a small TrueType font from scratch (a 5×7 pixel bitmap,
@@ -182,10 +241,15 @@ emitted as a well-formed sfnt with `head`/`glyf`/`cmap`/`hmtx`/… and a real
 we do not have the rights to redistribute. It is a caps-style font, so text is
 readable in uppercase.
 
-The model's PBR textures ride **inside** `drone.glb`: the engine imports a loose
-`.png` as a texture, but a scene references *materials*, and only a glTF carries
-a material — so the base-colour and metallic/roughness maps are embedded in the
-model. `assets/textures/panel_normal.png` is a loose data map instead, with a
+The model's PBR textures ride **inside** `drone.glb`, and the named PBR
+**materials** the scenes shade with live in `palette.glb`: the engine imports a
+loose `.png` as a texture and a loose `.gltf`/`.glb` as a model, but a scene
+references *materials*, and the glTF loader is the only importer that produces
+one today — so both the textures and the material palette travel inside a model.
+`Slate`/`Steel`/`Copper`/`Gold`/`Mint`/`Coral`/`Glow`/`Ink` are registered under
+those names, and a scene says `"material": "Gold"`.
+
+`assets/textures/panel_normal.png` is a loose data map instead, with a
 `panel_normal.png.import.toml` sidecar (`srgb = false`); it is the kind of file
 you assign in the editor's material editor, and it demonstrates the texture
 importer, per-asset import settings, and the `.noctis/` decode cache.
@@ -193,7 +257,17 @@ importer, per-asset import settings, and the `.noctis/` decode cache.
 ## Notes and limitations
 
 - **IBL/HDRI** is not wired to the project importer yet, so this project does not
-  ship an environment map; the renderer falls back to its built-in lighting.
+  ship an environment map; the renderer falls back to its *neutral* environment
+  (a fully white one), which is why the scenes read bright and flat-ish rather
+  than studio-lit.
+- **`Text.depth_test` is currently ignored** by the renderer: the text pass uses
+  a single depth-test-against-the-scene pipeline, so a label *behind* geometry is
+  hidden no matter what the flag says. Labels over geometry are placed slightly
+  toward the camera here (see `Play Label` in `menu.scene.json`) rather than
+  relying on the flag.
+- **The command API cannot add `Text`** (no `add_text` op, and `Text` is absent
+  from the `component_name` list `remove_component` accepts), so agent-authored
+  menus add text through the inspector or by editing the JSON.
 - **Prefabs are not bundled by `noctis build`** — only assets a scene references
   are. The runtime path (`instantiate_prefab` with inline JSON) still works in an
   exported game.
@@ -203,3 +277,20 @@ importer, per-asset import settings, and the `.noctis/` decode cache.
   gitignored.
 - The characters the generated font covers are `A–Z`, `a–z` (folding to caps),
   the digits, and `. : - !`; other characters render blank.
+
+## Tests
+
+The example is covered by the workspace suite, so it cannot silently rot:
+
+```sh
+cargo test --workspace
+```
+
+- `crates/project/tests/showcase.rs` — imports every asset, loads and bundles
+  every scene, checks the showcase scene's component coverage, loads the
+  prefabs, and bakes the generated font.
+- `crates/project/tests/render_previews.rs` — renders each scene on a headless
+  GPU and requires a non-blank frame (skips when there is no adapter). Set
+  `NOCTIS_PREVIEWS=target/previews` to also write the frames out as PNGs.
+- `crates/script/tests/showcase_scripts.rs` — runs all five scripts in the real
+  engine (`cargo test -p script --features slag --test showcase_scripts`).

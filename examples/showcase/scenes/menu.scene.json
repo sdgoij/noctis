@@ -42,7 +42,7 @@
           "type": "light",
           "kind": { "kind": "directional", "direction": [0.0, 0.0, -1.0] },
           "color": [1.0, 1.0, 1.0],
-          "intensity": 2.5,
+          "intensity": 1.0,
           "cast_shadows": false
         }
       ]
@@ -58,7 +58,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/cube",
-          "material": "$default",
+          "material": "Ink",
           "cast_shadows": false,
           "receive_shadows": false
         }
@@ -113,7 +113,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/cube",
-          "material": "$default",
+          "material": "Gold",
           "cast_shadows": false,
           "receive_shadows": false
         },
@@ -136,7 +136,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/cube",
-          "material": "$default",
+          "material": "Copper",
           "cast_shadows": false,
           "receive_shadows": false
         }
@@ -148,7 +148,7 @@
       "parent": 0,
       "active": true,
       "visible": true,
-      "transform": { "translation": [0.0, -2.2, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "transform": { "translation": [0.0, -2.2, 0.25], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
       "components": [
         {
           "type": "text",
@@ -193,7 +193,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/cube",
-          "material": "$default",
+          "material": "Ink",
           "cast_shadows": false,
           "receive_shadows": false
         }
@@ -210,7 +210,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/sphere",
-          "material": "$default",
+          "material": "Ink",
           "cast_shadows": false,
           "receive_shadows": false
         }

@@ -158,6 +158,101 @@ def make_glb(json_text: str, binary: bytes) -> bytes:
     return bytes(out)
 
 
+# A palette of named PBR materials. A scene references *materials*, and the only
+# importer that produces one today is the glTF loader, so the project ships its
+# materials inside a small model. The dark entries ("Ink", "Slate") keep the
+# scenes readable against the engine's neutral (white) environment fallback, and
+# "Glow" is emissive.
+PALETTE: list[tuple[str, list[float], float, float, list[float]]] = [
+    # name     base colour RGBA              metallic  roughness  emissive RGB
+    ("Slate",  [0.20, 0.23, 0.29, 1.0], 0.10, 0.75, [0.0, 0.0, 0.0]),
+    ("Steel",  [0.62, 0.65, 0.70, 1.0], 1.00, 0.30, [0.0, 0.0, 0.0]),
+    ("Copper", [0.85, 0.45, 0.25, 1.0], 1.00, 0.35, [0.0, 0.0, 0.0]),
+    ("Gold",   [0.95, 0.76, 0.30, 1.0], 1.00, 0.25, [0.0, 0.0, 0.0]),
+    ("Mint",   [0.30, 0.72, 0.50, 1.0], 0.00, 0.55, [0.0, 0.0, 0.0]),
+    ("Coral",  [0.88, 0.35, 0.32, 1.0], 0.00, 0.50, [0.0, 0.0, 0.0]),
+    ("Glow",   [0.10, 0.35, 0.40, 1.0], 0.00, 0.40, [0.20, 0.85, 0.95]),
+    ("Ink",    [0.05, 0.06, 0.09, 1.0], 0.00, 0.85, [0.0, 0.0, 0.0]),
+]
+
+
+def triangle_geometry() -> tuple[list[float], list[float], list[float], list[int]]:
+    """A single triangle: 3 vertices, 3 indices (a placeholder mesh)."""
+    positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    normals = [0.0, 0.0, 1.0] * 3
+    texcoords = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    indices = [0, 1, 2]
+    return positions, normals, texcoords, indices
+
+
+def build_palette_glb() -> bytes:
+    """A materials-only model: the project's named PBR palette."""
+    positions, normals, texcoords, indices = triangle_geometry()
+
+    binary = bytearray()
+    for value in positions:
+        binary += struct.pack("<f", value)
+    normal_offset = len(binary)
+    for value in normals:
+        binary += struct.pack("<f", value)
+    uv_offset = len(binary)
+    for value in texcoords:
+        binary += struct.pack("<f", value)
+    index_offset = len(binary)
+    for index in indices:
+        binary += struct.pack("<H", index)
+    while len(binary) % 4 != 0:
+        binary += b"\x00"
+
+    materials = ",".join(
+        '{{ "name": "{name}", "pbrMetallicRoughness": {{ '
+        '"baseColorFactor": [{c0}, {c1}, {c2}, {c3}], '
+        '"metallicFactor": {metallic}, "roughnessFactor": {roughness} }}'
+        '{emissive} }}'.format(
+            name=name,
+            c0=color[0],
+            c1=color[1],
+            c2=color[2],
+            c3=color[3],
+            metallic=metallic,
+            roughness=roughness,
+            emissive=(
+                ', "emissiveFactor": [{e0}, {e1}, {e2}]'.format(
+                    e0=emissive[0], e1=emissive[1], e2=emissive[2]
+                )
+                if any(emissive)
+                else ""
+            ),
+        )
+        for name, color, metallic, roughness, emissive in PALETTE
+    )
+
+    json_text = f"""{{
+  "asset": {{ "version": "2.0", "generator": "noctis showcase generator" }},
+  "scene": 0,
+  "scenes": [ {{ "name": "PaletteScene", "nodes": [0] }} ],
+  "nodes": [ {{ "name": "PaletteMarker", "mesh": 0 }} ],
+  "meshes": [ {{ "name": "PaletteMarker", "primitives": [
+     {{ "attributes": {{ "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }}, "indices": 3, "material": 0 }}
+  ] }} ],
+  "materials": [ {materials} ],
+  "buffers": [ {{ "byteLength": {len(binary)} }} ],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {normal_offset}, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {uv_offset}, "byteLength": 24 }},
+    {{ "buffer": 0, "byteOffset": {index_offset}, "byteLength": 6 }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" }},
+    {{ "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ]
+}}"""
+    return make_glb(json_text, bytes(binary))
+
+
 def build_drone_glb() -> bytes:
     positions, normals, texcoords, indices = cube_geometry()
 
@@ -284,6 +379,7 @@ def write_bytes(relative: str, data: bytes) -> None:
 
 def main() -> int:
     write_bytes("assets/models/drone.glb", build_drone_glb())
+    write_bytes("assets/models/palette.glb", build_palette_glb())
     write_bytes(
         "assets/textures/panel_normal.png",
         png_rgba(128, 128, normal_pixels(128, 128)),
