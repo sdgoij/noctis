@@ -1080,6 +1080,21 @@ impl Editor {
         Ok(entities)
     }
 
+    /// Load an image file and register it as a texture asset under its path.
+    ///
+    /// `srgb` selects the texture's color format: `true` for color maps (albedo,
+    /// emissive), `false` for data maps (normal, metallic/roughness, occlusion).
+    pub fn import_texture(
+        &mut self,
+        path: impl AsRef<Path>,
+        srgb: bool,
+    ) -> Result<AssetHandle<Texture>, EditorError> {
+        let path = path.as_ref();
+        let texture =
+            render::load_texture(path, srgb).map_err(|e| EditorError::Image(e.to_string()))?;
+        Ok(self.register_texture(path.to_string_lossy().into_owned(), texture))
+    }
+
     /// Register a glTF's assets and instantiate its nodes, parenting the roots
     /// to `parent` when given. Shared by the command and method paths.
     fn instantiate_loaded(
@@ -2000,6 +2015,36 @@ mod tests {
         );
         let root = entities[0];
         assert_eq!(ed.name_of(root).as_deref(), Some("Tri"));
+    }
+
+    #[test]
+    fn import_texture_registers_the_file() {
+        let dir = std::env::temp_dir().join(format!("noctis-editor-tex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wood.png");
+        let mut pixels = image::RgbaImage::new(2, 3);
+        pixels.put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        pixels.save(&path).unwrap();
+
+        let mut ed = editor();
+        let handle = ed.import_texture(&path, true).unwrap();
+        let texture = ed.assets().textures.get(handle).expect("registered");
+        assert_eq!((texture.width, texture.height), (2, 3));
+        assert_eq!(
+            ed.assets().textures.path_of(handle),
+            Some(path.to_str().unwrap())
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn import_texture_of_a_missing_file_errors() {
+        let mut ed = editor();
+        let err = ed
+            .import_texture("definitely-missing.png", true)
+            .unwrap_err();
+        assert!(matches!(err, EditorError::Image(_)), "{err:?}");
     }
 
     #[test]

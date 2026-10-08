@@ -392,9 +392,29 @@ impl EditorDriver {
             return;
         }
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::inspector::show(&mut self.editor, entity, &mut self.inspector, ui);
-        });
+        // Fold a continuous edit (a slider drag, a typing session) into a single
+        // undo step: keep one interactive edit open while the pointer is down or a
+        // widget holds focus, so every change folds into it. Skipped during a gizmo
+        // drag, which manages its own step.
+        if self.drag.is_none() {
+            let interacting = ui.ctx().memory(|memory| memory.focused().is_some())
+                || ui.ctx().input(|input| input.pointer.any_down());
+            if interacting && !self.editor.in_interactive_edit() {
+                self.editor.begin_interactive_edit();
+            } else if !interacting && self.editor.in_interactive_edit() {
+                self.editor.end_interactive_edit();
+            }
+        }
+
+        // A glTF import hands back the root of the new object so it gets focused.
+        let pick = egui::ScrollArea::vertical()
+            .show(ui, |ui| {
+                crate::inspector::show(&mut self.editor, entity, &mut self.inspector, ui)
+            })
+            .inner;
+        if let Some(entity) = pick {
+            self.select(entity);
+        }
     }
 
     /// A world-space ray through `pointer` inside the viewport `rect`, or `None`
@@ -925,5 +945,36 @@ mod tests {
         // frames rather than just the first.
         assert!(!selectable_after_a_frame(&mut driver, &ctx));
         assert!(!selectable_after_a_frame(&mut driver, &ctx));
+    }
+
+    #[test]
+    fn a_continuous_edit_folds_into_one_undo_step() {
+        use crate::command::LightParams;
+        use ecs::components::Light;
+
+        let mut editor = Editor::new();
+        let entity = editor.spawn("Sun", None);
+        editor.add_light(entity, LightParams::default()).unwrap();
+        let mut driver = EditorDriver::new(editor);
+        driver.select(entity);
+
+        // Simulate a drag: open one interactive edit and make several changes.
+        driver.editor_mut().begin_interactive_edit();
+        for _ in 0..5 {
+            driver
+                .editor_mut()
+                .edit_component::<Light>(entity, |light| light.intensity += 1.0);
+        }
+
+        // One frame with no pointer down and no focus closes the step.
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| driver.ui(ui));
+        output.drop_without_applying_deltas();
+
+        // spawn + add_light + the single folded drag step.
+        assert_eq!(driver.editor().history_len(), 3);
+        assert!(driver.editor_mut().undo());
+        let light = driver.editor().component::<Light>(entity).unwrap();
+        assert_eq!(light.intensity, 1.0, "the whole drag undoes at once");
     }
 }

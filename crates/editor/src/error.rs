@@ -30,6 +30,8 @@ pub enum EditorError {
     Scene(String),
     /// A glTF import failed.
     Gltf(String),
+    /// An image/texture file failed to load or decode.
+    Image(String),
     /// A filesystem operation failed.
     Io(String),
     /// A JSON payload could not be (de)serialized.
@@ -50,6 +52,7 @@ impl fmt::Display for EditorError {
             EditorError::Invalid(msg) => write!(f, "invalid command: {msg}"),
             EditorError::Scene(msg) => write!(f, "scene error: {msg}"),
             EditorError::Gltf(msg) => write!(f, "glTF import error: {msg}"),
+            EditorError::Image(msg) => write!(f, "image error: {msg}"),
             EditorError::Io(msg) => write!(f, "io error: {msg}"),
             EditorError::Json(msg) => write!(f, "json error: {msg}"),
             EditorError::EmptyHistory => write!(f, "history is empty"),
@@ -76,6 +79,7 @@ mod tests {
             EditorError::Invalid("boom".into()),
             EditorError::Scene("boom".into()),
             EditorError::Gltf("boom".into()),
+            EditorError::Image("boom".into()),
             EditorError::Io("boom".into()),
             EditorError::Json("boom".into()),
             EditorError::EmptyHistory,

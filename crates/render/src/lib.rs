@@ -53,6 +53,7 @@ pub mod ibl;
 pub mod lights;
 pub mod pcf;
 pub mod renderer;
+pub mod textures;
 pub mod tonemap;
 
 pub use camera::{
@@ -67,4 +68,5 @@ pub use ibl::{IblConfig, IblData};
 pub use lights::{ExtractedLight, LightsUniform, MAX_LIGHTS, extract_lights};
 pub use pcf::{DEFAULT_PCF_KERNEL, pcf_kernel_offsets};
 pub use renderer::{Frame, Renderer, RendererConfig};
+pub use textures::load_texture;
 pub use tonemap::Tonemap;

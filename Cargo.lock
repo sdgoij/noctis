@@ -803,6 +803,7 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "ecs",
+ "image",
  "log",
  "math",
  "platform",

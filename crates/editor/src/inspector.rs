@@ -40,15 +40,26 @@ const NEW_SCRIPT: &str =
 pub(crate) struct InspectorState {
     /// The kind selected in the "add component" combo.
     add_index: usize,
+    /// Path typed into the glTF import field.
+    gltf_path: String,
+    /// Path typed into the texture import field.
+    texture_path: String,
+    /// Whether an imported texture is treated as an sRGB color map.
+    texture_srgb: bool,
+    /// The last import error, if any.
+    import_error: Option<String>,
 }
 
 /// Draw the whole inspector for `entity`.
+///
+/// Returns an entity to select (the root of a freshly imported glTF, so the new
+/// object is focused), or `None`.
 pub(crate) fn show(
     editor: &mut Editor,
     entity: Entity,
     state: &mut InspectorState,
     ui: &mut egui::Ui,
-) {
+) -> Option<Entity> {
     name_row(editor, entity, ui);
     flags_row(editor, entity, ui);
     transform_section(editor, entity, ui);
@@ -76,6 +87,7 @@ pub(crate) fn show(
     }
 
     add_component_row(editor, entity, state, ui);
+    import_section(editor, state, ui)
 }
 
 // ---------------------------------------------------------------------------
@@ -716,6 +728,60 @@ fn add_component(editor: &mut Editor, entity: Entity, name: ComponentName) {
         }
         ComponentName::LocalTransform | ComponentName::GlobalTransform | ComponentName::Name => {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+/// A path field + button to import a glTF model or a texture file. Returns the
+/// root entity of an imported glTF so the caller can select it.
+fn import_section(
+    editor: &mut Editor,
+    state: &mut InspectorState,
+    ui: &mut egui::Ui,
+) -> Option<Entity> {
+    let mut select = None;
+    egui::CollapsingHeader::new("Import asset")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("glTF");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.gltf_path)
+                        .desired_width(180.0)
+                        .hint_text("models/model.glb"),
+                );
+                if ui.button("Import model").clicked() {
+                    match editor.import_gltf(&state.gltf_path) {
+                        Ok(entities) => {
+                            state.import_error = None;
+                            select = entities.first().copied();
+                        }
+                        Err(error) => state.import_error = Some(error.to_string()),
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Texture");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.texture_path)
+                        .desired_width(180.0)
+                        .hint_text("textures/albedo.png"),
+                );
+                if ui.button("Import texture").clicked() {
+                    match editor.import_texture(&state.texture_path, state.texture_srgb) {
+                        Ok(_) => state.import_error = None,
+                        Err(error) => state.import_error = Some(error.to_string()),
+                    }
+                }
+            });
+            ui.checkbox(&mut state.texture_srgb, "Texture is sRGB (color map)");
+            if let Some(error) = &state.import_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 80, 80), error);
+            }
+        });
+    select
 }
 
 // ---------------------------------------------------------------------------

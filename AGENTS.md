@@ -108,9 +108,13 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   inspector edits every component of the selection — name, Active/Visible, the
   transform, and Camera/Light/MeshRenderer/RigidBody/Collider/AudioSource/Script
   — with add/remove buttons, asset pickers for meshes/materials/audio clips, and
-  an in-place material editor that assigns textures to each map slot. Edits go
-  through `Editor::edit_component`/`insert_component`, so they preserve fields
-  the command path would reset and each is one undo step. The
+  an in-place material editor that assigns textures to each map slot. An
+  **Import asset** section imports a glTF model (spawning its hierarchy, then
+  selecting the root) or a texture file (`Editor::import_texture`, decoded by
+  `render::load_texture`). Edits go through
+  `Editor::edit_component`/`insert_component`, so they preserve fields the
+  command path would reset, and a drag or typing session folds into a single
+  undo step. The
   viewport is navigated with WASD (fly), Q/E (down/up), a middle-mouse drag
   (orbit about the selection, or the origin when nothing is selected), Shift +
   middle-mouse (pan) and the scroll wheel (dolly); these bindings live in
