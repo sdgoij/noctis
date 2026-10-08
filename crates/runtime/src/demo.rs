@@ -1,4 +1,4 @@
-//! A small built-in scene so `noctis-runtime --demo` does something useful with
+//! A small built-in scene so `noctis run --demo` does something useful with
 //! no input files: a ground slab, a falling ball, a camera, and a sun.
 
 use ecs::assets::{AssetRegistry, Material, Mesh, Vertex};

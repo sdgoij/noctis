@@ -16,9 +16,10 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `script` | `crates/script` | Script runtime + engine API; Slag JS backend behind the `slag` feature. |
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
 | `project` | `crates/project` | The project model: `noctis.toml`, canonical asset paths, type detection, discovery. |
-| `editor` | `crates/editor` | Scene editor library + AI-controllable command API + `noctis-editor` CLI. |
-| `runtime` | `crates/runtime` | Game runtime/export loop + `noctis-runtime` CLI. |
+| `editor` | `crates/editor` | Scene editor library + AI-controllable command API; its CLI is `noctis editor`. |
+| `runtime` | `crates/runtime` | Game runtime/export loop; ships the stripped `noctis-game` binary an export copies. |
 | `platform` | `crates/platform` | Window + winit event loop + egui overlay; drives any `AppDriver` into a surface-backed viewport. |
+| `noctis` | `crates/noctis` | The `noctis` multicall tool (`editor`/`run`/`build`/`rename`) and the embedding facade (`noctis::prelude`). |
 
 The frozen interface between `math`/`ecs` and everything else is documented in
 [`docs/core-api.md`](docs/core-api.md). **Treat it as a contract**: if a consumer
@@ -33,13 +34,15 @@ paths and references, import, and build targets — is designed in
 ## Commands
 
 ```sh
-cargo build --workspace                 # build everything
+cargo build --workspace                 # build everything, incl. the noctis-game binary
 cargo test  --workspace                 # run the whole suite (required before claiming done)
 cargo test  -p ecs                      # one crate
 cargo clippy --workspace --all-targets  # lints
 cargo fmt --all                         # format (max_width = 100)
+cargo run   -- editor                   # `noctis` is the default binary (default-members)
 cargo test  -p script  --features slag  # real JavaScript backend + its smoke tests
-cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a game
+cargo run   --features slag -- run --project <dir>   # JS in a game, in-process
+cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game  # a JS game runtime
 ```
 
 ## Non-negotiable standards
@@ -110,7 +113,7 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   ids, because a JavaScript `f64` cannot represent a 64-bit `EntityId` exactly. A
   WebAssembly module travels as a `wasm:`-prefixed hex descriptor (the script
   channel is text); `wasm_host::load`/`register` read a `.wasm` file into that
-  form, and `noctis-runtime --wasm <name>=<path>` registers one for a game. Note
+  form, and `noctis run --wasm <name>=<path>` registers one for a game. Note
   Slag's Cranelift
   build adds ~20-30s to a cold build of the feature. `runtime` forwards the
   feature, so a game built and run with it executes real JavaScript and
@@ -119,7 +122,8 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   To make that possible, `App` systems are deliberately **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.
-- `editor`/`runtime` open a live windowed viewport (`--window`). Both CLIs accept
+- `noctis editor` and `noctis run` open a live windowed viewport (a window is the
+  default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):
   it makes `--scene` project-relative, supplies the default scene when `--scene`
   is omitted, and drives the window title/size, gravity (for the runtime), and the
@@ -148,10 +152,18 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   scene. With `--project` the editor imports the project's assets and loads its
   prefabs (`prefabs/*.prefab.json`), and `--save-prefabs` writes the edited prefab
   library back.
-  `noctis-runtime --export <dir> --scene <file>` writes a self-contained game
-  folder (a copy of the executable, `scene.json`, and a manifest) that loads its
-  bundled scene when run with no arguments. The windowed loop is not unit-tested
-  (it blocks and needs a display).
+  `noctis run --export <dir> --scene <file>` writes a self-contained game folder
+  (a copy of `noctis-game`, `scene.json`, and a manifest) that loads its bundled
+  scene when run with no arguments; `noctis build` does the same for a project
+  (its referenced assets included). The windowed loop is not unit-tested (it
+  blocks and needs a display).
+- `noctis`: a build without the `slag` feature cannot run or build a project that
+  attaches scripts. `noctis run` and `noctis build` refuse one with a message
+  naming `--features slag`; `--allow-inert` overrides (the scripts are then
+  skipped, and an exported inert game must be run with `--allow-inert` too). The
+  stripped `noctis-game` binary an export ships is built on its own —
+  `cargo build --manifest-path crates/runtime/Cargo.toml --bin noctis-game` (add
+  `--features slag` for a JavaScript game).
 
 ## Commit messages
 

@@ -4,8 +4,8 @@
 //! or the project's `default_scene`), imports the project's assets, and bundles
 //! the files the scene references alongside the runtime executable, the scene
 //! document, a project manifest (so the exported runtime can import its assets),
-//! and a game manifest. This is what drives `noctis build` and
-//! `noctis-runtime --project <dir> --export <dir>`.
+//! and a game manifest. This is what drives `noctis build` and `noctis run
+//! --export`.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +13,7 @@ use ecs::scene::SceneDesc;
 use project::{AssetPath, BuildTarget, Project};
 
 use crate::export::{ExportFile, ExportReport, export_game};
+use crate::scripts;
 
 /// Overrides applied on top of a project's build target (or its default scene).
 #[derive(Clone, Debug, Default)]
@@ -24,9 +25,12 @@ pub struct BuildOptions {
     pub name: Option<String>,
     /// The scene, project-relative. Overrides the target and project default.
     pub scene: Option<String>,
-    /// The runtime executable to ship. Defaults to the sibling `noctis-runtime`
+    /// The runtime executable to ship. Defaults to the sibling `noctis-game`
     /// (see [`crate::export::default_runtime_executable`]).
     pub runtime: Option<PathBuf>,
+    /// Build even if the scene attaches scripts this build cannot execute (they
+    /// are bundled but will not run). The `--allow-inert` flag sets this.
+    pub allow_inert: bool,
 }
 
 /// Build `project_dir` into a self-contained game folder.
@@ -61,6 +65,13 @@ pub fn build_project(
     let scene_path = project.file_for(&scene_asset);
     let scene_json = std::fs::read_to_string(&scene_path)
         .map_err(|error| format!("failed to read scene '{}': {error}", scene_path.display()))?;
+
+    // A game whose scripts this build cannot execute is refused, unless the caller
+    // opted into an inert build.
+    scripts::require_scripting(
+        scripts::scripts_in_document(&scene_json)?,
+        options.allow_inert,
+    )?;
 
     let name = options
         .name
@@ -205,6 +216,8 @@ mod tests {
         let out = temp_dir("out");
         let options = BuildOptions {
             destination: Some(out.clone()),
+            // This test is about bundling the referenced script, not the JS gate.
+            allow_inert: true,
             ..BuildOptions::default()
         };
 
@@ -306,6 +319,41 @@ mod tests {
             manifest.contains("environment = \"assets/hdris/sky.hdr\""),
             "{manifest}"
         );
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[cfg(not(feature = "slag"))]
+    #[test]
+    fn a_script_project_is_refused_without_a_javascript_backend() {
+        let project = temp_dir("gate");
+        write(&project.join("noctis.toml"), MANIFEST);
+        write(
+            &project.join("scripts/hello.js"),
+            "function on_update() {}\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            r#"{
+                "name": "Main",
+                "entities": [{
+                    "id": 0, "name": "Box",
+                    "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "script", "source": null, "path": "scripts/hello.js", "enabled": true }
+                    ]
+                }]
+            }"#,
+        );
+        let out = temp_dir("gate-out");
+        let options = BuildOptions {
+            destination: Some(out.clone()),
+            ..BuildOptions::default()
+        };
+
+        let error = build_project(&project, None, &options).expect_err("must refuse");
+        assert!(error.contains("--allow-inert"), "{error}");
 
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&out).ok();

@@ -750,7 +750,7 @@ impl AppDriver for EditorDriver {
     /// previews a scene under the same image-based lighting the game will use.
     ///
     /// This runs before the logger-independent CLI output, so it reports through
-    /// `eprintln!` like the rest of `noctis-editor` (the crate installs no
+    /// `eprintln!` like the rest of `noctis editor` (the crate installs no
     /// logger).
     fn configure_renderer(&self, renderer: &mut render::Renderer) {
         let Some(path) = self
@@ -763,13 +763,13 @@ impl AppDriver for EditorDriver {
         match self.editor.assets().hdr.get_by_path(path) {
             Some(hdr) => {
                 eprintln!(
-                    "noctis-editor: environment '{}' ({}x{})",
+                    "noctis editor: environment '{}' ({}x{})",
                     hdr.name, hdr.width, hdr.height
                 );
                 renderer.set_environment(hdr, render::IblConfig::default());
             }
             None => eprintln!(
-                "noctis-editor: warning: environment {path:?} is not loaded; \
+                "noctis editor: warning: environment {path:?} is not loaded; \
                  using the neutral environment"
             ),
         }
@@ -963,22 +963,22 @@ impl AppDriver for EditorDriver {
         match self.project.clone() {
             Some(project) => match project.import_file(path) {
                 Ok(asset) => {
-                    eprintln!("noctis-editor: imported {}", asset.as_str());
+                    eprintln!("noctis editor: imported {}", asset.as_str());
                     if matches!(detect(asset.as_str()), AssetKind::Model) {
                         let file = project.file_for(&asset);
                         if let Err(error) = self.editor.import_gltf(&file) {
                             eprintln!(
-                                "noctis-editor: failed to instantiate {}: {error}",
+                                "noctis editor: failed to instantiate {}: {error}",
                                 asset.as_str()
                             );
                         }
                     }
                 }
-                Err(error) => eprintln!("noctis-editor: drop import failed: {error}"),
+                Err(error) => eprintln!("noctis editor: drop import failed: {error}"),
             },
             None => {
                 if let Err(error) = self.editor.import_gltf(path) {
-                    eprintln!("noctis-editor: drop import failed: {error}");
+                    eprintln!("noctis editor: drop import failed: {error}");
                 }
             }
         }

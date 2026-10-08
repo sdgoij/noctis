@@ -35,33 +35,32 @@ showcase/
 
 ## Run it
 
-```sh
-# The default scene, in a window (Esc closes it).
-cargo run -p runtime -- --project examples/showcase --window
+The showcase attaches JavaScript, so `noctis run` and `noctis build` refuse it
+unless the `slag` backend is present. Give the runtime the backend once, then run
+the full demo:
 
-# Headless: import the assets, run 120 physics/script frames, print a summary.
-cargo run -p runtime -- --project examples/showcase --frames 120 --print-summary
+```sh
+cargo run --features slag -- run --project examples/showcase
+```
+
+That opens the default scene in a window (Esc closes it). Without the backend, add
+`--allow-inert` to watch the scenery — physics and rendering still run, the
+scripts do not:
+
+```sh
+# Headless: import the assets, run 120 frames, print a summary.
+cargo run -- run --headless --project examples/showcase --frames 120 --allow-inert
 
 # Headless with the GPU on a dummy surface (needs a graphics adapter).
-cargo run -p runtime -- --project examples/showcase --render --frames 4
+cargo run -- run --headless --project examples/showcase --render --frames 4 --allow-inert
 ```
 
-Run a different scene with `--scene`, project-relative:
+Run a different scene with `--scene`, project-relative (both attach scripts too):
 
 ```sh
-cargo run -p runtime -- --project examples/showcase --scene scenes/physics.scene.json --window
-cargo run -p runtime -- --project examples/showcase --scene scenes/menu.scene.json --window
+cargo run -- run --project examples/showcase --scene scenes/physics.scene.json --allow-inert
+cargo run -- run --project examples/showcase --scene scenes/menu.scene.json --allow-inert
 ```
-
-**To actually execute the JavaScript**, build the runtime with the off-by-default
-`slag` feature (it pulls in the JS engine, so the build is heavier):
-
-```sh
-cargo run --manifest-path crates/runtime/Cargo.toml --bin noctis-runtime \
-    --features slag -- --project examples/showcase --window
-```
-
-Without it, scripts are discovered and attached but not run.
 
 ## Edit it
 
@@ -69,7 +68,7 @@ The editor opens the project, imports its assets and prefabs, and shows a live
 viewport (WASD/QE to fly, middle-mouse to orbit/pan, wheel to dolly):
 
 ```sh
-cargo run -p editor -- --project examples/showcase --window
+cargo run -- editor --project examples/showcase
 ```
 
 The editor viewport is authoring-only: it does not run scripts, so a scene with
@@ -81,8 +80,8 @@ entities, set transforms, add components, import a glTF, save a prefab, and writ
 the scene back:
 
 ```sh
-cargo run -p editor -- --print-schema
-cargo run -p editor -- --project examples/showcase \
+cargo run -- editor --print-schema
+cargo run -- editor --project examples/showcase \
     --command '[{ "op": "spawn", "name": "Box" },
                 { "op": "add_rigid_body", "entity": { "name": "Box" } }]' \
     --out scenes/new.scene.json
@@ -99,7 +98,7 @@ A scene's `mode` is a presentation hint, not a schema fork. `--mode 2d` records
 commands apply in order and address earlier entities by name:
 
 ```sh
-cargo run -p editor -- --project examples/showcase \
+cargo run -- editor --project examples/showcase \
     --scene scenes/board.scene.json --mode 2d \
     --command '[
       { "op": "spawn", "name": "Camera" },
@@ -132,10 +131,10 @@ cargo run -p editor -- --project examples/showcase \
 
 That writes `scenes/board.scene.json` with `"mode": "2d"`, an orthographic
 camera, an `Ink` background quad, a spinning `Gold` square, and a light. Open it
-in the editor (`--window`, then pick it in the outliner) or run it directly:
+in the editor (`noctis editor`, then pick it in the outliner) or run it directly:
 
 ```sh
-cargo run -p runtime -- --project examples/showcase --scene scenes/board.scene.json --window
+cargo run -- run --project examples/showcase --scene scenes/board.scene.json
 ```
 
 `Text` is a first-class command now. Appending
@@ -147,22 +146,25 @@ cargo run -p runtime -- --project examples/showcase --scene scenes/board.scene.j
 ## Build it
 
 ```sh
-# Bundle the default scene. With no --target the game takes the project's name,
-# so this writes showcase/dist/Noctis Showcase/.
-cargo run -p runtime --bin noctis -- build --project examples/showcase
+# A JavaScript game: build the slag-enabled game runtime, then bundle.
+cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game
+cargo run --features slag -- build --project examples/showcase
+
+# An inert game (scripts skipped; --allow-inert acknowledges it).
+cargo run -- build --project examples/showcase --allow-inert
 
 # A named [[build]] target supplies its own name and output dir, e.g. dist/showcase/.
-cargo run -p runtime --bin noctis -- build --project examples/showcase --target showcase
+cargo run --features slag -- build --project examples/showcase --target showcase
 ```
 
-A build copies the runtime executable, the scene, every asset the scene
+A build copies the `noctis-game` runtime, the scene, every asset the scene
 references, and a generated `noctis.toml`; run the executable in its folder with
 no arguments to play the bundled scene.
 
 `noctis rename` moves an asset and rewrites every reference to it:
 
 ```sh
-cargo run -p runtime --bin noctis -- rename --project examples/showcase \
+cargo run -- rename --project examples/showcase \
     assets/textures/panel_normal.png assets/textures/panel_data.png
 ```
 

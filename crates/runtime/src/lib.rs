@@ -1,7 +1,9 @@
 //! # runtime — the Noctis game/export loop
 //!
 //! This crate wires the engine subsystems into [`ecs::app::App`] so a scene
-//! actually runs, and ships the `noctis-runtime` export/run binary.
+//! actually runs. It provides the [`cli`] command line (the game runner shared by
+//! `noctis run` and the `noctis-game` binary an export ships) and the build/export
+//! machinery behind `noctis build`.
 //!
 //! The entry point is [`Runtime`], which owns an [`App`](ecs::app::App) plus a
 //! [`PhysicsWorld`](physics::PhysicsWorld), an
@@ -14,18 +16,20 @@
 //!
 //! The runtime is generic over its script host. The default is the inert
 //! [`NoopHost`](script::NoopHost) — scripts are discovered and tracked but not
-//! executed. With the `slag` feature the `noctis-runtime` binary runs the real
-//! Slag engine instead, with its Cranelift JIT, its WebAssembly JS API, and the
-//! native WebAssembly script host enabled, so a game runs `.js` and `.wasm`
-//! scripts through one runtime:
+//! executed. With the `slag` feature the game runs the real Slag engine instead,
+//! with its Cranelift JIT, its WebAssembly JS API, and the native WebAssembly
+//! script host enabled, so a game runs `.js` and `.wasm` scripts through one
+//! runtime:
 //!
 //! ```text
 //! cargo build --manifest-path crates/runtime/Cargo.toml --features slag
 //! ```
 //!
 //! (The manifest path is used because `-p runtime` is ambiguous: the Slag engine
-//! ships a transitive crate that is also named `runtime`.) The loop runs on a
-//! single thread, so a host need not be `Send`; see [`Runtime`].
+//! ships a transitive crate that is also named `runtime`.) [`scripts`] is the gate
+//! that stops `run` and `build` from silently producing a game whose scripts never
+//! execute. The loop runs on a single thread, so a host need not be `Send`; see
+//! [`Runtime`].
 //!
 //! ```
 //! use ecs::prelude::*;
@@ -61,7 +65,9 @@ pub mod export;
 mod runtime;
 
 pub mod build;
+pub mod cli;
 pub mod demo;
+pub mod scripts;
 pub mod window;
 
 pub use build::{BuildOptions, build_project};

@@ -7,25 +7,20 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-# The crate ships two binaries: the game runtime and the `noctis` project tool.
-# Defaulting `cargo run -p runtime` to the runtime keeps the common commands
-# short; the tool is still `cargo run -p runtime --bin noctis -- ...`.
-default-run = "noctis-runtime"
+# The crate ships one binary: `noctis-game`, the stripped game runtime an export
+# copies. Development runs and builds go through the `noctis` tool (crates/noctis),
+# which drives this crate's library.
 
 [features]
-# Run JavaScript in a game: forwards to the `script` crate's real backend.
-# With the feature on, `-p runtime` is ambiguous (Slag ships a transitive crate
-# named `runtime`), so use the manifest path:
-# `cargo test --manifest-path crates/runtime/Cargo.toml --features slag`
+# Run JavaScript in a game: forwards to the `script` crate's real backend. Slag
+# ships a transitive crate that is also named `runtime`, so prefer the manifest
+# path when enabling it: `cargo build --manifest-path crates/runtime/Cargo.toml
+# --features slag`.
 slag = ["script/slag"]
 
 [[bin]]
-name = "noctis-runtime"
+name = "noctis-game"
 path = "src/main.rs"
-
-[[bin]]
-name = "noctis"
-path = "src/bin/noctis.rs"
 
 [dependencies]
 math.workspace = true

@@ -15,13 +15,13 @@
 //! Both share one [`Scene`](ecs::scene::Scene), one asset registry, and one
 //! undo/redo history.
 //!
-//! ## The `noctis-editor` CLI
+//! ## The `noctis editor` command
 //!
-//! The bundled `noctis-editor` binary turns the command API into a shell tool:
+//! The `noctis editor` command turns the command API into a shell tool:
 //!
 //! ```text
-//! noctis-editor --scene level.json --command edits.json --out level.json
-//! noctis-editor --print-schema
+//! noctis editor --scene level.json --command edits.json --out level.json
+//! noctis editor --print-schema
 //! ```
 //!
 //! It prints the resulting `list_entities()` JSON to stdout, writes scene changes
@@ -45,6 +45,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod camera;
+pub mod cli;
 pub mod command;
 pub mod editor;
 pub mod error;
@@ -70,7 +71,7 @@ pub use info::{EntityDto, EntityInfo};
 
 /// The JSON schema/help document for the command API.
 ///
-/// This is what `noctis-editor --print-schema` emits. It lists every command,
+/// This is what `noctis editor --print-schema` emits. It lists every command,
 /// its fields, the two entity-reference forms, and the asset-reference forms.
 pub fn command_schema() -> serde_json::Value {
     schema()

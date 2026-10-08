@@ -19,8 +19,9 @@ component and the whole scripting API. Copy its shape.
 - Asset types (meshes, materials, textures, audio, scripts, fonts): `crates/ecs/src/assets.rs`.
 - Procedural meshes and the reference scene: `crates/testscene`.
 - Script engine API (what JS can call): `crates/script` (`ScriptApi`, `slag.rs`).
-- Editor command API + CLI: `crates/editor` (`noctis-editor`).
-- Runtime/export + the `noctis` project tool: `crates/runtime`.
+- Editor command API + CLI: `crates/editor` (the `noctis editor` command).
+- Runtime/export: `crates/runtime` (the game loop and the stripped `noctis-game`
+  binary); the `noctis` tool that drives it all is `crates/noctis`.
 - Worked example project: `examples/showcase` (see its `README.md`).
 
 ## Typical flow
@@ -34,7 +35,7 @@ component and the whole scripting API. Copy its shape.
 5. Write JavaScript behaviours (see *Scripts* below) and attach them by path
    (`Script::from_path("scripts/x.js")`) or inline (`Script::from_source`).
 6. Save the scene as JSON (`Scene::to_json`) so it is data, not code.
-7. Run it with `noctis-runtime`; export with `noctis build`.
+7. Run it with `noctis run`; export with `noctis build`.
 
 ## Scenes (the data model)
 
@@ -100,9 +101,18 @@ to act on the edge. There is no per-entity or "pressed-this-frame" binding — u
 the `entity` argument, not a `current_entity()` call.
 
 **Scripts do not run unless the `slag` feature is on.** The default build uses
-`NoopHost` (scripts are discovered and tracked but inert). To execute them:
-`cargo build --manifest-path crates/runtime/Cargo.toml --features slag` (use the
-manifest path; `-p runtime` is ambiguous with a transitive Slag crate).
+`NoopHost` (scripts are discovered and tracked but inert), and `noctis run` and
+`noctis build` *refuse* a project that attaches scripts unless the backend is
+present. To execute them:
+
+```sh
+cargo run --features slag -- run --project <dir>          # run with JS, in-process
+cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game  # a JS game
+```
+
+(Use the manifest path for the game binary: `-p runtime --features slag` is
+ambiguous with a transitive Slag crate.) Pass `--allow-inert` to run or build
+anyway, accepting that the scripts are skipped.
 
 ## Prefabs
 
@@ -122,4 +132,4 @@ After authoring:
 - For scripts, `cargo test -p script --features slag --test showcase_scripts`
   runs the example's JavaScript in the real engine.
 - Load your scene through the runtime before claiming success:
-  `cargo run -p runtime -- --project <dir> --frames 120 --print-summary`.
+  `cargo run -- run --headless --project <dir> --frames 120 --allow-inert`.

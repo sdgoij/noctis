@@ -98,7 +98,7 @@ Notes:
   mix a 2D menu scene with a 3D level).
 - Build targets describe *what to produce*. The first cut produces a
   self-contained folder exactly like today's
-  `noctis-runtime --export`, but bundling every referenced asset rather than just
+  `noctis run --export`, but bundling every referenced asset rather than just
   the scene JSON.
 - Unknown keys should be a load **error** (typos in a manifest are bugs), with the
   exception of forward-compatible tables we explicitly allow.
@@ -213,8 +213,8 @@ in `ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset
 does not stop a project from opening. Audio files decode to `AudioClip`s
 (WAV/Ogg/MP3 via the `audio` crate); fonts are registered as validated source
 bytes; `.hdr` environments decode via `render::load_hdr` to linear `f32` radiance
-in the `hdr` store, ready for the IBL precompute. Both `noctis-editor` and
-`noctis-runtime` build their registry from `import_assets()` when `--project` is
+in the `hdr` store, ready for the IBL precompute. Both `noctis editor` and
+`noctis run` build their registry from `import_assets()` when `--project` is
 given.
 
 *Implemented (environment)*: `[render] environment` names an imported `.hdr`; the
@@ -290,7 +290,7 @@ in-memory library and are lost on save; a project gives them a home.)
 *Implemented*: `Project::save_prefab` writes `prefabs/<name>.prefab.json` (the
 name must be a plain file name), `Project::load_prefabs` parses every prefab
 document (`discover_prefabs`), and the editor loads a project's prefabs on open so
-`instantiate_prefab` works; `noctis-editor --project <dir> --save-prefabs` writes
+`instantiate_prefab` works; `noctis editor --project <dir> --save-prefabs` writes
 the edited library back. A prefab is still referenced from a scene by
 *instantiating* it (the entities are copied in), not by an `assets`-style path
 reference — a live `PrefabInstance` reference is future work.
@@ -300,7 +300,7 @@ reference — a live `PrefabInstance` reference is future work.
 - `.js` scripts are project assets resolved by asset path; the scene's `Script`
   component references them by path (already the case).
 - `.wasm` scripts use the existing descriptor path (`wasm_host`); the project
-  registers them the way `noctis-runtime --wasm name=path` does today, but from
+  registers them the way `noctis run --wasm name=path` does today, but from
   the asset map.
 - Scripts resolve assets and each other by the same project-relative paths.
 
@@ -361,7 +361,7 @@ The exported game loads its bundled default scene when run with no arguments
 (already true today).
 
 *Implemented*: `noctis build --project <dir> [--target <name>]` (and
-`noctis-runtime --project <dir> --export <dir> [--target <name>]`) resolves the
+`noctis run --project <dir> --export <dir> [--target <name>]`) resolves the
 target's scene (or `--scene`, or the project default), imports the assets, and
 bundles every file the scene references — resolved by
 `project::referenced_files` through the import index, so a glTF sub-asset
@@ -389,15 +389,15 @@ overrides are not yet applied.
 ## Command line (planned)
 
 ```
-noctis-editor  --project <dir> [--scene <path>] [--window] [--mode 2d|3d]
-noctis-runtime --project <dir> [--scene <path>] [--window] [--export ...] [--target <name>]
-noctis build   --project <dir> [--target <name>] [--scene <path>] [--out <dir>]
+noctis editor --project <dir> [--scene <path>] [--mode 2d|3d] [--headless]
+noctis run    --project <dir> [--scene <path>] [--headless] [--export ...] [--target <name>]
+noctis build  --project <dir> [--target <name>] [--scene <path>] [--out <dir>]
 ```
 
 `--project` locates the manifest, loads the project registry, and makes
 `--scene` a project-relative path. `--scene` alone still works for a loose,
 self-contained scene file (the current behaviour). `noctis build` and
-`noctis-runtime --target` honor `[[build]]` targets (the target's scene, name, and
+`noctis run --target` honor `[[build]]` targets (the target's scene, name, and
 output directory).
 
 ## What already exists
@@ -441,7 +441,7 @@ New work this design implies (✔ = implemented):
   own dimension.
 - ✔ An explicit `[[scene]]` list in the manifest (`Project::scenes`): names and
   order, with discovered scenes appended.
-- ✔ `--project` in `noctis-editor` / `noctis-runtime` (both import the project's
+- ✔ `--project` in `noctis editor` / `noctis run` (both import the project's
   assets), and a `noctis build` CLI that bundles a project's referenced assets.
   Remaining: the UI project picker.
 

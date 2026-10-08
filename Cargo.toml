@@ -16,7 +16,13 @@ members = [
     "crates/editor",
     "crates/runtime",
     "crates/platform",
+    "crates/noctis",
 ]
+
+# `cargo run -- editor` (and friends) must resolve to the `noctis` tool without a
+# `-p`, so it is the sole default member. Everything else is still covered by
+# `cargo test --workspace`.
+default-members = ["crates/noctis"]
 
 [workspace.package]
 version = "0.1.0"
@@ -38,6 +44,7 @@ project = { path = "crates/project" }
 editor = { path = "crates/editor" }
 runtime = { path = "crates/runtime" }
 platform = { path = "crates/platform" }
+noctis = { path = "crates/noctis" }
 
 # Math
 glm = "0.3"

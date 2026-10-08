@@ -1,6 +1,6 @@
 ---
 name: noctis-engine
-description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier3d, rodio, Slag). Use when building, testing, modifying, or extending the engine crates (math, ecs, render, physics, audio, script, testscene, editor, runtime), adding components, writing systems, or fixing engine bugs.
+description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier3d, rodio, Slag). Use when building, testing, modifying, or extending the engine crates (math, ecs, render, physics, audio, script, testscene, project, editor, runtime, platform, noctis), adding components, writing systems, or fixing engine bugs.
 ---
 
 # Working on the Noctis engine
@@ -12,6 +12,9 @@ description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier
   in `docs/core-api.md`. Never change them to fit a single consumer; if a change
   is genuinely needed, change the contract and every affected crate together.
 - Read `AGENTS.md` for the non-negotiable standards.
+- `crates/noctis` is the `noctis` multicall tool (`editor`/`run`/`build`/`rename`)
+  and the embedding facade (`noctis::prelude`). It is the workspace's default
+  member, so `cargo run -- editor` (and friends) runs it without a `-p`.
 
 ## The loop
 
@@ -50,5 +53,7 @@ cargo test --workspace
 cargo test -p <crate>
 cargo clippy --workspace --all-targets
 cargo fmt --all
+cargo run -- editor                      # the noctis tool is the default binary
 cargo build -p script --features slag
+cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game
 ```

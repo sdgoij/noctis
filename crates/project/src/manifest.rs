@@ -284,7 +284,7 @@ fn default_one() -> u32 {
 #[derive(Clone, Debug, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputSettings {
-    /// The camera-navigation bindings file (see `noctis-editor --controls`).
+    /// The camera-navigation bindings file (see `noctis editor --controls`).
     #[serde(default)]
     pub controls: Option<String>,
 }

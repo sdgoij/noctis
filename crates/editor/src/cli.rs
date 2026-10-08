@@ -1,32 +1,38 @@
-//! `noctis-editor` — the headless, agent-drivable editor CLI.
+//! The `noctis editor` command line.
 //!
-//! The CLI is deliberately tiny and dependency-free beyond the editor crate:
+//! The editor is deliberately tiny and dependency-free beyond the editor crate:
 //! it parses a handful of flags by hand, applies a JSON batch of
-//! [`editor::EditorCommand`]s, and prints the resulting entity list as JSON.
-//! It never panics — every failure becomes a non-zero exit and a clear message
-//! on stderr.
+//! [`editor::EditorCommand`]s, and prints the resulting entity list as JSON. It
+//! never panics — every failure becomes a non-zero exit and a clear message on
+//! stderr.
+//!
+//! The window is the default (that is usually why you open the editor). Pass
+//! `--headless`, or ask for a batch operation (`--command`, `--out`,
+//! `--save-prefabs`, `--print-schema`), to run without one.
 //!
 //! ```text
-//! noctis-editor --scene level.json --command edits.json --out level.json
-//! noctis-editor --command '[{ "op": "spawn", "name": "Sun" }]'
-//! noctis-editor --print-schema
+//! noctis editor --project game
+//! noctis editor --headless --scene level.json --command edits.json --out level.json
+//! noctis editor --print-schema
 //! ```
-
-#![forbid(unsafe_code)]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ecs::scene::SceneMode;
-use editor::{Editor, command_schema, parse_commands};
 use platform::WindowConfig;
 use project::Project;
 
+use crate::{Editor, command_schema, parse_commands};
+
+/// The prefix on every diagnostic message.
+const PROGRAM: &str = "noctis";
+
 const USAGE: &str = "\
-noctis-editor — build Noctis scenes from JSON commands
+noctis editor — open the editor, or build scenes from JSON commands
 
 USAGE:
-    noctis-editor [OPTIONS]
+    noctis editor [OPTIONS]
 
 OPTIONS:
     -s, --scene <PATH>      Open a scene; if the file does not exist, start a new
@@ -40,19 +46,20 @@ OPTIONS:
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
-        --window            Open the scene in a window with a live viewport
+        --headless          Do not open a window (implied by --command/--out/
+                            --save-prefabs/--print-schema)
         --testscene         Load the engine's all-features test scene
         --save-prefabs      Write the prefab library to the project's prefabs/
                             directory (requires --project)
-        --controls <PATH>   Load camera-navigation bindings (JSON) for --window
+        --controls <PATH>   Load camera-navigation bindings (JSON)
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
 
-With no options, a new empty scene is opened and its (empty) entity list is
-printed. `--scene` and `--command` are both optional.
+With no options, the editor opens the (empty) scene in a window. `--scene` and
+`--command` are both optional.
 
 The batch is a JSON array of commands; a single command object is also
-accepted. On success the resulting entity list is printed as JSON.";
+accepted. In a headless run the resulting entity list is printed as JSON.";
 
 /// A top-level CLI failure, distinguished so usage problems can exit `2`.
 #[derive(Debug)]
@@ -63,33 +70,17 @@ enum CliError {
     Message(String),
 }
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// Run the editor command line and return the process exit code.
+pub fn run_cli(args: Vec<String>) -> ExitCode {
+    let options = match parse_args(&args) {
+        Ok(options) => options,
+        Err(error) => return report(error),
+    };
 
-    if wants_window(&args) {
-        let options = match parse_args(&args) {
-            Ok(options) => options,
-            Err(CliError::Usage(message)) => {
-                eprintln!("noctis-editor: {message}\n");
-                eprintln!("{USAGE}");
-                return ExitCode::from(2);
-            }
-            Err(CliError::Message(message)) => {
-                eprintln!("noctis-editor: {message}");
-                return ExitCode::FAILURE;
-            }
-        };
+    if opens_a_window(&options) {
         return match run_windowed(&options) {
             Ok(()) => ExitCode::SUCCESS,
-            Err(CliError::Usage(message)) => {
-                eprintln!("noctis-editor: {message}\n");
-                eprintln!("{USAGE}");
-                ExitCode::from(2)
-            }
-            Err(CliError::Message(message)) => {
-                eprintln!("noctis-editor: {message}");
-                ExitCode::FAILURE
-            }
+            Err(error) => report(error),
         };
     }
 
@@ -98,16 +89,35 @@ fn main() -> ExitCode {
             println!("{output}");
             ExitCode::SUCCESS
         }
-        Err(CliError::Usage(message)) => {
-            eprintln!("noctis-editor: {message}\n");
+        Err(error) => report(error),
+    }
+}
+
+fn report(error: CliError) -> ExitCode {
+    match error {
+        CliError::Usage(message) => {
+            eprintln!("{PROGRAM}: {message}\n");
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
-        Err(CliError::Message(message)) => {
-            eprintln!("noctis-editor: {message}");
+        CliError::Message(message) => {
+            eprintln!("{PROGRAM}: {message}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Whether the invocation should open the editor window.
+///
+/// The window is the default; `--headless` disables it, and a batch operation
+/// implies it, because those write files or print and exit.
+fn opens_a_window(options: &Options) -> bool {
+    !options.headless
+        && !options.help
+        && !options.print_schema
+        && options.command.is_none()
+        && options.out.is_none()
+        && !options.save_prefabs
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -118,7 +128,7 @@ struct Options {
     command: Option<String>,
     out: Option<String>,
     controls: Option<String>,
-    window: bool,
+    headless: bool,
     testscene: bool,
     save_prefabs: bool,
     print_schema: bool,
@@ -158,13 +168,13 @@ fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, 
             .map_err(|e| CliError::Message(format!("failed to import project assets: {e}")))?;
         for error in &imported.errors {
             eprintln!(
-                "noctis-editor: warning: asset '{}' failed to import: {}",
+                "{PROGRAM}: warning: asset '{}' failed to import: {}",
                 error.path.as_str(),
                 error.message
             );
         }
         eprintln!(
-            "noctis-editor: imported {} asset file(s) ({} failed)",
+            "{PROGRAM}: imported {} asset file(s) ({} failed)",
             imported.files,
             imported.errors.len()
         );
@@ -254,9 +264,16 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
                 reject_inline(&inline, &flag)?;
                 options.print_schema = true;
             }
-            "--window" => {
+            "--headless" => {
                 reject_inline(&inline, &flag)?;
-                options.window = true;
+                options.headless = true;
+            }
+            "--window" => {
+                return Err(CliError::Usage(
+                    "--window was removed: the editor opens a window by default, so pass \
+                     --headless to run without one"
+                        .into(),
+                ));
             }
             "--testscene" => {
                 reject_inline(&inline, &flag)?;
@@ -307,11 +324,6 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
         index += 1;
     }
 
-    if !options.help && !options.print_schema {
-        // Every option is optional: with no arguments we work on a new, empty
-        // scene. No argument combination is a usage error here.
-    }
-
     Ok(options)
 }
 
@@ -339,12 +351,6 @@ fn reject_inline(inline: &Option<String>, flag: &str) -> Result<(), CliError> {
     } else {
         Ok(())
     }
-}
-
-/// Whether the invocation asked for a window.
-fn wants_window(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| arg == "--window" || arg.starts_with("--window="))
 }
 
 /// The mode for a scene created from scratch: `--mode`, else the project's
@@ -426,12 +432,12 @@ fn run_windowed(options: &Options) -> Result<(), CliError> {
 
     match controls {
         Some(path) => {
-            let controls = editor::CameraControls::load(&path)
+            let controls = crate::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
-            editor::window::run_with_controls(editor, config, controls, project)
+            crate::window::run_with_controls(editor, config, controls, project)
                 .map_err(|e| CliError::Message(e.to_string()))
         }
-        None => editor::window::run(editor, config, project)
+        None => crate::window::run(editor, config, project)
             .map_err(|e| CliError::Message(e.to_string())),
     }
 }
@@ -488,9 +494,42 @@ mod tests {
 
     #[test]
     fn parses_the_controls_path() {
-        let options = parse_args(&args(&["--window", "--controls", "controls.json"])).unwrap();
-        assert!(options.window);
+        let options = parse_args(&args(&["--controls", "controls.json"])).unwrap();
         assert_eq!(options.controls.as_deref(), Some("controls.json"));
+    }
+
+    #[test]
+    fn the_window_is_the_default_and_headless_opts_out() {
+        assert!(opens_a_window(&parse_args(&args(&[])).unwrap()));
+        assert!(opens_a_window(
+            &parse_args(&args(&["--project", "game"])).unwrap()
+        ));
+        assert!(!opens_a_window(
+            &parse_args(&args(&["--headless"])).unwrap()
+        ));
+    }
+
+    #[test]
+    fn batch_operations_do_not_open_a_window() {
+        // `--command`/`--out`/`--print-schema` are file/print operations.
+        for flags in [
+            args(&["--command", "edits.json"]),
+            args(&["--out", "out.json"]),
+            args(&["--print-schema"]),
+            args(&["--help"]),
+        ] {
+            let options = parse_args(&flags).unwrap();
+            assert!(!opens_a_window(&options), "{flags:?} should be headless");
+        }
+    }
+
+    #[test]
+    fn the_removed_window_flag_is_rejected_with_a_hint() {
+        let err = parse_args(&args(&["--window"])).unwrap_err();
+        match err {
+            CliError::Usage(message) => assert!(message.contains("--headless"), "{message}"),
+            other => panic!("expected a usage error, got {other:?}"),
+        }
     }
 
     #[test]

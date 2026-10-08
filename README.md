@@ -21,20 +21,20 @@ repository.
 | `script` | Script runtime + engine API (Slag JS/WASM backend optional). |
 | `testscene` | The all-features scene used for testing. |
 | `project` | The project model: `noctis.toml`, asset paths, import, build. |
-| `editor` / `runtime` | Editor (AI-controllable), game runtime, and the `noctis` CLI. |
+| `editor` | Editor library + AI-controllable command API (the `noctis editor` command). |
+| `runtime` | Game loop, build/export, and the stripped `noctis-game` binary. |
 | `platform` | Window + winit event loop + egui overlay; presents a live viewport. |
+| `noctis` | The multicall `noctis` tool and the embedding facade (`noctis::prelude`). |
 
 ## Quick start
 
 ```sh
-cargo test --workspace        # run everything
-cargo run -p runtime                      # run the sample scene headlessly
-cargo run -p runtime -- --window --demo   # open the demo scene in a window
-cargo run -p editor  -- --testscene --window   # open the all-features test scene
-cargo run -p editor  -- --help            # drive the editor from the CLI / scripts
-cargo run -p runtime --bin noctis -- --help    # the project build/rename tool
-
-cargo run -p runtime -- --project examples/showcase --window   # the example project
+cargo test --workspace                    # run everything
+cargo run -- editor                       # open the editor (a window by default)
+cargo run -- editor --testscene           # open the all-features test scene
+cargo run -- run --demo                   # run the built-in demo in a window
+cargo run -- run --headless --frames 30   # run headlessly and print a summary
+cargo run -- --help                       # every command
 ```
 
 [`examples/showcase`](examples/showcase) is a complete example project — scenes,
@@ -44,8 +44,13 @@ prefabs, scripts, and generated assets exercising every engine feature. See its
 Enable the real JavaScript backend:
 
 ```sh
-cargo test -p script --features slag
+cargo test -p script --features slag               # the backend's smoke tests
+cargo run --features slag -- run --project <dir>   # JS in a game, in-process
 ```
+
+Without the `slag` feature, `noctis run` and `noctis build` refuse a project that
+attaches scripts rather than silently producing a still game; `--allow-inert`
+overrides.
 
 ## Usage
 
@@ -99,18 +104,19 @@ order) are also supported; see `docs/project.md`.
 
 ```sh
 # 1. Author: open the project, import its assets, edit a scene, save it back.
-cargo run -p editor -- --project mygame --window             # interactive
-cargo run -p editor -- --project mygame \
+cargo run -- editor --project mygame                         # interactive
+cargo run -- editor --project mygame \
     --command '[{ "op": "spawn", "name": "Box" }]' --out mygame/scenes/main.scene.json
 
 # 2. Run: import the project's assets and play its default scene.
-cargo run -p runtime -- --project mygame --window
+cargo run -- run --project mygame
 
 # 3. Build: export a self-contained, distributable game folder.
-cargo run -p runtime --bin noctis -- build --project mygame
+cargo run -- build --project mygame
 ```
 
-With `--project <dir>` both CLIs import every asset file into one registry,
+With `--project <dir>` the editor and the runtime import every asset file into one
+registry,
 make `--scene` project-relative, and use the project's `default_scene` when
 `--scene` is omitted. `--scene` on its own still works for a loose, self-contained
 scene file.
@@ -153,10 +159,10 @@ scenes, and a scene may override it.
 
 ```sh
 # Create / open a 2D scene; in a 2D scene the editor adds an orthographic camera.
-cargo run -p editor -- --scene menu.scene.json --mode 2d --out menu.scene.json
+cargo run -- editor --scene menu.scene.json --mode 2d --out menu.scene.json
 
 # A project with mode = "2d" makes new scenes 2D automatically.
-cargo run -p editor -- --project mygame
+cargo run -- editor --project mygame
 ```
 
 An existing scene keeps the mode stored in its file; `--mode` only applies when a
@@ -193,13 +199,13 @@ In a scene document it is:
 
 ```sh
 # Export the project's default scene (or --scene) to <project>/dist/<name>.
-cargo run -p runtime --bin noctis -- build --project mygame
+cargo run -- build --project mygame
 
 # Build a named [[build]] target (its scene, name, and output are used).
-cargo run -p runtime --bin noctis -- build --project mygame --target release
+cargo run -- build --project mygame --target release
 
 # Override the output or name.
-cargo run -p runtime --bin noctis -- build --project mygame --out dist/demo --name demo
+cargo run -- build --project mygame --out dist/demo --name demo
 ```
 
 A build writes a self-contained folder: the runtime executable, `scene.json`,
@@ -224,7 +230,7 @@ rewrites every reference to it (including `#fragment` sub-asset references) in t
 project's scenes and prefabs, so no scene is left with a broken path.
 
 ```sh
-cargo run -p runtime --bin noctis -- rename --project mygame \
+cargo run -- rename --project mygame \
     assets/models/robot.glb assets/models/mech.glb
 ```
 
@@ -233,14 +239,16 @@ touches no reference changes no bytes.
 
 ### Command reference
 
-`noctis` (project tool):
+`noctis` is one binary; each capability is a subcommand:
 
 ```
-noctis build  --project <DIR> [--target <NAME>] [--scene <PATH>] [--name <NAME>] [--out <DIR>]
-noctis rename --project <DIR> <FROM> <TO>
+noctis editor [OPTIONS]     open the editor, or build scenes from JSON
+noctis run    [OPTIONS]     run a scene or game (a window by default)
+noctis build  [OPTIONS]     build a project into a game folder
+noctis rename [OPTIONS]     move an asset and rewrite its references
 ```
 
-`noctis-editor`:
+`noctis editor`:
 
 ```
 --scene <PATH>     open or create a scene (project-relative with --project)
@@ -248,26 +256,27 @@ noctis rename --project <DIR> <FROM> <TO>
 --mode <2d|3d>     presentation mode for a scene created from scratch
 --command <SRC>    apply a JSON command batch (file, `-` for stdin, or inline)
 --out <PATH>       save the resulting scene
---window           open a live viewport (WASD/QE fly, MMB orbit/pan, wheel zoom)
+--headless         do not open a window (implied by --command/--out/--print-schema)
 --testscene        load the engine's all-features scene
 --save-prefabs     write the prefab library to the project's prefabs/
 --controls <PATH>  camera-navigation bindings (JSON)
 --print-schema     print the JSON command schema
 ```
 
-`noctis-runtime`:
+`noctis run`:
 
 ```
 --scene <PATH>     run a scene JSON (project-relative with --project)
 --project <DIR>    open a project; the default scene runs when --scene is omitted
 --target <NAME>    export a named [[build]] target
 --demo             run a small built-in scene
+--headless         run --frames frames and exit (default: open a window)
 --frames <N>       frames to run headlessly (default 300)
 --render           render each frame with a headless GPU (skipped if unavailable)
---window           run in a window
 --export <DIR>     export a self-contained game folder
 --name <NAME>      exported executable name
 --wasm <name>=<path>   register a .wasm script (requires the `slag` feature)
+--allow-inert      run even if scripts cannot execute (they are skipped)
 --no-audio         do not open an audio device
 --print-summary / --quiet
 ```
@@ -284,8 +293,9 @@ git config core.hooksPath hooks
 
 ## Status
 
-All crates are implemented and tested. The renderer presents to a real window
-(`--window`), and the editor draws an [egui](https://github.com/emilk/egui)
+All crates are implemented and tested. The renderer presents to a real window (a
+window is the default; `--headless` opts out), and the editor draws an
+[egui](https://github.com/emilk/egui)
 interface (outliner, inspector, viewport picking, transform gizmo) over a live
 viewport. The whole engine also runs headlessly for CI, so `cargo test
 --workspace` passes without a GPU or an audio device (GPU and font tests skip

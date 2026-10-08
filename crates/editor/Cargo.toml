@@ -7,10 +7,6 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "noctis-editor"
-path = "src/main.rs"
-
 [dependencies]
 math.workspace = true
 ecs.workspace = true

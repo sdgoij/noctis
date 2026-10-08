@@ -1,9 +1,9 @@
 //! Build a distributable game folder.
 //!
-//! `noctis-runtime --export <dir> --scene <level.json>` writes a self-contained
+//! `noctis run --export <dir> --scene <level.json>` writes a self-contained
 //! folder containing:
 //!
-//! * a copy of the running runtime executable, renamed to the game,
+//! * a copy of the running `noctis-game` executable, renamed to the game,
 //! * the scene as [`BUNDLED_SCENE`],
 //! * a [`MANIFEST`] naming both.
 //!
@@ -26,7 +26,7 @@ pub const MANIFEST: &str = "noctis-game.json";
 pub const BUNDLED_PROJECT: &str = "noctis.toml";
 
 /// The runtime executable's base name (the game an export ships).
-pub const RUNTIME_BIN: &str = "noctis-runtime";
+pub const RUNTIME_BIN: &str = "noctis-game";
 
 /// A project file to place inside an exported folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,9 +140,9 @@ pub fn bundled_scene(directory: &Path) -> Option<PathBuf> {
 
 /// The executable an exported game should ship.
 ///
-/// This is the `noctis-runtime` binary when one sits beside the running process
-/// (so `noctis build` ships the runtime, not the `noctis` tool itself), else the
-/// running executable (which is the runtime when it exports itself).
+/// This is the `noctis-game` binary when one sits beside the running process (so
+/// `noctis build` ships the stripped game runtime, not the `noctis` tool itself),
+/// else the running executable (which is the game when it exports itself).
 pub fn default_runtime_executable() -> std::io::Result<PathBuf> {
     let current = std::env::current_exe()?;
     let Some(dir) = current.parent() else {

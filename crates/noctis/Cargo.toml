@@ -1,0 +1,34 @@
+[package]
+name = "noctis"
+description = "The Noctis engine: the multicall `noctis` tool and the embedding facade."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# `noctis` is the default binary, so a bare `cargo run -- editor` opens the
+# editor (the workspace root sets `default-members = ["crates/noctis"]`).
+default-run = "noctis"
+
+[features]
+# Run JavaScript and WebAssembly in projects: forwards to the game runtime, and
+# so to the `script` crate's real backend. Off by default (it pulls the JS
+# engine); without it `noctis run`/`noctis build` refuse a project that attaches
+# scripts unless `--allow-inert` is passed.
+slag = ["runtime/slag"]
+
+[[bin]]
+name = "noctis"
+path = "src/main.rs"
+
+[dependencies]
+audio.workspace = true
+ecs.workspace = true
+editor.workspace = true
+math.workspace = true
+physics.workspace = true
+project.workspace = true
+render.workspace = true
+runtime.workspace = true
+script.workspace = true

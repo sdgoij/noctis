@@ -1945,6 +1945,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "noctis"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "ecs",
+ "editor",
+ "math",
+ "physics",
+ "project",
+ "render",
+ "runtime 0.1.0",
+ "script",
+]
+
+[[package]]
 name = "nohash-hasher"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

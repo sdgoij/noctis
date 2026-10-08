@@ -2,8 +2,8 @@
 //!
 //! Everything the editor can do to a scene is expressible as an
 //! [`EditorCommand`]. Because the command is a plain serde type, an agent can
-//! write a JSON array of commands, feed it to the `noctis-editor` CLI, and get
-//! a fully authored scene back — no GUI, no clicks.
+//! write a JSON array of commands, feed it to the `noctis editor` command, and
+//! get a fully authored scene back — no GUI, no clicks.
 //!
 //! The command set mirrors the imperative [`crate::Editor`] methods one-to-one,
 //! so the two entry points stay in lockstep.
@@ -1295,7 +1295,7 @@ pub(crate) fn solid_texture(name: &str, color: [u8; 4]) -> Texture {
 // ---------------------------------------------------------------------------
 
 /// A machine-readable description of the command API, emitted by
-/// `noctis-editor --print-schema`.
+/// `noctis editor --print-schema`.
 pub fn schema() -> serde_json::Value {
     use serde_json::json;
 
@@ -1336,7 +1336,7 @@ pub fn schema() -> serde_json::Value {
 
     json!({
         "description": "Noctis editor command API. Apply a JSON array of these with \
-            `noctis-editor --command <file>`.",
+            `noctis editor --command <file>`.",
         "entity_ref": {
             "forms": [
                 {"name": "string"},

@@ -1,7 +1,7 @@
 //! Windowed play mode: implement [`platform::AppDriver`] for [`Runtime`].
 //!
-//! Enabling this is how `noctis-runtime --window` and the editor's play mode
-//! open a real viewport: the window host ticks the runtime each frame and
+//! Enabling this is how `noctis run` and `noctis editor` open a real viewport:
+//! the window host ticks the runtime each frame and
 //! presents the scene through a surface-backed renderer.
 
 use ecs::assets::AssetRegistry;
