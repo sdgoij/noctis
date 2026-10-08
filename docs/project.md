@@ -429,16 +429,24 @@ by tests; keep it that way as the project model is added.
 
 ## Open questions
 
-- **Import settings location**: sidecar `*.import.toml` next to the asset (this
-  doc's proposal) vs a single `imports.toml` at the project root.
-- **Cache key**: content hash only, or content hash + settings? (Both, to keep
-  settings changes invalidating.)
+- **Import settings location**: *resolved* — a sidecar `*.import.toml` next to the
+  asset (implemented for textures).
+- **Cache key**: *resolved* — content hash (64-bit FNV-1a) + byte length + the
+  import setting, so a settings change invalidates.
 - **Loose `.scene.json` without a project**: keep working forever as the
   "self-contained scene" case, or require a project from some version onward?
 - **Asset packs / virtual file system**: defer; bundles are a build output, and
   the project always works from loose files on disk.
 - **`.fbx` import**: listed as a model type, but there is no FBX decoder today —
   either add one or drop it from the table until there is.
-- **Fonts**: bitmap atlas vs signed-distance field, and whether the baked atlas
-  is a cache entry (regenerated) or a committed asset. Also which text components
-  ship first (`TextRenderer` in 3D vs a 2D UI layer).
+- **Model import settings** (scale, up-axis): the texture sidecar exists; the model
+  equivalent is not implemented yet.
+- **Audio decoding**: the `audio` store is still empty from import (a project's
+  `.wav`/`.ogg` files are classified but not decoded).
+- **UI project picker**: `--project` is the entry point today; opening a project
+  from the editor UI (rather than a flag) is designed but not built, so
+  `Project::open` remains the single drop-in point.
+- **Fonts**: the store and source bytes are in; bitmap atlas vs. signed-distance
+  field, whether the baked atlas is a cache entry (regenerated) or a committed
+  asset, and which text components ship first (`TextRenderer` in 3D vs. a 2D UI
+  layer) are still open.
