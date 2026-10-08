@@ -1,12 +1,15 @@
 //! The windowed editor: an [`AppDriver`] that draws egui panels over the
 //! scene's live viewport.
 
+use std::path::Path;
+
 use ecs::assets::AssetRegistry;
 use ecs::components::{Camera, GlobalTransform, LocalTransform, Parent};
 use ecs::resources::InputState;
 use ecs::world::{Entity, World};
 use math::{Mat4, Quat, Vec3, vec3};
 use platform::{AppDriver, PlatformError, WindowConfig, egui};
+use project::{AssetKind, Project, detect};
 use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
@@ -93,6 +96,8 @@ pub struct EditorDriver {
     orbit_pivot: Option<Vec3>,
     /// Inspector UI state (the add-component selection).
     inspector: InspectorState,
+    /// The open project, if any: a dropped file is imported into it.
+    project: Option<Project>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -132,7 +137,14 @@ impl EditorDriver {
             nav_down: false,
             orbit_pivot: None,
             inspector: InspectorState::default(),
+            project: None,
         }
+    }
+
+    /// Associate an open project, so a dropped file is imported into it.
+    pub fn with_project(mut self, project: Option<Project>) -> Self {
+        self.project = project;
+        self
     }
 
     /// The wrapped editor.
@@ -915,11 +927,42 @@ impl AppDriver for EditorDriver {
         // this UI have consumed them. Held keys survive, so flying keeps working.
         self.input.begin_frame();
     }
+
+    fn drop_file(&mut self, path: &Path) {
+        // With an open project, a dropped file is imported into it (and a model is
+        // instantiated); without one, a model is imported directly.
+        match self.project.clone() {
+            Some(project) => match project.import_file(path) {
+                Ok(asset) => {
+                    eprintln!("noctis-editor: imported {}", asset.as_str());
+                    if matches!(detect(asset.as_str()), AssetKind::Model) {
+                        let file = project.file_for(&asset);
+                        if let Err(error) = self.editor.import_gltf(&file) {
+                            eprintln!(
+                                "noctis-editor: failed to instantiate {}: {error}",
+                                asset.as_str()
+                            );
+                        }
+                    }
+                }
+                Err(error) => eprintln!("noctis-editor: drop import failed: {error}"),
+            },
+            None => {
+                if let Err(error) = self.editor.import_gltf(path) {
+                    eprintln!("noctis-editor: drop import failed: {error}");
+                }
+            }
+        }
+    }
 }
 
 /// Open `editor` in a window with egui panels. Blocks until the window closes.
-pub fn run(editor: Editor, config: WindowConfig) -> Result<(), PlatformError> {
-    platform::run(EditorDriver::new(editor), config)
+pub fn run(
+    editor: Editor,
+    config: WindowConfig,
+    project: Option<Project>,
+) -> Result<(), PlatformError> {
+    platform::run(EditorDriver::new(editor).with_project(project), config)
 }
 
 /// Open `editor` in a window with explicit camera-navigation bindings.
@@ -927,8 +970,9 @@ pub fn run_with_controls(
     editor: Editor,
     config: WindowConfig,
     controls: CameraControls,
+    project: Option<Project>,
 ) -> Result<(), PlatformError> {
-    let mut driver = EditorDriver::new(editor);
+    let mut driver = EditorDriver::new(editor).with_project(project);
     *driver.camera_controls_mut() = controls;
     platform::run(driver, config)
 }

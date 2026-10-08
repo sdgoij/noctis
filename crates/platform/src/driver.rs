@@ -55,4 +55,11 @@ pub trait AppDriver {
     fn should_exit(&self) -> bool {
         false
     }
+
+    /// A file was dropped onto the window. The default does nothing; a driver
+    /// that acts on drops (for example, importing the file into a project)
+    /// implements it.
+    fn drop_file(&mut self, path: &std::path::Path) {
+        let _ = path;
+    }
 }

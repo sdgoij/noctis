@@ -360,6 +360,9 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                 }
                 self.forward_to_egui(&event);
             }
+            WindowEvent::DroppedFile(path) => {
+                self.driver.drop_file(path);
+            }
             other => self.forward_to_egui(other),
         }
     }

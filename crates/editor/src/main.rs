@@ -425,10 +425,11 @@ fn run_windowed(options: &Options) -> Result<(), CliError> {
         Some(path) => {
             let controls = editor::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
-            editor::window::run_with_controls(editor, config, controls)
+            editor::window::run_with_controls(editor, config, controls, project)
                 .map_err(|e| CliError::Message(e.to_string()))
         }
-        None => editor::window::run(editor, config).map_err(|e| CliError::Message(e.to_string())),
+        None => editor::window::run(editor, config, project)
+            .map_err(|e| CliError::Message(e.to_string())),
     }
 }
 

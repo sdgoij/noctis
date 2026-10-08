@@ -183,9 +183,11 @@ exists, import must not clobber it — suffix a counter or ask.
 
 *Implemented*: `Project::import_file(source)` detects the kind, copies the file
 into the kind's conventional directory, and never clobbers (a `-1`, `-2`, … suffix
-on collision); an unrecognised type is an error. The editor's drop targets
-(viewport → instantiate, outliner → instantiate) and the winit file-drop event
-are not yet wired.
+on collision); an unrecognised type is an error. The window host forwards winit's
+`DroppedFile` to the driver (`AppDriver::drop_file`), and the editor imports a
+dropped file into the open project (and instantiates a model). Distinguishing the
+**drop target** (viewport vs. outliner vs. anywhere) needs the drop position and
+is not yet wired — a drop always imports (and instantiates a model).
 
 ### Import pipeline and cache
 
@@ -397,9 +399,10 @@ New work this design implies (✔ = implemented):
   `noctis rename` command).
 - ✔ Prefabs as project assets: `Project::save_prefab` / `load_prefabs`, and the
   editor's `--save-prefabs` and prefab loading.
-- Drag & drop in the editor: `Project::import_file` (the import half,
-  auto-detect + place + no-clobber) is ✔; wiring the winit file-drop event and the
-  viewport/outliner drop targets is remaining.
+- Drag & drop in the editor: ✔ `Project::import_file` (the import half,
+  auto-detect + place + no-clobber) and the winit `DroppedFile` → `AppDriver::drop_file`
+  → project-import path. Remaining: the viewport/outliner **drop-target**
+  distinction (needs the drop position).
 - ✔ A `fonts` asset store on `AssetRegistry` (additive core-API change). Remaining:
   a font importer that bakes a glyph atlas into the cache, and a text component.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
