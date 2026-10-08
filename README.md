@@ -43,5 +43,5 @@ All crates — `math`, `ecs`, `render`, `physics`, `audio`, `script`, `testscene
 presents to a real window (`noctis-runtime --window`, `noctis-editor --window`),
 and the editor draws an [egui](https://github.com/emilk/egui) interface (outliner,
 inspector, live transform editing) over the viewport. The whole engine also runs
-headlessly for CI. Viewport mouse-picking and gizmo dragging are the next
-milestone.
+headlessly for CI. Click-to-select viewport picking is implemented (a ray vs.
+mesh bounds); gizmo/handle dragging is the next milestone.

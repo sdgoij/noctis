@@ -185,6 +185,38 @@ impl EditorDriver {
             });
         }
     }
+
+    /// Select the nearest entity under a click in the viewport.
+    fn pick_at(&mut self, ui: &egui::Ui, rect: egui::Rect, pointer: egui::Pos2) {
+        let pixels_per_point = ui.ctx().pixels_per_point();
+        let width = rect.width() * pixels_per_point;
+        let height = rect.height() * pixels_per_point;
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let px = (pointer.x - rect.min.x) * pixels_per_point;
+        let py = (pointer.y - rect.min.y) * pixels_per_point;
+        let ndc_x = 2.0 * px / width - 1.0;
+        let ndc_y = 1.0 - 2.0 * py / height;
+
+        let world = &self.editor.scene().world;
+        let Some(camera) = render::first_active_camera(world) else {
+            return;
+        };
+        let Some(view) = render::extract_camera(world, camera, width as u32, height as u32) else {
+            return;
+        };
+        let ray = crate::picking::ray_from_ndc(&view.inverse_view_projection, ndc_x, ndc_y);
+        if let Some(entity) = crate::picking::pick_entity(
+            &self.editor.scene().world,
+            self.editor.assets(),
+            &ray,
+            1000.0,
+        ) {
+            self.selected = Some(entity);
+            let _ = self.editor.select(entity);
+        }
+    }
 }
 
 impl AppDriver for EditorDriver {
@@ -260,8 +292,14 @@ impl AppDriver for EditorDriver {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.label("Viewport");
             ui.separator();
-            ui.label("Select an entity in the Outliner, then edit it in the Inspector.");
-            ui.label("Click into the viewport and use WASD to fly the camera.");
+            ui.label("Click an object to select it. WASD flies the camera.");
+            let rect = ui.max_rect();
+            let response = ui.interact(rect, ui.id().with("viewport_pick"), egui::Sense::click());
+            if response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    self.pick_at(ui, rect, pointer);
+                }
+            }
         });
     }
 }

@@ -48,6 +48,7 @@ pub mod command;
 pub mod editor;
 pub mod error;
 pub mod info;
+pub mod picking;
 pub mod window;
 
 pub use command::{
