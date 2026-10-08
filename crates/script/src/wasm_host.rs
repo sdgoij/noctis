@@ -19,12 +19,25 @@
 //! | `translate` | `(i32, f32, f32, f32) -> ()` | offset local translation |
 //! | `set_rotation_euler` | `(i32, f32, f32, f32) -> ()` | set rotation (radians) |
 //! | `set_scale` | `(i32, f32, f32, f32) -> ()` | set local scale |
+//! | `get_position` | `(i32) -> (f32, f32, f32)` | read local translation |
+//! | `get_rotation_euler` | `(i32) -> (f32, f32, f32)` | read rotation (radians) |
+//! | `get_scale` | `(i32) -> (f32, f32, f32)` | read local scale |
 //! | `destroy` | `(i32) -> ()` | despawn an entity |
+//! | `destroy_by_name` | `(i32, i32) -> ()` | despawn the entity named `memory[ptr..ptr+len]` |
 //! | `log` | `(i32, i32) -> ()` | log `memory[ptr..ptr+len]` |
 //! | `spawn` | `(i32, i32) -> i32` | spawn an entity named `memory[ptr..ptr+len]` |
 //! | `find_entity` | `(i32, i32) -> i32` | handle of the entity with that name |
+//! | `add_script` | `(i32, i32, i32) -> ()` | attach `memory[ptr..ptr+len]` as a script |
+//! | `instantiate_prefab` | `(i32, i32, i32) -> ()` | instantiate a prefab JSON under a parent |
+//! | `key_down` | `(i32, i32) -> i32` | is the named key held |
+//! | `mouse_down` | `(i32, i32) -> i32` | is the named button held |
 //! | `time_delta` | `() -> f32` | seconds since the last frame |
 //! | `time_elapsed` | `() -> f32` | total elapsed seconds |
+//!
+//! The vector getters return three floats as WebAssembly **multi-value**
+//! results. Two helpers read a `.wasm` file from disk into that text form:
+//! [`load`] returns a ready [`Script`](ecs::components::Script) and [`register`]
+//! installs it as a script asset under a name.
 //!
 //! Handles are `i32` indices into a per-call table: handle `0` is the script's
 //! own entity, and handles returned by `spawn`/`find_entity` are valid for the
@@ -41,7 +54,11 @@
 //! replays them through [`ScriptApi`](crate::api::ScriptApi).
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use ecs::assets::{AssetRegistry, ScriptAsset};
+use ecs::components::Script;
+use ecs::resources::{Key, MouseButton};
 use math::vec3;
 use slag::wasm::exec::{HostRequest, RunProgress};
 use slag::wasm::module::ImportDesc;
@@ -102,10 +119,18 @@ enum Abi {
     Translate,
     SetRotationEuler,
     SetScale,
+    GetPosition,
+    GetRotationEuler,
+    GetScale,
     Destroy,
+    DestroyByName,
     Log,
     Spawn,
     FindEntity,
+    AddScript,
+    InstantiatePrefab,
+    KeyDown,
+    MouseDown,
     TimeDelta,
     TimeElapsed,
 }
@@ -118,10 +143,18 @@ impl Abi {
             "translate" => Abi::Translate,
             "set_rotation_euler" => Abi::SetRotationEuler,
             "set_scale" => Abi::SetScale,
+            "get_position" => Abi::GetPosition,
+            "get_rotation_euler" => Abi::GetRotationEuler,
+            "get_scale" => Abi::GetScale,
             "destroy" => Abi::Destroy,
+            "destroy_by_name" => Abi::DestroyByName,
             "log" => Abi::Log,
             "spawn" => Abi::Spawn,
             "find_entity" => Abi::FindEntity,
+            "add_script" => Abi::AddScript,
+            "instantiate_prefab" => Abi::InstantiatePrefab,
+            "key_down" => Abi::KeyDown,
+            "mouse_down" => Abi::MouseDown,
             "time_delta" => Abi::TimeDelta,
             "time_elapsed" => Abi::TimeElapsed,
             _ => return None,
@@ -136,16 +169,24 @@ impl Abi {
                 vec![ValType::I32, ValType::F32, ValType::F32, ValType::F32],
                 vec![],
             ),
+            // Vector getters return three floats (WebAssembly multi-value).
+            GetPosition | GetRotationEuler | GetScale => (
+                vec![ValType::I32],
+                vec![ValType::F32, ValType::F32, ValType::F32],
+            ),
             Destroy => (vec![ValType::I32], vec![]),
+            DestroyByName => (vec![ValType::I32, ValType::I32], vec![]),
             Log => (vec![ValType::I32, ValType::I32], vec![]),
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
+            KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
+            AddScript => (vec![ValType::I32, ValType::I32, ValType::I32], vec![]),
+            InstantiatePrefab => (vec![ValType::I32, ValType::I32, ValType::I32], vec![]),
             TimeDelta | TimeElapsed => (vec![], vec![ValType::F32]),
         };
         FuncType { params, results }
     }
 
     /// Service a call: mutate the bridge and return the results.
-    #[allow(clippy::too_many_arguments)]
     fn apply(
         self,
         args: &[Value],
@@ -153,6 +194,7 @@ impl Abi {
         handles: &mut Vec<EntityId>,
         memory: Option<&[u8]>,
     ) -> Vec<Value> {
+        use Abi::*;
         let handle = |index: usize| -> Option<EntityId> {
             let raw = i32_of(args.get(index).copied().unwrap_or(Value::I32(-1)));
             usize::try_from(raw)
@@ -167,39 +209,57 @@ impl Abi {
                 f32_of(args, base + 2),
             )
         };
+        let vector_result = |value: math::Vec3| {
+            vec![
+                Value::F32(value.x.to_bits()),
+                Value::F32(value.y.to_bits()),
+                Value::F32(value.z.to_bits()),
+            ]
+        };
         match self {
-            Abi::SetPosition => {
+            SetPosition => {
                 if let Some(id) = handle(0) {
                     bridge.set_position(id, vector(1));
                 }
                 Vec::new()
             }
-            Abi::Translate => {
+            Translate => {
                 if let Some(id) = handle(0) {
                     bridge.translate(id, vector(1));
                 }
                 Vec::new()
             }
-            Abi::SetRotationEuler => {
+            SetRotationEuler => {
                 if let Some(id) = handle(0) {
                     bridge.set_rotation(id, vector(1));
                 }
                 Vec::new()
             }
-            Abi::SetScale => {
+            SetScale => {
                 if let Some(id) = handle(0) {
                     bridge.set_scale(id, vector(1));
                 }
                 Vec::new()
             }
-            Abi::Destroy => {
+            GetPosition => handle(0).map_or_else(Vec::new, |id| vector_result(bridge.position(id))),
+            GetRotationEuler => {
+                handle(0).map_or_else(Vec::new, |id| vector_result(bridge.rotation(id)))
+            }
+            GetScale => handle(0).map_or_else(Vec::new, |id| vector_result(bridge.scale(id))),
+            Destroy => {
                 if let Some(id) = handle(0) {
                     bridge.commands.push(ScriptCommand::Destroy { entity: id });
                 }
                 Vec::new()
             }
-            Abi::Log => {
-                if let Some(text) = memory_string(args, memory) {
+            DestroyByName => {
+                if let Some(name) = memory_string_at(args, memory, 0) {
+                    bridge.commands.push(ScriptCommand::DestroyByName { name });
+                }
+                Vec::new()
+            }
+            Log => {
+                if let Some(text) = memory_string_at(args, memory, 0) {
                     bridge.commands.push(ScriptCommand::Log {
                         message: text,
                         entity: bridge.entity,
@@ -207,28 +267,60 @@ impl Abi {
                 }
                 Vec::new()
             }
-            Abi::Spawn => {
-                let name = memory_string(args, memory);
+            Spawn => {
+                let name = memory_string_at(args, memory, 0);
                 let id = bridge.spawn(name);
-                handles.push(id);
                 vec![Value::I32(handle_of(handles, id))]
             }
-            Abi::FindEntity => {
-                let found = memory_string(args, memory)
+            FindEntity => {
+                let found = memory_string_at(args, memory, 0)
                     .and_then(|name| bridge.find(&name))
-                    .map(|id| {
-                        if let Some(existing) = handles.iter().position(|h| *h == id) {
-                            existing
-                        } else {
-                            handles.push(id);
-                            handles.len() - 1
-                        }
-                    });
-                vec![Value::I32(found.map_or(-1, |index| index as i32))]
+                    .map(|id| handle_of(handles, id));
+                vec![Value::I32(found.unwrap_or(-1))]
             }
-            Abi::TimeDelta => vec![Value::F32(bridge.delta.to_bits())],
-            Abi::TimeElapsed => vec![Value::F32(bridge.elapsed.to_bits())],
+            AddScript => {
+                if let (Some(id), Some(source)) = (handle(0), memory_string_at(args, memory, 1)) {
+                    bridge
+                        .commands
+                        .push(ScriptCommand::AddScript { entity: id, source });
+                }
+                Vec::new()
+            }
+            InstantiatePrefab => {
+                if let Some(json) = memory_string_at(args, memory, 0) {
+                    bridge.commands.push(ScriptCommand::InstantiatePrefab {
+                        json,
+                        parent: handle(2),
+                        spawned: Vec::new(),
+                    });
+                }
+                Vec::new()
+            }
+            KeyDown => {
+                let down = memory_string_at(args, memory, 0)
+                    .and_then(|name| Key::from_name(&name))
+                    .is_some_and(|key| bridge.input.key_down(key));
+                vec![Value::I32(i32::from(down))]
+            }
+            MouseDown => {
+                let down = memory_string_at(args, memory, 0)
+                    .and_then(|name| mouse_button(&name))
+                    .is_some_and(|button| bridge.input.mouse.is_down(button));
+                vec![Value::I32(i32::from(down))]
+            }
+            TimeDelta => vec![Value::F32(bridge.delta.to_bits())],
+            TimeElapsed => vec![Value::F32(bridge.elapsed.to_bits())],
         }
+    }
+}
+
+/// The mouse button named `name` (as the JavaScript API spells them).
+fn mouse_button(name: &str) -> Option<MouseButton> {
+    match name.to_ascii_lowercase().as_str() {
+        "left" => Some(MouseButton::Left),
+        "right" => Some(MouseButton::Right),
+        "middle" => Some(MouseButton::Middle),
+        _ => None,
     }
 }
 
@@ -257,12 +349,12 @@ fn i32_of(value: Value) -> i32 {
     }
 }
 
-/// Read the `(ptr, len)` string arguments against the module's memory.
-fn memory_string(args: &[Value], memory: Option<&[u8]>) -> Option<String> {
+/// Read a `(ptr, len)` string from the module's memory, starting at `base`.
+fn memory_string_at(args: &[Value], memory: Option<&[u8]>, base: usize) -> Option<String> {
     let memory = memory?;
-    let raw = i32_of(args.first().copied()?);
+    let raw = i32_of(args.get(base).copied()?);
     let ptr = usize::try_from(raw).ok()?;
-    let len = usize::try_from(i32_of(args.get(1).copied()?)).ok()?;
+    let len = usize::try_from(i32_of(args.get(base + 1).copied()?)).ok()?;
     let bytes = memory.get(ptr..ptr.checked_add(len)?)?;
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
@@ -273,6 +365,43 @@ fn memory_bytes(store: &Store, instance: usize) -> Option<&[u8]> {
         ExternVal::Memory(cell) => store.memory_bytes(cell),
         _ => None,
     }
+}
+
+/// Read a `.wasm` file and produce a [`Script`](ecs::components::Script) that
+/// runs it.
+///
+/// ```no_run
+/// let script = script::wasm_host::load("turret.wasm").expect("read module");
+/// ```
+pub fn load(path: impl AsRef<Path>) -> std::io::Result<Script> {
+    let bytes = std::fs::read(path)?;
+    Ok(Script::from_source(encode(&bytes)))
+}
+
+/// Read a `.wasm` file and register it as a script asset under `name`, so a
+/// `Script::from_path(name)` (or a scene reference) runs it.
+///
+/// ```no_run
+/// # use ecs::assets::AssetRegistry;
+/// let mut assets = AssetRegistry::with_defaults();
+/// script::wasm_host::register(&mut assets, "scripts/turret.wasm", "turret.wasm")
+///     .expect("read module");
+/// ```
+pub fn register(
+    assets: &mut AssetRegistry,
+    name: impl Into<String>,
+    path: impl AsRef<Path>,
+) -> std::io::Result<()> {
+    let name = name.into();
+    let bytes = std::fs::read(path)?;
+    assets.scripts.insert_named(
+        name.clone(),
+        ScriptAsset {
+            name,
+            source: encode(&bytes),
+        },
+    );
+    Ok(())
 }
 
 /// A native WebAssembly [`ScriptHost`].
@@ -496,6 +625,32 @@ mod tests {
         );
         assert!(set_position.results.is_empty());
         assert_eq!(Abi::Spawn.func_type().results, vec![ValType::I32]);
+        // The vector getters return three floats (multi-value).
+        assert_eq!(
+            Abi::GetPosition.func_type().results,
+            vec![ValType::F32, ValType::F32, ValType::F32]
+        );
+        assert_eq!(Abi::GetScale.func_type().params, vec![ValType::I32]);
+        // Input probes, string commands, and prefabs.
+        assert_eq!(Abi::KeyDown.func_type().results, vec![ValType::I32]);
+        assert_eq!(Abi::MouseDown.func_type().results, vec![ValType::I32]);
+        assert!(Abi::DestroyByName.func_type().results.is_empty());
+        assert_eq!(
+            Abi::AddScript.func_type().params,
+            vec![ValType::I32, ValType::I32, ValType::I32]
+        );
+        assert_eq!(
+            Abi::InstantiatePrefab.func_type().params,
+            vec![ValType::I32, ValType::I32, ValType::I32]
+        );
+    }
+
+    #[test]
+    fn mouse_button_names_match_the_javascript_api() {
+        assert_eq!(mouse_button("left"), Some(MouseButton::Left));
+        assert_eq!(mouse_button("Right"), Some(MouseButton::Right));
+        assert_eq!(mouse_button("middle"), Some(MouseButton::Middle));
+        assert_eq!(mouse_button("side"), None);
     }
 
     #[test]

@@ -173,6 +173,132 @@ fn demo_module() -> Vec<u8> {
     out
 }
 
+/// A module that reads its own transform, adds `1` to every component, and
+/// writes it back — exercising the multi-value vector getters.
+fn getter_module() -> Vec<u8> {
+    let mut out = header();
+
+    // types: 0 (i32)->(f32,f32,f32), 1 (i32,f32,f32,f32)->(), 2 (i32,f32)->()
+    let mut types = Vec::new();
+    leb(3, &mut types);
+    func_type(&[I32], &[F32, F32, F32], &mut types);
+    func_type(&[I32, F32, F32, F32], &[], &mut types);
+    func_type(&[I32, F32], &[], &mut types);
+    section(1, &types, &mut out);
+
+    let mut imports = Vec::new();
+    leb(2, &mut imports);
+    import("noctis", "get_position", 0, &mut imports);
+    import("noctis", "set_position", 1, &mut imports);
+    section(2, &imports, &mut out);
+
+    let mut functions = Vec::new();
+    leb(1, &mut functions);
+    leb(2, &mut functions);
+    section(3, &functions, &mut out);
+
+    let mut exports = Vec::new();
+    leb(1, &mut exports);
+    name("on_update", &mut exports);
+    exports.push(0x00);
+    leb(2, &mut exports);
+    section(7, &exports, &mut out);
+
+    let mut body = Vec::new();
+    leb(1, &mut body); // one local declaration entry...
+    leb(3, &mut body); // ...of three...
+    body.push(F32); // ...f32 locals
+    body.extend_from_slice(&[
+        0x20, 0x00, // local.get 0
+        0x10, 0x00, // call get_position -> x y z
+        0x21, 0x04, // local.set 4 (z)
+        0x21, 0x03, // local.set 3 (y)
+        0x21, 0x02, // local.set 2 (x)
+        0x20, 0x00, // local.get 0
+        0x20, 0x02, 0x43, 0x00, 0x00, 0x80, 0x3f, 0x92, // x + 1
+        0x20, 0x03, 0x43, 0x00, 0x00, 0x80, 0x3f, 0x92, // y + 1
+        0x20, 0x04, 0x43, 0x00, 0x00, 0x80, 0x3f, 0x92, // z + 1
+        0x10, 0x01, // call set_position
+        0x0b, // end
+    ]);
+    let mut code = Vec::new();
+    leb(1, &mut code);
+    leb(body.len() as u32, &mut code);
+    code.extend_from_slice(&body);
+    section(10, &code, &mut out);
+
+    out
+}
+
+/// A module that checks a key and, when it is held, moves its entity.
+fn input_module() -> Vec<u8> {
+    let mut out = header();
+
+    // types: 0 (i32,i32)->i32, 1 (i32,f32,f32,f32)->(), 2 (i32,f32)->()
+    let mut types = Vec::new();
+    leb(3, &mut types);
+    func_type(&[I32, I32], &[I32], &mut types);
+    func_type(&[I32, F32, F32, F32], &[], &mut types);
+    func_type(&[I32, F32], &[], &mut types);
+    section(1, &types, &mut out);
+
+    let mut imports = Vec::new();
+    leb(2, &mut imports);
+    import("noctis", "key_down", 0, &mut imports);
+    import("noctis", "set_position", 1, &mut imports);
+    section(2, &imports, &mut out);
+
+    let mut functions = Vec::new();
+    leb(1, &mut functions);
+    leb(2, &mut functions);
+    section(3, &functions, &mut out);
+
+    let mut memory = Vec::new();
+    leb(1, &mut memory);
+    memory.push(0x00);
+    leb(1, &mut memory);
+    section(5, &memory, &mut out);
+
+    let mut exports = Vec::new();
+    leb(2, &mut exports);
+    name("memory", &mut exports);
+    exports.push(0x02);
+    leb(0, &mut exports);
+    name("on_update", &mut exports);
+    exports.push(0x00);
+    leb(2, &mut exports);
+    section(7, &exports, &mut out);
+
+    let mut body = Vec::new();
+    leb(0, &mut body); // no locals
+    body.extend_from_slice(&[
+        0x41, 0x00, 0x41, 0x04, 0x10, 0x00, // i32.const 0; i32.const 4; call key_down("KeyW")
+        0x04, 0x40, // if (no result)
+        0x20, 0x00, // local.get 0
+        0x43, 0x00, 0x00, 0x00, 0x00, // f32.const 0
+        0x43, 0x00, 0x00, 0xa0, 0x40, // f32.const 5
+        0x43, 0x00, 0x00, 0x00, 0x00, // f32.const 0
+        0x10, 0x01, // call set_position
+        0x0b, // end if
+        0x0b, // end
+    ]);
+    let mut code = Vec::new();
+    leb(1, &mut code);
+    leb(body.len() as u32, &mut code);
+    code.extend_from_slice(&body);
+    section(10, &code, &mut out);
+
+    let mut data = Vec::new();
+    leb(1, &mut data);
+    data.push(0x00);
+    data.extend_from_slice(&[0x41, 0x00, 0x0b]); // i32.const 0
+    leb(4, &mut data);
+    data.extend_from_slice(b"KeyW");
+    section(11, &data, &mut out);
+
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -283,4 +409,102 @@ fn one_runtime_runs_javascript_and_wasm_side_by_side() {
         vec3(0.0, 7.0, 0.0),
         1e-4
     ));
+}
+
+#[test]
+fn a_wasm_script_reads_and_writes_transforms() {
+    let (mut world, entity) = world_with(wasm_host::encode(&getter_module()));
+    let assets = AssetRegistry::new();
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+    world.insert(
+        entity,
+        LocalTransform::from_translation(vec3(10.0, 20.0, 30.0)),
+    );
+
+    runtime.run_update(&mut world, &assets, 0.016);
+
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+    // The multi-value getter returned the seeded transform, and the module added
+    // one to each component.
+    assert!(vec3_approx_eq(
+        translation(&world, entity),
+        vec3(11.0, 21.0, 31.0),
+        1e-4
+    ));
+}
+
+#[test]
+fn a_wasm_script_reads_input() {
+    use ecs::resources::Key;
+
+    let (mut world, entity) = world_with(wasm_host::encode(&input_module()));
+    world.insert(
+        entity,
+        LocalTransform::from_translation(vec3(0.0, 0.0, 0.0)),
+    );
+    let assets = AssetRegistry::new();
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+
+    // With the key up, the guarded move does not happen.
+    runtime.run_update(&mut world, &assets, 0.016);
+    assert!(vec3_approx_eq(
+        translation(&world, entity),
+        vec3(0.0, 0.0, 0.0),
+        1e-4
+    ));
+
+    // With it held, it does.
+    runtime
+        .input_mut()
+        .press_key(Key::letter('W').expect("the letter key"));
+    runtime.run_update(&mut world, &assets, 0.016);
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+    assert!(vec3_approx_eq(
+        translation(&world, entity),
+        vec3(0.0, 5.0, 0.0),
+        1e-4
+    ));
+}
+
+#[test]
+fn a_wasm_file_registers_as_a_script_asset() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("noctis-wasm-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("demo.wasm");
+    std::fs::write(&path, demo_module()).expect("write module");
+
+    // Register the file under a name, then reference it by path from a scene.
+    let mut assets = AssetRegistry::new();
+    wasm_host::register(&mut assets, "scripts/demo.wasm", &path).expect("register");
+
+    let (mut world, entity) = world_with(String::new());
+    world.insert(entity, Script::from_path("scripts/demo.wasm"));
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+    runtime.run_update(&mut world, &assets, 0.016);
+
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+    assert!(vec3_approx_eq(
+        translation(&world, entity),
+        vec3(1.0, 2.0, 3.0),
+        1e-4
+    ));
+    assert_eq!(std::fs::read(&path).expect("read back"), demo_module());
+
+    std::fs::remove_dir_all(&dir).ok();
 }

@@ -37,6 +37,7 @@ struct Args {
     audio: bool,
     export: Option<String>,
     name: Option<String>,
+    wasm: Vec<(String, String)>,
     print_summary: bool,
     quiet: bool,
 }
@@ -53,6 +54,7 @@ impl Default for Args {
             audio: true,
             export: None,
             name: None,
+            wasm: Vec::new(),
             print_summary: false,
             quiet: false,
         }
@@ -83,6 +85,13 @@ impl Args {
                 "--name" => {
                     let value = it.next().ok_or("--name requires a value")?;
                     args.name = Some(value);
+                }
+                "--wasm" => {
+                    let value = it.next().ok_or("--wasm requires <name>=<path>")?;
+                    let (name, path) = value
+                        .split_once('=')
+                        .ok_or("--wasm expects <name>=<path>")?;
+                    args.wasm.push((name.to_string(), path.to_string()));
                 }
                 "--frames" => {
                     let value = it.next().ok_or("--frames requires a number")?;
@@ -130,6 +139,9 @@ OPTIONS:
     --no-audio         Do not open an audio device (use silent audio).
     --export <dir>     Export a self-contained game folder (requires --scene).
     --name <name>      Exported executable name (default: the scene file stem).
+    --wasm <name>=<path>
+                       Register a .wasm module as a script asset (repeatable;
+                       requires a build with the `slag` feature).
     --print-summary    Print the run summary (printed by default).
     --quiet            Suppress the run summary.
     -h, --help         Show this help.
@@ -169,6 +181,7 @@ fn build_runtime(args: &Args) -> Result<Runtime<Host>, String> {
     };
 
     let mut assets = AssetRegistry::with_defaults();
+    register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, &mut assets)?;
     let host = make_host()?;
 
@@ -182,6 +195,27 @@ fn build_runtime(args: &Args) -> Result<Runtime<Host>, String> {
     }
 
     Ok(runtime)
+}
+
+/// Register every `--wasm name=path` module as a script asset, so a scene can
+/// reference it with `Script::from_path(name)`.
+#[cfg(feature = "slag")]
+fn register_wasm_modules(args: &Args, assets: &mut AssetRegistry) -> Result<(), String> {
+    for (name, path) in &args.wasm {
+        script::wasm_host::register(assets, name.clone(), path)
+            .map_err(|err| format!("failed to register wasm module {path:?}: {err}"))?;
+    }
+    Ok(())
+}
+
+/// `--wasm` needs the `slag` feature that compiles the WebAssembly host.
+#[cfg(not(feature = "slag"))]
+fn register_wasm_modules(args: &Args, _assets: &mut AssetRegistry) -> Result<(), String> {
+    if args.wasm.is_empty() {
+        Ok(())
+    } else {
+        Err("--wasm requires a build with the `slag` feature".to_string())
+    }
 }
 
 /// Load the scene to run: an explicit file, a `scene.json` bundled next to the
