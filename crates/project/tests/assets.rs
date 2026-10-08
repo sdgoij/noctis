@@ -87,6 +87,31 @@ fn scans_textures_and_scripts_and_imports_them_by_path() {
 }
 
 #[test]
+fn imports_an_audio_clip() {
+    let dir = temp_project("audio");
+    write(&dir.join("noctis.toml"), manifest().as_bytes());
+    write(
+        &dir.join("assets/audio/beep.wav"),
+        &wav_bytes(8_000, &[0, 8_192, -8_192]),
+    );
+
+    let project = Project::open(&dir).expect("open");
+    let imported = project.import_assets().expect("import");
+    assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+
+    let clip = imported
+        .registry
+        .audio
+        .get_by_path("assets/audio/beep.wav")
+        .expect("audio imported");
+    assert_eq!(clip.sample_rate, 8_000);
+    assert_eq!(clip.channels, 1);
+    assert_eq!(clip.samples.len(), 3);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn imports_a_font_and_rejects_a_non_font() {
     let dir = temp_project("font");
     write(&dir.join("noctis.toml"), manifest().as_bytes());
@@ -251,6 +276,29 @@ fn png_bytes(width: u32, height: u32) -> Vec<u8> {
         .write_to(&mut bytes, image::ImageFormat::Png)
         .expect("encode png");
     bytes.into_inner()
+}
+
+/// A minimal 16-bit PCM WAV, one channel, via a hand-written header.
+fn wav_bytes(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for sample in samples {
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
 }
 
 /// A minimal binary glTF (GLB) with one triangle, mirroring the renderer's own

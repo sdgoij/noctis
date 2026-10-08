@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 ecs.workspace = true
 render.workspace = true
+audio.workspace = true
 serde.workspace = true
 toml.workspace = true
 

@@ -43,10 +43,12 @@
 #![forbid(unsafe_code)]
 
 pub mod clip_source;
+pub mod decode;
 pub mod engine;
 pub mod spatial;
 
 pub use clip_source::ClipSource;
+pub use decode::load_clip;
 pub use engine::{
     AudioEngine, AudioError, DEFAULT_MAX_DISTANCE, DEFAULT_ROLLOFF, Listener, PlaybackConfig,
     SoundHandle,

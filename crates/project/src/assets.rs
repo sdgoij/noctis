@@ -96,6 +96,7 @@ impl std::fmt::Debug for ImportedAssets {
             .field("meshes", &self.registry.meshes.len())
             .field("materials", &self.registry.materials.len())
             .field("textures", &self.registry.textures.len())
+            .field("audio", &self.registry.audio.len())
             .field("scripts", &self.registry.scripts.len())
             .field("fonts", &self.registry.fonts.len())
             .field("lookup", &self.lookup.len())
@@ -165,9 +166,10 @@ fn import_entry(
     match entry.kind {
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
         AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache),
+        AssetKind::Audio => import_audio(registry, &entry.path, &entry.file),
         AssetKind::Script => import_script(registry, &entry.path, &entry.file),
         AssetKind::Font => import_font(registry, &entry.path, &entry.file),
-        // Audio has no importer yet; scenes and prefabs are not assets.
+        // Scenes and prefabs are not assets, and an unknown file is not imported.
         _ => Ok(()),
     }
 }
@@ -211,6 +213,14 @@ fn import_script(
         source,
     };
     registry.scripts.insert_named(path.as_str(), asset);
+    Ok(())
+}
+
+/// Import an audio file, registered under its asset path. Decoding is done by
+/// the `audio` crate (WAV/Ogg/MP3), giving interleaved `f32` samples.
+fn import_audio(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> Result<(), String> {
+    let clip = audio::load_clip(file).map_err(|error| error.to_string())?;
+    registry.audio.insert_named(path.as_str(), clip);
     Ok(())
 }
 

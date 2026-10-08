@@ -34,13 +34,17 @@ pub const DEFAULT_MAX_DISTANCE: f32 = 50.0;
 /// Default `rolloff` for sounds started with [`AudioEngine::play`].
 pub const DEFAULT_ROLLOFF: f32 = 1.0;
 
-/// An error opening or configuring the audio output.
+/// An error opening or configuring the audio output, or decoding an audio file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioError {
     /// No output device is available.
     NoOutputDevice,
     /// The device exists but the stream could not be created.
     DeviceUnavailable(String),
+    /// An audio file could not be read from disk.
+    Io(String),
+    /// An audio file could not be decoded (an unknown or corrupt format).
+    Decode(String),
 }
 
 impl fmt::Display for AudioError {
@@ -50,6 +54,8 @@ impl fmt::Display for AudioError {
             AudioError::DeviceUnavailable(message) => {
                 write!(f, "audio device unavailable: {message}")
             }
+            AudioError::Io(message) => write!(f, "audio io error: {message}"),
+            AudioError::Decode(message) => write!(f, "audio decode error: {message}"),
         }
     }
 }

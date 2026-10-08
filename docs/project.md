@@ -208,9 +208,10 @@ each file by extension, and `Project::import_assets` decodes models (via
 its `file#kind/name` fragment path), textures, and scripts into a registry seeded
 with the engine defaults. A file that fails to import is recorded in
 `ImportedAssets::errors` (a warning, not a fatal error), so one corrupt asset does
-not stop a project from opening. Audio is classified but not yet decoded; fonts are
-registered as validated source bytes. Both `noctis-editor` and `noctis-runtime`
-build their registry from `import_assets()` when `--project` is given.
+not stop a project from opening. Audio files decode to `AudioClip`s (WAV/Ogg/MP3
+via the `audio` crate); fonts are registered as validated source bytes. Both
+`noctis-editor` and `noctis-runtime` build their registry from `import_assets()`
+when `--project` is given.
 
 Per-asset **import settings** (persisted, not in the gitignored cache) control
 decoding: a texture is sRGB (color) or linear (data) — the inspector already has
@@ -441,8 +442,8 @@ by tests; keep it that way as the project model is added.
   either add one or drop it from the table until there is.
 - **Model import settings** (scale, up-axis): the texture sidecar exists; the model
   equivalent is not implemented yet.
-- **Audio decoding**: the `audio` store is still empty from import (a project's
-  `.wav`/`.ogg` files are classified but not decoded).
+- **Audio decoding**: *resolved* — `audio::load_clip` decodes a project's
+  `.wav`/`.ogg`/`.mp3` into an `AudioClip` (no separate cache; decoding is fast).
 - **UI project picker**: `--project` is the entry point today; opening a project
   from the editor UI (rather than a flag) is designed but not built, so
   `Project::open` remains the single drop-in point.

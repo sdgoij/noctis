@@ -2693,6 +2693,7 @@ dependencies = [
 name = "project"
 version = "0.1.0"
 dependencies = [
+ "audio",
  "ecs",
  "image",
  "render",
