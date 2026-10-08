@@ -78,9 +78,12 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
 - `script`: the real Slag backend is the `slag` feature (off by default). It
   builds from the pinned `github.com/sdgoij/slag` and its smoke tests pass
   (`cargo test -p script --features slag`); the default build uses the testable
-  `NoopHost`/`RecordingHost`. `runtime` forwards the feature, so a game built and
-  run with it executes real JavaScript (see the `slag` entry under Commands; use
-  `--manifest-path`, as `-p runtime` is ambiguous with a transitive Slag crate).
+  `NoopHost`/`RecordingHost`. The feature enables Slag's **WebAssembly JS API**
+  (scripts can build and instantiate WASM modules) and its **Cranelift JIT hook**
+  (hot bodies run at machine speed) — hence the Cranelift build cost. `runtime`
+  forwards the feature, so a game built and run with it executes real JavaScript
+  (see the `slag` entry under Commands; use `--manifest-path`, as `-p runtime` is
+  ambiguous with a transitive Slag crate).
   To make that possible, `App` systems are deliberately **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.

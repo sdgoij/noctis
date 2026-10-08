@@ -136,3 +136,73 @@ fn find_entity_resolves_to_the_real_entity_after_replay() {
         runtime.host().errors()
     );
 }
+
+/// A hot counting loop. With the `jit` feature on (which this crate's `slag`
+/// feature enables) `SlagHost::new` installs the Cranelift hook, so this drives
+/// the compiled path; the result also guards correctness.
+const JIT_SCRIPT: &str = "
+    function on_start(entity, dt) {
+        var total = 0;
+        for (var i = 0; i < 200000; i++) { total += i; }
+        // sum(0..200000) = 19999900000, exact in a double; store a flag so the
+        // result survives the engine's f32 transform.
+        set_position(entity, total === 19999900000 ? 1 : 0, 0, 0);
+    }
+";
+
+#[test]
+fn hot_loops_run_correctly_with_the_jit_installed() {
+    let (mut world, entity) = scene(JIT_SCRIPT);
+    let host = SlagHost::new().expect("slag engine starts");
+    assert!(
+        host.jit_enabled(),
+        "the Cranelift JIT hook should have installed"
+    );
+    let mut runtime = ScriptRuntime::with_host(host);
+    let assets = AssetRegistry::new();
+
+    runtime.run_start(&mut world, &assets);
+
+    let x = transform(&world, entity).translation.x;
+    assert!((x - 1.0).abs() < 1e-4, "loop result flag = {x}");
+    assert!(
+        runtime.host().errors().is_empty(),
+        "unexpected script errors: {:?}",
+        runtime.host().errors()
+    );
+}
+
+/// A hand-assembled WASM module: `(module (func (export "f") (result i32)
+/// i32.const 42))`. Written as byte values so the test needs no toolchain.
+const WASM_SCRIPT: &str = "
+    function on_start(entity, dt) {
+        var bytes = [
+            0,97,115,109, 1,0,0,0,
+            1,5,1,96,0,1,127,
+            3,2,1,0,
+            7,5,1,1,102,0,0,
+            10,6,1,4,0,65,42,11
+        ];
+        var module = new WebAssembly.Module(new Uint8Array(bytes));
+        var instance = new WebAssembly.Instance(module);
+        set_position(entity, instance.exports.f(), 0, 0);
+    }
+";
+
+#[test]
+fn a_script_can_instantiate_a_webassembly_module() {
+    let (mut world, entity) = scene(WASM_SCRIPT);
+    let mut runtime = ScriptRuntime::with_host(SlagHost::new().expect("slag engine starts"));
+    let assets = AssetRegistry::new();
+
+    runtime.run_start(&mut world, &assets);
+    assert!(
+        runtime.host().errors().is_empty(),
+        "unexpected script errors: {:?}",
+        runtime.host().errors()
+    );
+
+    // The module's `f()` returned 42 and the engine API consumed it.
+    let x = transform(&world, entity).translation.x;
+    assert!((x - 42.0).abs() < 1e-4, "wasm export result = {x}");
+}

@@ -10,16 +10,22 @@ repository.workspace = true
 [features]
 default = []
 # The real JavaScript backend. Off by default: Slag pulls a from-scratch WASM
-# engine and a very large pinned `test262` submodule, which the ordinary engine
-# build does not want. Build the backend with `cargo build -p script --features slag`.
-slag = ["dep:slag"]
+# engine, the Cranelift JIT, and a large pinned `test262` submodule, which the
+# ordinary engine build does not want. Build the backend with
+# `cargo build -p script --features slag`.
+#
+# Enabling `slag` turns on Slag's WebAssembly JS API (`wasm`) and its Cranelift
+# JIT hook (`jit`), so scripts see the `WebAssembly` global and hot bodies run at
+# machine speed.
+slag = ["dep:slag", "slag/wasm", "slag/jit"]
 
 [dependencies]
 math.workspace = true
 ecs.workspace = true
 serde_json.workspace = true
+log.workspace = true
 
-# Optional: the Slag JavaScript engine. `default-features = false` avoids the
-# default-on WASM/JIT surface; the engine still needs its `test262` submodule at
-# build time (see the crate docs).
+# Optional: the Slag JavaScript engine. `default-features = false` keeps the
+# surface explicit — this crate's `slag` feature then turns on `wasm` and `jit`
+# deliberately (see above).
 slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, optional = true }

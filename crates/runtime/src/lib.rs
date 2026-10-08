@@ -15,7 +15,7 @@
 //! The runtime is generic over its script host. The default is the inert
 //! [`NoopHost`](script::NoopHost) — scripts are discovered and tracked but not
 //! executed. With the `slag` feature the `noctis-runtime` binary runs the real
-//! Slag engine instead:
+//! Slag engine instead, with its WebAssembly JS API and Cranelift JIT enabled:
 //!
 //! ```text
 //! cargo build --manifest-path crates/runtime/Cargo.toml --features slag

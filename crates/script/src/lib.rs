@@ -16,12 +16,18 @@
 //! ## The `slag` feature
 //!
 //! Scripting is JavaScript, executed by the "Slag" engine. Because pulling in a
-//! JS engine (and its enormous test262 submodule) is not appropriate for every
-//! build, the real backend lives behind the **off-by-default** `slag` feature:
+//! JS engine (its WebAssembly runtime, the Cranelift JIT, and an enormous
+//! test262 submodule) is not appropriate for every build, the real backend lives
+//! behind the **off-by-default** `slag` feature:
 //!
 //! ```text
 //! cargo build -p script --features slag
 //! ```
+//!
+//! The feature enables Slag's **WebAssembly JS API** (scripts see the
+//! `WebAssembly` global and can build and instantiate modules) and its
+//! **Cranelift JIT hook** (`SlagHost::jit_enabled`, hot certified bodies run at
+//! machine speed).
 //!
 //! Without the feature the crate is fully functional but inert: scripts are
 //! discovered and their lifecycles are tracked, but no user code runs. See

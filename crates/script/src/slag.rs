@@ -1,9 +1,10 @@
 //! The real JavaScript backend, compiled only with the `slag` feature.
 //!
 //! This module embeds the [Slag](https://github.com/sdgoij/slag) JavaScript
-//! engine. It is **off by default** because the crate pulls a very large pinned
-//! `test262` submodule (and a from-scratch WASM engine), which is inappropriate
-//! for the ordinary engine build. Enable it with:
+//! engine, including its WebAssembly JS API and its Cranelift JIT hook. It is
+//! **off by default** because those pull a from-scratch WASM engine, Cranelift,
+//! and a very large pinned `test262` submodule, which is inappropriate for the
+//! ordinary engine build. Enable it with:
 //!
 //! ```text
 //! cargo build -p script --features slag
@@ -240,20 +241,39 @@ pub struct SlagHost {
     bridge: Rc<RefCell<Bridge>>,
     next_module: ModuleId,
     errors: Vec<String>,
+    jit: bool,
 }
 
 impl SlagHost {
-    /// Create the engine and install the Noctis API globals.
+    /// Create the engine, install the Cranelift JIT hook, and install the Noctis
+    /// API globals.
+    ///
+    /// The JIT is an optimisation: if the hook cannot be installed, scripts still
+    /// run on the interpreter, so the failure is logged rather than fatal.
     pub fn new() -> Result<Self, SlagError> {
-        let context = slag::Context::new().map_err(engine_err)?;
+        let mut context = slag::Context::new().map_err(engine_err)?;
+        let jit = match slag::install_jit(&mut context) {
+            Ok(()) => true,
+            Err(err) => {
+                log::warn!("Slag JIT hook unavailable ({err}); running interpretively");
+                false
+            }
+        };
         let mut host = Self {
             context,
             bridge: Rc::new(RefCell::new(Bridge::default())),
             next_module: 1,
             errors: Vec::new(),
+            jit,
         };
         host.install_api().map_err(engine_err)?;
         Ok(host)
+    }
+
+    /// `true` if the Cranelift JIT hook was installed. Only ever `false` when the
+    /// hook failed to install, in which case scripts still run interpretively.
+    pub fn jit_enabled(&self) -> bool {
+        self.jit
     }
 
     /// Errors from scripts that failed to compile or run.
