@@ -174,6 +174,43 @@ fn instantiate_prefab_returns_the_root_handle() {
     );
 }
 
+/// Multiple entities created in one call must each get their own handle: a
+/// script engine's `f64` numbers cannot represent a raw `EntityId`, so the
+/// backend hands out small per-call indices instead.
+const MULTI_SPAWN_SCRIPT: &str = "
+    function on_start(entity, dt) {
+        var a = spawn('A');
+        var b = spawn('B');
+        var c = spawn('C');
+        set_position(a, 1, 0, 0);
+        set_position(b, 2, 0, 0);
+        set_position(c, 3, 0, 0);
+    }
+";
+
+#[test]
+fn each_spawned_handle_addresses_its_own_entity() {
+    let (mut world, _) = scene(MULTI_SPAWN_SCRIPT);
+    let mut runtime = ScriptRuntime::with_host(SlagHost::new().expect("slag engine starts"));
+    let assets = AssetRegistry::new();
+
+    runtime.run_start(&mut world, &assets);
+
+    for (name, x) in [("A", 1.0), ("B", 2.0), ("C", 3.0)] {
+        let moved = transform(&world, named(&world, name)).translation;
+        assert!(
+            vec3_approx_eq(moved, vec3(x, 0.0, 0.0), 1e-4),
+            "{name} should sit at x = {x}, got x = {}",
+            moved.x
+        );
+    }
+    assert!(
+        runtime.host().errors().is_empty(),
+        "unexpected script errors: {:?}",
+        runtime.host().errors()
+    );
+}
+
 /// A hot counting loop. With the `jit` feature on (which this crate's `slag`
 /// feature enables) `SlagHost::new` installs the Cranelift hook, so this drives
 /// the compiled path; the result also guards correctness.

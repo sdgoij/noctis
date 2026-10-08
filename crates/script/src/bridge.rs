@@ -37,6 +37,28 @@ pub(crate) fn placeholder_id(slot: u64) -> EntityId {
     ((PLACEHOLDER_GENERATION as u64) << 32) | slot
 }
 
+/// The opaque handle index for `id` within a call, allocating one if needed.
+///
+/// Script engines receive entity handles as small integers: a raw [`EntityId`] is
+/// ~2^64 and would lose precision as a JavaScript `f64`, so a script addresses an
+/// entity through this per-call index table instead. The table is cleared at the
+/// start of each call and read back with [`entity_of`].
+pub(crate) fn handle_of(handles: &mut Vec<EntityId>, id: EntityId) -> i32 {
+    if let Some(index) = handles.iter().position(|h| *h == id) {
+        return index as i32;
+    }
+    handles.push(id);
+    (handles.len() - 1) as i32
+}
+
+/// The entity a call's handle index names, if the call handed one out.
+pub(crate) fn entity_of(handles: &[EntityId], index: i32) -> Option<EntityId> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| handles.get(i))
+        .copied()
+}
+
 /// The Euler angles `(roll, pitch, yaw)`, radians, of a rotation.
 pub(crate) fn euler(q: Quat) -> Vec3 {
     let (roll, pitch, yaw) = q.to_euler_xyz();

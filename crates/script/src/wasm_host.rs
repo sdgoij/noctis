@@ -66,7 +66,7 @@ use slag::wasm::types::{FuncType, ValType};
 use slag::wasm::{ExternVal, Store, Value, decode, validate};
 
 use crate::api::{EntityId, ScriptCommand, ScriptContext};
-use crate::bridge::{Bridge, replay};
+use crate::bridge::{Bridge, entity_of, handle_of, replay};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// The module name a WebAssembly script imports the engine API from.
@@ -200,10 +200,7 @@ impl Abi {
         use Abi::*;
         let handle = |index: usize| -> Option<EntityId> {
             let raw = i32_of(args.get(index).copied().unwrap_or(Value::I32(-1)));
-            usize::try_from(raw)
-                .ok()
-                .and_then(|i| handles.get(i))
-                .copied()
+            entity_of(handles, raw)
         };
         let vector = |base: usize| {
             vec3(
@@ -324,15 +321,6 @@ fn mouse_button(name: &str) -> Option<MouseButton> {
         "middle" => Some(MouseButton::Middle),
         _ => None,
     }
-}
-
-/// The handle of `id`, assigning a new one if it has none yet.
-fn handle_of(handles: &mut Vec<EntityId>, id: EntityId) -> i32 {
-    if let Some(index) = handles.iter().position(|h| *h == id) {
-        return index as i32;
-    }
-    handles.push(id);
-    (handles.len() - 1) as i32
 }
 
 fn f32_of(args: &[Value], index: usize) -> f32 {

@@ -48,7 +48,7 @@ use ecs::resources::{Key, MouseButton};
 use math::{Vec3, vec3};
 
 use crate::api::{EntityId, ScriptCommand, ScriptContext};
-use crate::bridge::{Bridge, replay};
+use crate::bridge::{Bridge, entity_of, handle_of, replay};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// A failure constructing or driving the Slag backend.
@@ -75,6 +75,9 @@ impl std::error::Error for SlagError {}
 pub struct SlagHost {
     context: slag::Context,
     bridge: Rc<RefCell<Bridge>>,
+    /// The per-call handle table handed to JavaScript (see [`handle_of`]): scripts
+    /// receive small indices, never raw `EntityId`s.
+    handles: Rc<RefCell<Vec<EntityId>>>,
     next_module: ModuleId,
     errors: Vec<String>,
     jit: bool,
@@ -98,6 +101,7 @@ impl SlagHost {
         let mut host = Self {
             context,
             bridge: Rc::new(RefCell::new(Bridge::default())),
+            handles: Rc::new(RefCell::new(Vec::new())),
             next_module: 1,
             errors: Vec::new(),
             jit,
@@ -136,22 +140,25 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "spawn",
             1,
             Box::new(move |call| {
                 let name = arg_name(call, 0);
                 let id = b.borrow_mut().spawn(name);
-                Ok(slag::JsValue::number(id as f64))
+                let handle = handle_of(&mut h.borrow_mut(), id);
+                Ok(slag::JsValue::number(handle as f64))
             }),
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "destroy",
             1,
             Box::new(move |call| {
-                if let Some(id) = arg_entity(call, 0) {
+                if let Some(id) = arg_entity(&h.borrow(), call, 0) {
                     b.borrow_mut()
                         .commands
                         .push(ScriptCommand::Destroy { entity: id });
@@ -175,34 +182,40 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "find_entity",
             1,
             Box::new(move |call| {
-                let found = arg_string(call, 0).and_then(|name| b.borrow().find(&name));
+                let found = arg_string(call, 0)
+                    .and_then(|name| b.borrow().find(&name))
+                    .map(|id| handle_of(&mut h.borrow_mut(), id));
                 Ok(match found {
-                    Some(id) => slag::JsValue::number(id as f64),
+                    Some(handle) => slag::JsValue::number(handle as f64),
                     None => slag::JsValue::undefined(),
                 })
             }),
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "get_position",
             1,
             Box::new(move |call| {
-                let out = arg_entity(call, 0).map(|id| vec_json(b.borrow().position(id)));
+                let out =
+                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().position(id)));
                 Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
             }),
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "set_position",
             4,
             Box::new(move |call| {
-                if let (Some(id), Some(p)) = (arg_entity(call, 0), arg_vec3(call, 1)) {
+                if let (Some(id), Some(p)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
                     b.borrow_mut().set_position(id, p);
                 }
                 Ok(slag::JsValue::undefined())
@@ -210,11 +223,12 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "translate",
             4,
             Box::new(move |call| {
-                if let (Some(id), Some(d)) = (arg_entity(call, 0), arg_vec3(call, 1)) {
+                if let (Some(id), Some(d)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
                     b.borrow_mut().translate(id, d);
                 }
                 Ok(slag::JsValue::undefined())
@@ -222,21 +236,24 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "get_rotation_euler",
             1,
             Box::new(move |call| {
-                let out = arg_entity(call, 0).map(|id| vec_json(b.borrow().rotation(id)));
+                let out =
+                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().rotation(id)));
                 Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
             }),
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "set_rotation_euler",
             4,
             Box::new(move |call| {
-                if let (Some(id), Some(e)) = (arg_entity(call, 0), arg_vec3(call, 1)) {
+                if let (Some(id), Some(e)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
                     b.borrow_mut().set_rotation(id, e);
                 }
                 Ok(slag::JsValue::undefined())
@@ -244,21 +261,23 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "get_scale",
             1,
             Box::new(move |call| {
-                let out = arg_entity(call, 0).map(|id| vec_json(b.borrow().scale(id)));
+                let out = arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().scale(id)));
                 Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
             }),
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "set_scale",
             4,
             Box::new(move |call| {
-                if let (Some(id), Some(s)) = (arg_entity(call, 0), arg_vec3(call, 1)) {
+                if let (Some(id), Some(s)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
                     b.borrow_mut().set_scale(id, s);
                 }
                 Ok(slag::JsValue::undefined())
@@ -309,11 +328,14 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "add_script",
             2,
             Box::new(move |call| {
-                if let (Some(id), Some(source)) = (arg_entity(call, 0), arg_string(call, 1)) {
+                if let (Some(id), Some(source)) =
+                    (arg_entity(&h.borrow(), call, 0), arg_string(call, 1))
+                {
                     b.borrow_mut()
                         .commands
                         .push(ScriptCommand::AddScript { entity: id, source });
@@ -323,16 +345,22 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
         self.register(
             "instantiate_prefab",
             2,
             Box::new(move |call| {
                 // Return a handle for the prefab's root so the script can address
                 // it immediately (see `Bridge::instantiate_prefab`).
-                let root = arg_string(call, 0)
-                    .map(|json| b.borrow_mut().instantiate_prefab(json, arg_entity(call, 1)));
+                let root = arg_string(call, 0).map(|json| {
+                    let parent = arg_entity(&h.borrow(), call, 1);
+                    b.borrow_mut().instantiate_prefab(json, parent)
+                });
                 Ok(match root {
-                    Some(id) => slag::JsValue::number(id as f64),
+                    Some(id) => {
+                        let handle = handle_of(&mut h.borrow_mut(), id);
+                        slag::JsValue::number(handle as f64)
+                    }
                     None => slag::JsValue::undefined(),
                 })
             }),
@@ -371,10 +399,13 @@ fn arg_name(call: &slag::FunctionCall<'_>, index: usize) -> Option<String> {
     arg_string(call, index).filter(|s| !s.is_empty() && s != "undefined" && s != "null")
 }
 
-fn arg_entity(call: &slag::FunctionCall<'_>, index: usize) -> Option<EntityId> {
-    call.arg(index)
-        .and_then(|v| v.as_number())
-        .map(|n| n as u64)
+fn arg_entity(
+    handles: &[EntityId],
+    call: &slag::FunctionCall<'_>,
+    index: usize,
+) -> Option<EntityId> {
+    let handle = call.arg(index).and_then(|v| v.as_number())?;
+    entity_of(handles, handle as i32)
 }
 
 fn arg_number(call: &slag::FunctionCall<'_>, index: usize) -> Option<f32> {
@@ -425,6 +456,7 @@ impl ScriptHost for SlagHost {
 
     fn call_lifecycle(&mut self, module: ModuleId, func: &str, ctx: &mut ScriptContext<'_>) {
         self.bridge.borrow_mut().begin(ctx);
+        self.handles.borrow_mut().clear();
 
         let function = format!("globalThis.__noctis_ns_{module}.{func}");
         if let Ok(callee) = self.context.eval(&function)
@@ -432,8 +464,9 @@ impl ScriptHost for SlagHost {
             && !callee.is_undefined()
             && let Some(entity) = ctx.entity
         {
+            let handle = handle_of(&mut self.handles.borrow_mut(), entity);
             let args = [
-                slag::JsValue::number(entity as f64),
+                slag::JsValue::number(handle as f64),
                 slag::JsValue::number(ctx.delta as f64),
             ];
             if let Err(err) = self

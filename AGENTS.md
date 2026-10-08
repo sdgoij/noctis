@@ -86,7 +86,9 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   `instantiate_prefab` (which returns a handle for the prefab's root entity, so
   a script can position or inspect what it just instantiated),
   `key_down`/`mouse_down`, and timing), and
-  `engine_host::EngineHost`, which runs both languages in one runtime. A
+  `engine_host::EngineHost`, which runs both languages in one runtime. Both
+  backends address entities through small per-call handle indices rather than raw
+  ids, because a JavaScript `f64` cannot represent a 64-bit `EntityId` exactly. A
   WebAssembly module travels as a `wasm:`-prefixed hex descriptor (the script
   channel is text); `wasm_host::load`/`register` read a `.wasm` file into that
   form, and `noctis-runtime --wasm <name>=<path>` registers one for a game. Note
