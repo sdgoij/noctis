@@ -71,4 +71,5 @@ mode (or `--mode`), and a 2D scene's default camera is orthographic.
 self-contained game folder: the runtime executable, the scene, every asset the
 scene references (resolved transitively through the import index), and a
 generated `noctis.toml` so the exported game imports its bundled assets and runs
-its bundled scene when launched.
+its bundled scene when launched. `noctis rename --project <dir> <from> <to>` moves
+an asset and rewrites every reference to it in the project's scenes and prefabs.

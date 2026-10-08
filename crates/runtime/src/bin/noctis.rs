@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use project::{AssetPath, Project};
 use runtime::build::{BuildOptions, build_project};
 
 const USAGE: &str = "\
@@ -19,10 +20,12 @@ noctis — build and run Noctis projects
 
 USAGE:
     noctis build --project <DIR> [OPTIONS]
+    noctis rename --project <DIR> <FROM> <TO>
     noctis --help
 
 COMMANDS:
     build                Build the project into a self-contained game folder.
+    rename               Move an asset and rewrite every reference to it.
 
 OPTIONS:
     --project <DIR>      The project directory (a noctis.toml). Required.
@@ -65,6 +68,7 @@ fn run(args: &[String]) -> Result<String, Error> {
     match command.as_str() {
         "-h" | "--help" | "help" => Ok(USAGE.to_string()),
         "build" => build(&args[1..]),
+        "rename" => rename(&args[1..]),
         other => Err(Error::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -142,6 +146,54 @@ fn build(args: &[String]) -> Result<String, Error> {
     Ok(report.to_string())
 }
 
+/// Parse `rename`'s options and move the asset.
+fn rename(args: &[String]) -> Result<String, Error> {
+    let mut project: Option<String> = None;
+    let mut paths: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.split_once('=') {
+            Some(("--project" | "-p", value)) => project = Some(value.to_string()),
+            _ if arg == "--project" || arg == "-p" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| Error::Usage("--project requires a value".into()))?;
+                project = Some(value.clone());
+                index += 1;
+            }
+            Some((flag, _)) if flag.starts_with('-') => {
+                return Err(Error::Usage(format!("unknown option {flag:?}")));
+            }
+            None if arg.starts_with('-') => {
+                return Err(Error::Usage(format!("unknown option {arg:?}")));
+            }
+            _ => paths.push(arg.clone()),
+        }
+        index += 1;
+    }
+
+    let project = project.ok_or_else(|| Error::Usage("rename requires --project <DIR>".into()))?;
+    if paths.len() != 2 {
+        return Err(Error::Usage(
+            "rename requires <FROM> <TO> asset paths".into(),
+        ));
+    }
+    let from = AssetPath::parse(&paths[0]).map_err(|error| Error::Message(error.to_string()))?;
+    let to = AssetPath::parse(&paths[1]).map_err(|error| Error::Message(error.to_string()))?;
+    let project = Project::open(PathBuf::from(&project))
+        .map_err(|error| Error::Message(error.to_string()))?;
+    let report = project
+        .rename_asset(&from, &to)
+        .map_err(|error| Error::Message(error.to_string()))?;
+    Ok(format!(
+        "renamed {} -> {} (rewrote {} document(s))",
+        report.from.display(),
+        report.to.display(),
+        report.documents.len()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +232,23 @@ mod tests {
         assert!(matches!(
             run(&args(&["build", "--project", "p", "--nope"])),
             Err(Error::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn rename_requires_a_project_and_two_paths() {
+        assert!(matches!(
+            run(&args(&["rename", "a", "b"])),
+            Err(Error::Usage(_))
+        ));
+        assert!(matches!(
+            run(&args(&["rename", "--project", "p"])),
+            Err(Error::Usage(_))
+        ));
+        // A bad asset path is a message error, not usage.
+        assert!(matches!(
+            run(&args(&["rename", "--project", "p", "/abs", "b"])),
+            Err(Error::Message(_))
         ));
     }
 }

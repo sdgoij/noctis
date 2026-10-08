@@ -13,6 +13,8 @@ pub enum ProjectError {
     Path(String),
     /// A scene or prefab referenced an asset that resolves to no project file.
     MissingAsset(String),
+    /// An asset rename was invalid (a fragment, an identical path, a collision).
+    Rename(String),
 }
 
 impl fmt::Display for ProjectError {
@@ -27,6 +29,7 @@ impl fmt::Display for ProjectError {
                     "no project file resolves the asset reference {reference:?}"
                 )
             }
+            ProjectError::Rename(message) => write!(f, "rename error: {message}"),
         }
     }
 }

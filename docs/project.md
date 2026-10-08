@@ -152,6 +152,14 @@ This is a first-class operation (`Editor::rename_asset` / a `noctis` command),
 not a manual find-and-replace, because a stale path is a broken scene. Sub-asset
 fragments are rewritten together with their source file.
 
+*Implemented*: `Project::rename_asset(from, to)` moves the file (creating parent
+directories) and rewrites `from` and every `from#fragment` reference in the
+project's scenes and prefabs. The rewrite is a textual substitution of the quoted
+path, so documents keep their exact formatting and key order — a rename that
+touches no reference changes no bytes. It is exposed as `noctis rename --project
+<dir> <from> <to>`. Not yet: rewriting references inside other *assets* (a script
+that hardcodes an asset path), and updating a sidecar import-settings file.
+
 ### Type detection (drag & drop)
 
 Auto-detect by extension, confirm, then import:
@@ -356,7 +364,8 @@ New work this design implies (✔ = implemented):
 - ✔ Missing asset references are a load error that names the path (the built-in
   primitives moved to `ecs::primitives` and are installed by
   `AssetRegistry::with_builtins()`).
-- Rename-rewrite across scene/prefab documents.
+- ✔ Rename-rewrite across scene/prefab documents (`Project::rename_asset`, the
+  `noctis rename` command).
 - Drag & drop in the editor, wired to project import.
 - A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
   importer that bakes a glyph atlas into the cache.
