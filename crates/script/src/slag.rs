@@ -42,14 +42,13 @@
 //! * JS runs on the thread that owns the host; the host is not `Send`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
-use ecs::components::{LocalTransform, Name};
-use ecs::resources::{InputState, Key, MouseButton};
-use math::{Quat, Vec3, vec3};
+use ecs::resources::{Key, MouseButton};
+use math::{Vec3, vec3};
 
-use crate::api::{EntityId, ScriptApi, ScriptCommand, ScriptContext, entity_id};
+use crate::api::{EntityId, ScriptCommand, ScriptContext};
+use crate::bridge::{Bridge, replay};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// A failure constructing or driving the Slag backend.
@@ -71,169 +70,6 @@ impl std::fmt::Display for SlagError {
 }
 
 impl std::error::Error for SlagError {}
-
-/// The generation stamped on placeholder handles handed to JavaScript for
-/// entities spawned during a call. Chosen so it can never collide with a real
-/// entity's generation.
-const PLACEHOLDER_GENERATION: u32 = u32::MAX;
-
-fn placeholder_id(slot: u64) -> EntityId {
-    ((PLACEHOLDER_GENERATION as u64) << 32) | slot
-}
-
-/// Shared, single-threaded state the registered host functions read and write.
-#[derive(Default)]
-struct Bridge {
-    entity: Option<EntityId>,
-    delta: f32,
-    elapsed: f32,
-    input: InputState,
-    positions: HashMap<EntityId, Vec3>,
-    rotations: HashMap<EntityId, Vec3>,
-    scales: HashMap<EntityId, Vec3>,
-    names: HashMap<String, EntityId>,
-    next_placeholder: u64,
-    commands: Vec<ScriptCommand>,
-}
-
-impl Bridge {
-    fn begin(&mut self, ctx: &ScriptContext<'_>) {
-        self.entity = ctx.entity;
-        self.delta = ctx.delta;
-        self.elapsed = ctx.elapsed;
-        self.input = ctx.input.clone();
-        self.positions.clear();
-        self.rotations.clear();
-        self.scales.clear();
-        self.names.clear();
-        self.next_placeholder = 0;
-        self.commands.clear();
-
-        for entity in ctx.world.entities().iter() {
-            let id = entity_id(entity);
-            if let Some(name) = ctx.world.get::<Name>(entity) {
-                self.names.insert(name.0.clone(), id);
-            }
-            if let Some(t) = ctx.world.get::<LocalTransform>(entity) {
-                self.positions.insert(id, t.translation);
-                self.rotations.insert(id, euler(t.rotation));
-                self.scales.insert(id, t.scale);
-            }
-        }
-    }
-
-    fn spawn(&mut self, name: Option<String>) -> EntityId {
-        let id = placeholder_id(self.next_placeholder);
-        self.next_placeholder += 1;
-        if let Some(name) = &name {
-            self.names.insert(name.clone(), id);
-        }
-        self.positions.insert(id, vec3(0.0, 0.0, 0.0));
-        self.rotations.insert(id, vec3(0.0, 0.0, 0.0));
-        self.scales.insert(id, vec3(1.0, 1.0, 1.0));
-        self.commands
-            .push(ScriptCommand::Spawn { name, entity: id });
-        id
-    }
-
-    fn position(&self, id: EntityId) -> Vec3 {
-        self.positions
-            .get(&id)
-            .copied()
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
-    }
-
-    fn set_position(&mut self, id: EntityId, position: Vec3) {
-        self.positions.insert(id, position);
-        self.commands.push(ScriptCommand::SetPosition {
-            entity: id,
-            position,
-        });
-    }
-
-    fn translate(&mut self, id: EntityId, delta: Vec3) {
-        let next = self.position(id) + delta;
-        self.positions.insert(id, next);
-        self.commands
-            .push(ScriptCommand::Translate { entity: id, delta });
-    }
-
-    fn rotation(&self, id: EntityId) -> Vec3 {
-        self.rotations
-            .get(&id)
-            .copied()
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
-    }
-
-    fn set_rotation(&mut self, id: EntityId, euler: Vec3) {
-        self.rotations.insert(id, euler);
-        self.commands
-            .push(ScriptCommand::SetRotationEuler { entity: id, euler });
-    }
-
-    fn scale(&self, id: EntityId) -> Vec3 {
-        self.scales
-            .get(&id)
-            .copied()
-            .unwrap_or_else(|| vec3(1.0, 1.0, 1.0))
-    }
-
-    fn set_scale(&mut self, id: EntityId, scale: Vec3) {
-        self.scales.insert(id, scale);
-        self.commands
-            .push(ScriptCommand::SetScale { entity: id, scale });
-    }
-
-    fn find(&self, name: &str) -> Option<EntityId> {
-        self.names.get(name).copied()
-    }
-}
-
-fn euler(q: Quat) -> Vec3 {
-    let (roll, pitch, yaw) = q.to_euler_xyz();
-    vec3(roll, pitch, yaw)
-}
-
-/// Replay a script call's queued commands against the real world, translating
-/// placeholder handles spawned during the call to the entities they became.
-fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) {
-    fn resolve(map: &HashMap<EntityId, EntityId>, id: EntityId) -> EntityId {
-        map.get(&id).copied().unwrap_or(id)
-    }
-
-    let mut map: HashMap<EntityId, EntityId> = HashMap::new();
-    let mut api = ScriptApi::new(ctx);
-    for command in commands {
-        match command {
-            ScriptCommand::Log { message, .. } => api.log(message),
-            ScriptCommand::Spawn { name, entity } => {
-                let real = api.spawn(name);
-                map.insert(entity, real);
-            }
-            ScriptCommand::Destroy { entity } => api.destroy(resolve(&map, entity)),
-            ScriptCommand::DestroyByName { name } => api.destroy_by_name(&name),
-            ScriptCommand::SetPosition { entity, position } => {
-                api.set_position(resolve(&map, entity), position);
-            }
-            ScriptCommand::Translate { entity, delta } => {
-                api.translate(resolve(&map, entity), delta);
-            }
-            ScriptCommand::SetRotationEuler { entity, euler } => {
-                api.set_rotation_euler(resolve(&map, entity), euler);
-            }
-            ScriptCommand::SetScale { entity, scale } => {
-                api.set_scale(resolve(&map, entity), scale);
-            }
-            ScriptCommand::AddScript { entity, source } => {
-                api.add_script(resolve(&map, entity), source);
-            }
-            ScriptCommand::InstantiatePrefab { json, parent, .. } => {
-                let parent = parent.map(|p| resolve(&map, p));
-                api.instantiate_prefab(&json, parent);
-            }
-        }
-    }
-}
 
 /// The Slag-backed [`ScriptHost`].
 pub struct SlagHost {
@@ -634,7 +470,7 @@ mod tests {
     use super::*;
     use crate::runtime::ScriptRuntime;
     use ecs::assets::AssetRegistry;
-    use ecs::components::{LocalTransform, Script};
+    use ecs::components::{LocalTransform, Name, Script};
     use ecs::world::World;
 
     const SOURCE: &str = "

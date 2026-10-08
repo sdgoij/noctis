@@ -75,15 +75,20 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
 
 - `render`: `sample_count > 1` (MSAA) is clamped to 1; IBL is precomputed on the
   CPU at load time; one shadow-casting directional/spot light at a time.
-- `script`: the real Slag backend is the `slag` feature (off by default). It
-  builds from the pinned `github.com/sdgoij/slag` and its smoke tests pass
+- `script`: the real backends are the `slag` feature (off by default). It builds
+  from the pinned `github.com/sdgoij/slag` and its smoke tests pass
   (`cargo test -p script --features slag`); the default build uses the testable
-  `NoopHost`/`RecordingHost`. The feature enables Slag's **WebAssembly JS API**
-  (scripts can build and instantiate WASM modules) and its **Cranelift JIT hook**
-  (hot bodies run at machine speed) — hence the Cranelift build cost. `runtime`
-  forwards the feature, so a game built and run with it executes real JavaScript
-  (see the `slag` entry under Commands; use `--manifest-path`, as `-p runtime` is
-  ambiguous with a transitive Slag crate).
+  `NoopHost`/`RecordingHost`. The feature enables **JavaScript** (Slag's engine,
+  with its WebAssembly JS API and Cranelift JIT hook — hence the Cranelift build
+  cost), **native WebAssembly scripts** (`wasm_host::WasmHost`, a `.wasm` module
+  driven through a documented import ABI), and `engine_host::EngineHost`, which
+  runs both languages in one runtime. A WebAssembly module travels as a
+  `wasm:`-prefixed hex descriptor (the script channel is text);
+  `wasm_host::encode` produces one from a `.wasm` file. Note Slag's Cranelift
+  build adds ~20-30s to a cold build of the feature. `runtime` forwards the
+  feature, so a game built and run with it executes real JavaScript and
+  WebAssembly (see the `slag` entry under Commands; use `--manifest-path`, as
+  `-p runtime` is ambiguous with a transitive Slag crate).
   To make that possible, `App` systems are deliberately **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.

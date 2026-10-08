@@ -29,6 +29,12 @@
 //! **Cranelift JIT hook** (`SlagHost::jit_enabled`, hot certified bodies run at
 //! machine speed).
 //!
+//! It also adds `wasm_host`, a **native WebAssembly script host**: a `.wasm`
+//! module is a first-class script alongside a `.js` one, calling the engine
+//! through the import ABI documented on `wasm_host::WasmHost`. The
+//! `engine_host::EngineHost` host runs both languages in one runtime, choosing
+//! the backend from the script source.
+//!
 //! Without the feature the crate is fully functional but inert: scripts are
 //! discovered and their lifecycles are tracked, but no user code runs. See
 //! [`slag`] (only compiled with the feature) for the backend.
@@ -63,6 +69,16 @@
 pub mod api;
 pub mod host;
 pub mod runtime;
+
+/// The shared snapshot/replay bridge used by the script backends.
+#[cfg(feature = "slag")]
+mod bridge;
+
+#[cfg(feature = "slag")]
+pub mod wasm_host;
+
+#[cfg(feature = "slag")]
+pub mod engine_host;
 
 #[cfg(feature = "slag")]
 pub mod slag;

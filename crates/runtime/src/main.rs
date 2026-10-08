@@ -138,18 +138,19 @@ ENVIRONMENT:
     NOCTIS_LOG         error | warn | info (default) | debug | trace | off"
 }
 
-/// The script host a game runs with: the real Slag engine when the `slag`
-/// feature is enabled, otherwise the inert default.
+/// The script host a game runs with: the Slag JavaScript engine plus the native
+/// WebAssembly host when the `slag` feature is enabled, otherwise the inert
+/// default.
 #[cfg(feature = "slag")]
-type Host = script::slag::SlagHost;
+type Host = script::engine_host::EngineHost;
 #[cfg(not(feature = "slag"))]
 type Host = script::NoopHost;
 
 /// Build the script host for a run.
 #[cfg(feature = "slag")]
 fn make_host() -> Result<Host, String> {
-    log::info!("JavaScript enabled: running the Slag engine");
-    script::slag::SlagHost::new()
+    log::info!("JavaScript and WebAssembly scripting enabled (Slag engine)");
+    script::engine_host::EngineHost::new()
         .map_err(|err| format!("failed to start the JavaScript engine: {err}"))
 }
 
