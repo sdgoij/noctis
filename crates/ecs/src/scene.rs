@@ -1010,6 +1010,43 @@ mod tests {
     }
 
     #[test]
+    fn scene_json_is_byte_deterministic() {
+        let (scene, assets) = make_scene();
+        let first = scene.to_json(&assets);
+
+        // The same in-memory state serializes identically every time.
+        assert_eq!(first, scene.to_json(&assets));
+
+        // A round trip through JSON must not reorder anything: the reload rebuilds
+        // every internal map with a fresh hash seed, so any order that leaked into
+        // the output would show up here.
+        let reparsed = Scene::from_json(&first, &assets).expect("parse");
+        assert_eq!(
+            first,
+            reparsed.to_json(&assets),
+            "json round trip reordered"
+        );
+
+        // Likewise through the desc form.
+        let desc = scene.to_desc(&assets);
+        let from_desc = Scene::from_desc(&desc, &assets);
+        assert_eq!(
+            first,
+            from_desc.to_json(&assets),
+            "desc round trip reordered"
+        );
+    }
+
+    #[test]
+    fn prefab_json_is_byte_deterministic() {
+        let (scene, assets) = make_scene();
+        let prefab = Prefab::from_scene_desc("P", scene.to_desc(&assets));
+        let json = prefab.to_json();
+        let back = Prefab::from_json(&json).expect("parse");
+        assert_eq!(json, back.to_json(), "prefab round trip reordered");
+    }
+
+    #[test]
     fn set_parent_updates_both_sides() {
         let mut world = World::new();
         let a = world.spawn();

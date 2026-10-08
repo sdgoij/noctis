@@ -32,6 +32,7 @@ mygame/
     models/             #   .glb/.gltf
     textures/           #   .png/.jpg/.hdr/...
     audio/              #   .wav/.ogg
+    fonts/              #   .ttf/.otf
     materials/          #   material definitions, if authored separately
   scenes/               # *.scene.json
   prefabs/              # *.prefab.json
@@ -54,7 +55,7 @@ description = "A small platformer."
 
 [project.settings]
 default_scene = "scenes/main.scene.json"
-mode = "3d"                       # "2d" | "3d"; a hint, not a separate format
+mode = "3d"                       # default mode for new scenes; a scene may override
 gravity = [0.0, -9.81, 0.0]
 
 # Optional: override the conventional directories.
@@ -89,6 +90,8 @@ output = "dist/mygame"
 Notes:
 
 - `mode` is a **presentation hint**, not a schema fork (see [Scenes](#scenes)).
+  It sets the default for new scenes; each scene records its own (a project may
+  mix a 2D menu scene with a 3D level).
 - Build targets describe *what to produce*. The first cut produces a
   self-contained folder exactly like today's
   `noctis-runtime --export`, but bundling every referenced asset rather than just
@@ -151,6 +154,7 @@ Auto-detect by extension, confirm, then import:
 | `.glb`, `.gltf`, `.fbx`              | model   | `assets/models/`      |
 | `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`, `.hdr` | texture | `assets/textures/`    |
 | `.wav`, `.ogg`, `.mp3`               | audio   | `assets/audio/`       |
+| `.ttf`, `.otf`                       | font    | `assets/fonts/`       |
 | `.js`, `.mjs`                        | script  | `scripts/`            |
 | `.wasm`                              | script  | `scripts/`            |
 | `.scene.json`                        | scene   | `scenes/`             |
@@ -184,10 +188,17 @@ There is exactly one scene format (`*.scene.json`, `SceneDesc` with a
 "2D scene" would only be *3D with an orthographic camera*, and a forked schema
 would duplicate every component, the renderer, physics, and the editor.
 
-`mode = "2d"` is therefore a **presentation hint** that drives editor defaults
-(orthographic camera, top-down grid, planar gizmo, snapping). If genuine 2D is
-wanted later, it arrives as a **component set** (`SpriteRenderer`, `Collider2D`,
-Z-ordering) on the same format — 2D vs 3D then means "which components you use".
+`mode` is a **presentation hint** that drives editor defaults (orthographic
+camera, top-down grid, planar gizmo, snapping). It is **per scene**, not just per
+project, because mixing dimensions is a real use case: a project may hold a 2D
+menu scene and a 3D level. Concretely, `SceneDesc` gains a `mode` field
+(`"2d" | "3d"`, `#[serde(default)]`), so a scene is self-describing and loads
+correctly even opened on its own. The project's `mode` is the default applied to
+new scenes; a scene may override it.
+
+If genuine 2D is wanted later, it arrives as a **component set** (`SpriteRenderer`,
+`Collider2D`, Z-ordering) on the same format — 2D vs 3D then means "which
+components you use".
 
 ### Scene list and the default scene
 
@@ -210,6 +221,19 @@ in-memory library and are lost on save; a project gives them a home.)
   registers them the way `noctis-runtime --wasm name=path` does today, but from
   the asset map.
 - Scripts resolve assets and each other by the same project-relative paths.
+
+## Fonts
+
+Fonts are a first-class asset type: `assets/fonts/*.ttf|*.otf`, registered in a
+`fonts` store on the registry.
+
+They are for **in-world and game text** — a future `Text`/`TextRenderer`
+component in both 2D and 3D scenes — **not** the editor UI, which uses egui's own
+font stack. Glyph atlas / signed-distance-field generation is an import step,
+produced on demand and cached under `.noctis/` like other decoded assets.
+
+Adding a `fonts` store to `AssetRegistry` is a deliberate, additive extension of
+the `ecs` core API; it is listed here so it is a contract change, not a surprise.
 
 ## Asset registry ownership
 
@@ -249,9 +273,12 @@ The exported game loads its bundled default scene when run with no arguments
   belong in version control.
 - `.noctis/` is generated and **gitignored**; a fresh clone regenerates it by
   importing.
-- Serialization must be **deterministic** (stable key/entity order, stable float
-  formatting) so a no-op save produces no diff. This is a real requirement on
-  `SceneDesc`/`Prefab` serialization and should be tested.
+- Serialization is **deterministic** (stable key/entity order, stable float
+  formatting): a no-op save produces no diff. This holds today for `SceneDesc`
+  and `Prefab` — `to_desc` sorts entities and emits components in a fixed order,
+  and it is now locked by tests (`scene_json_is_byte_deterministic`,
+  `prefab_json_is_byte_deterministic` in `ecs::scene`). The future project asset
+  map must hold the same bar (do not serialize a hash map in iteration order).
 
 ## Command line (planned)
 
@@ -273,7 +300,7 @@ Built on (reuse, do not reinvent):
   serialize as **paths** (`Scene::to_json` / `from_json` take an `AssetRegistry`).
 - `ecs::scene::Prefab` — `{ name, scene: SceneDesc }`, `to_json` / `from_json`.
 - `ecs::assets::AssetRegistry` — typed stores: `meshes`, `materials`, `textures`,
-  `audio`, `scripts`.
+  `audio`, `scripts` (a `fonts` store is new, see [Fonts](#fonts)).
 - `runtime::export_game` — writes `scene.json` + `noctis-game.json` + the exe
   (to be extended to bundle assets).
 - `RuntimeConfig` — `physics`, `audio`, `gravity`, `timestep`.
@@ -288,8 +315,14 @@ New work this design implies:
   cache), type detection, and build.
 - Rename-rewrite across scene/prefab documents.
 - Drag & drop in the editor, wired to project import.
-- Deterministic serialization tests.
+- A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font
+  importer that bakes a glyph atlas into the cache.
+- A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
+  own dimension.
 - `--project` in `noctis-editor` / `noctis-runtime`, and a `noctis` build CLI.
+
+Deterministic serialization already holds for `SceneDesc`/`Prefab` and is locked
+by tests; keep it that way as the project model is added.
 
 ## Open questions
 
@@ -303,3 +336,6 @@ New work this design implies:
   the project always works from loose files on disk.
 - **`.fbx` import**: listed as a model type, but there is no FBX decoder today —
   either add one or drop it from the table until there is.
+- **Fonts**: bitmap atlas vs signed-distance field, and whether the baked atlas
+  is a cache entry (regenerated) or a committed asset. Also which text components
+  ship first (`TextRenderer` in 3D vs a 2D UI layer).
