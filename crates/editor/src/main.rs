@@ -42,6 +42,8 @@ OPTIONS:
         --out <PATH>        Save the resulting scene to <PATH>
         --window            Open the scene in a window with a live viewport
         --testscene         Load the engine's all-features test scene
+        --save-prefabs      Write the prefab library to the project's prefabs/
+                            directory (requires --project)
         --controls <PATH>   Load camera-navigation bindings (JSON) for --window
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
@@ -118,6 +120,7 @@ struct Options {
     controls: Option<String>,
     window: bool,
     testscene: bool,
+    save_prefabs: bool,
     print_schema: bool,
     help: bool,
 }
@@ -166,6 +169,14 @@ fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, 
             imported.errors.len()
         );
         *editor.assets_mut() = imported.registry;
+
+        // Load the project's prefabs so a command batch can instantiate them.
+        let prefabs = project
+            .load_prefabs()
+            .map_err(|e| CliError::Message(format!("failed to load project prefabs: {e}")))?;
+        for prefab in prefabs {
+            editor.add_prefab(prefab);
+        }
     }
 
     if options.testscene {
@@ -206,6 +217,20 @@ fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, 
             .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
     }
 
+    // Persist the prefab library to the project when asked.
+    if options.save_prefabs {
+        let project = project.ok_or_else(|| {
+            CliError::Usage(
+                "--save-prefabs requires --project (prefabs live in the project)".into(),
+            )
+        })?;
+        for prefab in editor.prefabs() {
+            project
+                .save_prefab(prefab)
+                .map_err(|e| CliError::Message(format!("failed to save prefab: {e}")))?;
+        }
+    }
+
     Ok(editor)
 }
 
@@ -236,6 +261,10 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
             "--testscene" => {
                 reject_inline(&inline, &flag)?;
                 options.testscene = true;
+            }
+            "--save-prefabs" => {
+                reject_inline(&inline, &flag)?;
+                options.save_prefabs = true;
             }
             "--scene" | "-s" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
@@ -505,6 +534,17 @@ mod tests {
         assert!(json.contains("\"mode\": \"2d\""), "{json}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn parses_save_prefabs() {
+        assert!(parse_args(&args(&["--save-prefabs"])).unwrap().save_prefabs);
+    }
+
+    #[test]
+    fn save_prefabs_without_a_project_is_a_usage_error() {
+        let err = run(&args(&["--save-prefabs"])).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
     }
 
     #[test]

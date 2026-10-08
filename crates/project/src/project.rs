@@ -148,6 +148,55 @@ impl Project {
         self.discover(&self.manifest.paths.prefabs, ".prefab.json")
     }
 
+    /// The document path for a prefab named `name`: `prefabs/<name>.prefab.json`.
+    pub fn prefab_path(&self, name: &str) -> Result<AssetPath, ProjectError> {
+        let name = name.trim();
+        if name.is_empty()
+            || name.contains(['/', '\\'])
+            || name.contains(char::is_control)
+            || name == "."
+            || name == ".."
+        {
+            return Err(ProjectError::Path(format!(
+                "invalid prefab name {name:?}: use a plain name"
+            )));
+        }
+        AssetPath::parse(format!(
+            "{}/{name}.prefab.json",
+            self.manifest.paths.prefabs
+        ))
+    }
+
+    /// Write `prefab` to its document (`prefabs/<name>.prefab.json`), creating the
+    /// directory. Returns the asset path written.
+    pub fn save_prefab(&self, prefab: &ecs::scene::Prefab) -> Result<AssetPath, ProjectError> {
+        let path = self.prefab_path(&prefab.name)?;
+        let file = self.file_for(&path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ProjectError::Io(e.to_string()))?;
+        }
+        std::fs::write(&file, prefab.to_json()).map_err(|e| ProjectError::Io(e.to_string()))?;
+        Ok(path)
+    }
+
+    /// Every prefab document, parsed.
+    ///
+    /// A malformed prefab document is an error (a prefab is authored, not
+    /// generated, so a broken one is a bug to surface, not skip).
+    pub fn load_prefabs(&self) -> Result<Vec<ecs::scene::Prefab>, ProjectError> {
+        let mut prefabs = Vec::new();
+        for path in self.discover_prefabs()? {
+            let file = self.file_for(&path);
+            let text =
+                std::fs::read_to_string(&file).map_err(|e| ProjectError::Io(e.to_string()))?;
+            let prefab = ecs::scene::Prefab::from_json(&text).map_err(|e| {
+                ProjectError::Manifest(format!("invalid prefab {}: {e}", path.as_str()))
+            })?;
+            prefabs.push(prefab);
+        }
+        Ok(prefabs)
+    }
+
     /// Walk `dir` (recursively) and collect files whose name ends with `suffix`,
     /// as sorted project-relative asset paths. A missing directory yields none.
     fn discover(&self, dir: &str, suffix: &str) -> Result<Vec<AssetPath>, ProjectError> {

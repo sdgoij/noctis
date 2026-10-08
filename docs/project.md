@@ -260,6 +260,14 @@ Prefabs become project assets: `prefabs/*.prefab.json`, referenced from scenes a
 `assets` are, by project-relative path. (Today they live only in the editor's
 in-memory library and are lost on save; a project gives them a home.)
 
+*Implemented*: `Project::save_prefab` writes `prefabs/<name>.prefab.json` (the
+name must be a plain file name), `Project::load_prefabs` parses every prefab
+document (`discover_prefabs`), and the editor loads a project's prefabs on open so
+`instantiate_prefab` works; `noctis-editor --project <dir> --save-prefabs` writes
+the edited library back. A prefab is still referenced from a scene by
+*instantiating* it (the entities are copied in), not by an `assets`-style path
+reference — a live `PrefabInstance` reference is future work.
+
 ## Scripts
 
 - `.js` scripts are project assets resolved by asset path; the scene's `Script`
@@ -387,6 +395,8 @@ New work this design implies (✔ = implemented):
   `AssetRegistry::with_builtins()`).
 - ✔ Rename-rewrite across scene/prefab documents (`Project::rename_asset`, the
   `noctis rename` command).
+- ✔ Prefabs as project assets: `Project::save_prefab` / `load_prefabs`, and the
+  editor's `--save-prefabs` and prefab loading.
 - Drag & drop in the editor: `Project::import_file` (the import half,
   auto-detect + place + no-clobber) is ✔; wiring the winit file-drop event and the
   viewport/outliner drop targets is remaining.

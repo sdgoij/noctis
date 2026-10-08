@@ -131,7 +131,9 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   `editor::CameraControls` (loadable from JSON with `--controls <file>`) and are
   remappable. It spawns primitive objects (cube/sphere/plane/light/camera)
   from the Outliner's **Add** buttons and `--testscene` loads the all-features test
-  scene.
+  scene. With `--project` the editor imports the project's assets and loads its
+  prefabs (`prefabs/*.prefab.json`), and `--save-prefabs` writes the edited prefab
+  library back.
   `noctis-runtime --export <dir> --scene <file>` writes a self-contained game
   folder (a copy of the executable, `scene.json`, and a manifest) that loads its
   bundled scene when run with no arguments. The windowed loop is not unit-tested

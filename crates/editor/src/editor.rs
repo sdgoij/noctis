@@ -1237,6 +1237,27 @@ impl Editor {
         self.prefabs.get(name)
     }
 
+    /// Add a prefab to the library (replacing one of the same name). Used to load
+    /// a project's prefabs on open.
+    pub fn add_prefab(&mut self, prefab: Prefab) {
+        self.prefabs.insert(prefab.name.clone(), prefab);
+    }
+
+    /// The names in the prefab library, sorted.
+    pub fn prefab_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.prefabs.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Every prefab in the library, sorted by name.
+    pub fn prefabs(&self) -> Vec<&Prefab> {
+        self.prefab_names()
+            .iter()
+            .filter_map(|name| self.prefabs.get(name))
+            .collect()
+    }
+
     // -----------------------------------------------------------------------
     // Introspection
     // -----------------------------------------------------------------------
@@ -2117,6 +2138,32 @@ mod tests {
         let names: Vec<String> = ed.list_entities().into_iter().map(|i| i.name).collect();
         assert_eq!(names.iter().filter(|n| n.as_str() == "A").count(), 2);
         assert_eq!(names.iter().filter(|n| n.as_str() == "B").count(), 2);
+    }
+
+    #[test]
+    fn the_prefab_library_lists_sorted_and_accepts_loaded_prefabs() {
+        let mut ed = editor();
+        let a = ed.spawn("A", None);
+        ed.store_prefab("Zed", &[a]).unwrap();
+        let b = ed.spawn("B", None);
+        ed.store_prefab("Ace", &[b]).unwrap();
+
+        assert_eq!(
+            ed.prefab_names(),
+            vec!["Ace".to_string(), "Zed".to_string()]
+        );
+        assert_eq!(ed.prefabs().len(), 2);
+
+        // Loading a project prefab replaces one of the same name.
+        let prefab =
+            Prefab::from_json(r#"{ "name": "Zed", "scene": { "name": "Zed", "entities": [] } }"#)
+                .unwrap();
+        ed.add_prefab(prefab);
+        assert_eq!(
+            ed.prefab_names(),
+            vec!["Ace".to_string(), "Zed".to_string()]
+        );
+        assert!(ed.prefab("Zed").unwrap().scene.entities.is_empty());
     }
 
     #[test]
