@@ -129,11 +129,15 @@ Scene and prefab documents reference assets by asset path (this is already how
 registry on load). A reference resolves to a registry handle at load time. A
 missing reference is a load error that names the path, never a silent blank.
 
-*Gap*: today `apply_component` (in `ecs::scene`) silently falls back to
-`AssetHandle::NONE` when a `MeshRenderer`'s mesh or material path is absent from
-the registry. Making a missing reference a load error that names the path — as
-this doc requires — is pending work; until then, import every referenced asset
-(the project's `import_assets` does) so the fallback is not hit.
+*Implemented*: `Scene::from_json` (and `Scene::try_from_desc`) validate every
+`MeshRenderer` mesh/material and `AudioSource` clip against the registry and
+return `SceneError::MissingAsset(<path>)` on a miss, naming the offending path.
+The engine's own primitive meshes are installed by `AssetRegistry::with_builtins()`
+(used by the project importer and both CLIs), so a reference to a built-in
+`primitives/*` mesh never trips the check. The lenient `Scene::from_desc`/
+`instantiate_into` remain for restoring known-good snapshots (editor undo/redo).
+Script `path` references are not validated yet — they carry their own source and
+are resolved by the script host.
 
 ### Rename and move: rewrite references
 
@@ -334,6 +338,9 @@ New work this design implies (✔ = implemented):
   canonicalization, discovery, and asset import. Remaining: the resolver as a
   public API (path + fragment → handle is currently done by registering assets
   under both names), the `.noctis/` cache, and build.
+- ✔ Missing asset references are a load error that names the path (the built-in
+  primitives moved to `ecs::primitives` and are installed by
+  `AssetRegistry::with_builtins()`).
 - Rename-rewrite across scene/prefab documents.
 - Drag & drop in the editor, wired to project import.
 - A `fonts` asset store on `AssetRegistry` (additive core-API change) and a font

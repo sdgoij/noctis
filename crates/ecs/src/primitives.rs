@@ -1,17 +1,21 @@
-//! Procedural primitive meshes for the all-features test scene.
+//! Procedural primitive meshes.
 //!
-//! Each generator returns a ready-to-upload [`Mesh`] carrying positions, unit
-//! normals, texture coordinates, tangents (with handedness in `w`), triangle
-//! indices, and computed object-space bounds. Triangles are wound
-//! counter-clockwise when viewed from outside the surface, matching the
-//! renderer's front-face convention.
+//! Each generator returns a ready-to-upload [`Mesh`](crate::assets::Mesh)
+//! carrying positions, unit normals, texture coordinates, tangents (with
+//! handedness in `w`), triangle indices, and computed object-space bounds.
+//! Triangles are wound counter-clockwise when viewed from outside the surface,
+//! matching the renderer's front-face convention.
 //!
 //! The generators are deterministic and allocation-light, so the tests can
-//! assert exact triangle counts and bounds.
+//! assert exact triangle counts and bounds. [`AssetRegistry::with_builtins`]
+//! (see [`crate::assets`]) registers them under `primitives/<name>`, so a scene
+//! that references one always resolves.
+//!
+//! [`AssetRegistry::with_builtins`]: crate::assets::AssetRegistry::with_builtins
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use ecs::assets::{Mesh, Vertex};
+use crate::assets::{Mesh, Vertex};
 use math::{Vec3, vec3};
 
 /// Assemble a vertex from its parts.

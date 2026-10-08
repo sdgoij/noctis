@@ -482,6 +482,37 @@ impl AssetRegistry {
         registry
     }
 
+    /// The placeholder defaults plus the built-in primitive meshes
+    /// (`primitives/cube`, `primitives/sphere`, `primitives/plane`,
+    /// `primitives/cylinder`, `primitives/capsule`, `primitives/torus`).
+    ///
+    /// Use this whenever a scene document is loaded, so a reference to a built-in
+    /// primitive always resolves and [`Scene::from_json`](crate::scene::Scene::from_json)'s
+    /// missing-reference check cannot fire on an engine-provided mesh.
+    pub fn with_builtins() -> Self {
+        let mut registry = Self::with_defaults();
+        registry.install_primitives();
+        registry
+    }
+
+    /// Register the built-in primitive meshes under `primitives/<name>`,
+    /// replacing any already registered under those paths.
+    pub fn install_primitives(&mut self) {
+        use crate::primitives;
+        self.meshes
+            .insert_named("primitives/cube", primitives::cube(1.0));
+        self.meshes
+            .insert_named("primitives/sphere", primitives::sphere(0.5, 24, 32));
+        self.meshes
+            .insert_named("primitives/plane", primitives::plane(1.0, 4));
+        self.meshes
+            .insert_named("primitives/cylinder", primitives::cylinder(0.5, 1.0, 24));
+        self.meshes
+            .insert_named("primitives/capsule", primitives::capsule(0.4, 1.0, 24));
+        self.meshes
+            .insert_named("primitives/torus", primitives::torus(1.0, 0.25, 32, 16));
+    }
+
     /// The total number of assets across all stores.
     pub fn len(&self) -> usize {
         self.meshes.len()
@@ -616,5 +647,17 @@ mod tests {
         assert!(!registry.is_empty());
         assert!(registry.materials.handle("$default").is_some());
         assert!(registry.textures.handle("$white").is_some());
+    }
+
+    #[test]
+    fn with_builtins_adds_the_primitive_meshes() {
+        let registry = AssetRegistry::with_builtins();
+        assert!(registry.materials.handle("$default").is_some());
+        assert!(registry.meshes.handle("primitives/cube").is_some());
+        assert!(registry.meshes.handle("primitives/torus").is_some());
+        assert_eq!(registry.meshes.len(), 6);
+
+        // `with_defaults` itself stays minimal (placeholders only).
+        assert!(AssetRegistry::with_defaults().meshes.is_empty());
     }
 }

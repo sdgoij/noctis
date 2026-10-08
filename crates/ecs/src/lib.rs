@@ -23,6 +23,7 @@
 pub mod app;
 pub mod assets;
 pub mod components;
+pub mod primitives;
 pub mod resources;
 pub mod scene;
 pub mod world;

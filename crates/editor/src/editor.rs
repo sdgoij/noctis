@@ -189,7 +189,7 @@ impl Editor {
     pub fn new() -> Self {
         Self {
             scene: Scene::new("Untitled"),
-            assets: AssetRegistry::with_defaults(),
+            assets: AssetRegistry::with_builtins(),
             prefabs: HashMap::new(),
             selection: Vec::new(),
             undo_stack: Vec::new(),
@@ -245,7 +245,16 @@ impl Editor {
     }
 
     /// Save the scene (resolving asset handles to paths) to `path`.
+    ///
+    /// Missing parent directories are created, so `--out scenes/level.json`
+    /// works without `scenes/` having to exist first.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), EditorError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|e| EditorError::Io(e.to_string()))?;
+        }
         fs::write(path, self.to_json()).map_err(|e| EditorError::Io(e.to_string()))
     }
 
@@ -2275,6 +2284,25 @@ mod tests {
         assert_eq!(ed.scene_name(), "Fresh");
         assert!(ed.undo());
         assert_eq!(ed.entity_count(), 1);
+    }
+
+    #[test]
+    fn save_creates_missing_parent_directories() {
+        let dir = std::env::temp_dir().join(format!(
+            "noctis-editor-save-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let target = dir.join("scenes/level.scene.json");
+
+        let ed = editor();
+        ed.save(&target).expect("save creates the parent dir");
+        assert!(target.is_file());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

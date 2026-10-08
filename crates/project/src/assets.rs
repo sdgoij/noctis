@@ -123,7 +123,7 @@ impl Project {
     /// asset still resolves to a placeholder rather than nothing.
     pub fn import_assets(&self) -> Result<ImportedAssets, ProjectError> {
         let map = self.asset_map()?;
-        let mut registry = AssetRegistry::with_defaults();
+        let mut registry = AssetRegistry::with_builtins();
         let mut errors = Vec::new();
         for entry in map.entries() {
             if let Err(message) = import_entry(&mut registry, entry) {

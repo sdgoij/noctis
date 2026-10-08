@@ -21,7 +21,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
-pub mod primitives;
+/// Procedural primitive meshes, re-exported from [`ecs::primitives`].
+pub use ecs::primitives;
 
 use std::f32::consts::TAU;
 

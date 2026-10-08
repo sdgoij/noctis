@@ -109,7 +109,13 @@ Component types must be `Send + Sync + 'static`.
   `iter() -> impl Iterator<Item = (AssetId, Option<&str>, &T)>`.
 - `AssetRegistry { meshes, materials, textures, audio, scripts, hdr }` — each the
   corresponding `Assets<_>`; `new()`, `with_defaults()` (registers `$white`,
-  `$normal` textures and a `$default` material), `len()`, `is_empty()`.
+  `$normal` textures and a `$default` material),
+  `with_builtins()` (the defaults plus the six primitive meshes under
+  `primitives/<name>`; use it when loading scene documents so a built-in mesh
+  always resolves), `install_primitives()`, `len()`, `is_empty()`.
+- `ecs::primitives` — procedural mesh generators (`cube`, `plane`, `sphere`,
+  `cylinder`, `capsule`, `torus`), each returning a `Mesh` with positions,
+  normals, UVs, tangents, indices, and bounds.
 - `Vertex { position: [f32;3], normal: [f32;3], uv: [f32;2], tangent: [f32;4] }` (`#[repr(C)]`, `Pod`-friendly).
 - `Mesh { name: String, vertices: Vec<Vertex>, indices: Vec<u32>, bounds: Option<Aabb> }`
   — `compute_bounds()`, `triangle_count()`.
@@ -138,10 +144,13 @@ Component types must be `Send + Sync + 'static`.
   `Send + Sync + 'static`.
 - `ecs::scene`: `Scene { name, mode, world }`, `SceneMode { TwoD, ThreeD }`
   (`as_str`, `is_2d`, `FromStr`; the presentation hint stored in `SceneDesc.mode`),
+  `Scene::with_mode`, `Scene::try_from_desc` (errors on a missing asset
+  reference).
   `propagate_transforms(&mut World)`,
   `set_parent(&mut World, child, Option<Entity>)`, `children_of(&World, Entity)`,
-  `instantiate_into(&mut World, &SceneDesc, &AssetRegistry, Option<Entity>)`,
-  `Prefab`, `SceneDesc`, `SceneError`.
+  `instantiate_into(&mut World, &SceneDesc, &AssetRegistry, Option<Entity>)` (the
+  lenient primitive; `from_json`/`try_from_desc` are the strict load paths),
+  `Prefab`, `SceneDesc`, `SceneError { Parse, Version, MissingAsset }`.
 - `ecs::prelude::*` re-exports all of the above plus `math`.
 
 ## Conventions for consumer crates

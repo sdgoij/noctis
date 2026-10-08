@@ -268,10 +268,30 @@ impl Scene {
     }
 
     /// Parse a scene from JSON and instantiate it.
+    ///
+    /// Every asset reference must resolve against `assets`: a reference to a
+    /// missing asset is an error that names the path, never a silent blank.
     pub fn from_json(json: &str, assets: &AssetRegistry) -> Result<Scene, SceneError> {
         let desc: SceneDesc =
             serde_json::from_str(json).map_err(|e| SceneError::Parse(e.to_string()))?;
-        Ok(Scene::from_desc(&desc, assets))
+        Scene::try_from_desc(&desc, assets)
+    }
+
+    /// Build a scene from its serializable form, erroring if any asset reference
+    /// does not resolve against `assets`.
+    ///
+    /// This is the strict counterpart of [`Scene::from_desc`]: use it wherever a
+    /// document is loaded (so a broken reference is loud), and the lenient
+    /// `from_desc` for restoring snapshots that are known to be resolvable.
+    pub fn try_from_desc(desc: &SceneDesc, assets: &AssetRegistry) -> Result<Scene, SceneError> {
+        for entity in &desc.entities {
+            for component in &entity.components {
+                if let Some(path) = missing_asset(component, assets) {
+                    return Err(SceneError::MissingAsset(path.to_string()));
+                }
+            }
+        }
+        Ok(Scene::from_desc(desc, assets))
     }
 }
 
@@ -285,6 +305,8 @@ pub enum SceneError {
     Parse(String),
     /// The document was written by an incompatible format version.
     Version(u32),
+    /// A component referenced an asset that is not in the registry.
+    MissingAsset(String),
 }
 
 impl std::fmt::Display for SceneError {
@@ -292,6 +314,7 @@ impl std::fmt::Display for SceneError {
         match self {
             SceneError::Parse(msg) => write!(f, "scene parse error: {msg}"),
             SceneError::Version(v) => write!(f, "unsupported scene format version: {v}"),
+            SceneError::MissingAsset(path) => write!(f, "missing asset reference: {path}"),
         }
     }
 }
@@ -421,6 +444,25 @@ fn component_descs(world: &World, entity: Entity, assets: &AssetRegistry) -> Vec
         });
     }
     out
+}
+
+/// The first asset path referenced by `desc` that is absent from `assets`, if
+/// any. A `None` reference (no mesh, no clip) is not an error.
+fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<&'a str> {
+    match desc {
+        ComponentDesc::MeshRenderer { mesh, material, .. } => mesh
+            .as_deref()
+            .filter(|p| assets.meshes.handle(p).is_none())
+            .or_else(|| {
+                material
+                    .as_deref()
+                    .filter(|p| assets.materials.handle(p).is_none())
+            }),
+        ComponentDesc::AudioSource { clip, .. } => {
+            clip.as_deref().filter(|p| assets.audio.handle(p).is_none())
+        }
+        _ => None,
+    }
 }
 
 fn apply_component(
@@ -1133,6 +1175,104 @@ mod tests {
         let legacy = r#"{ "name": "Legacy", "entities": [] }"#;
         let scene = Scene::from_json(legacy, &AssetRegistry::with_defaults()).expect("parse");
         assert_eq!(scene.mode, SceneMode::ThreeD);
+    }
+
+    #[test]
+    fn builtin_primitives_resolve() {
+        let assets = AssetRegistry::with_builtins();
+        for name in ["cube", "sphere", "plane", "cylinder", "capsule", "torus"] {
+            assert!(
+                assets
+                    .meshes
+                    .handle(&format!("primitives/{name}"))
+                    .is_some(),
+                "primitive {name} is registered"
+            );
+        }
+        // ...but `with_defaults` stays minimal (placeholders only).
+        assert!(AssetRegistry::with_defaults().meshes.is_empty());
+
+        // A scene referencing a built-in primitive loads.
+        let json = r#"{
+            "name": "Prim",
+            "entities": [{
+                "id": 0, "name": "Box",
+                "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                "components": [{
+                    "type": "mesh_renderer", "mesh": "primitives/cube", "material": "$default",
+                    "cast_shadows": true, "receive_shadows": true
+                }]
+            }]
+        }"#;
+        let scene = Scene::from_json(json, &assets).expect("a built-in primitive resolves");
+        let (_, renderer) = scene.world.query::<MeshRenderer>().next().unwrap();
+        assert_eq!(
+            renderer.mesh,
+            assets.meshes.handle("primitives/cube").unwrap()
+        );
+    }
+
+    #[test]
+    fn a_missing_asset_reference_is_a_load_error() {
+        let assets = AssetRegistry::with_builtins();
+        let json = |mesh: &str, material: &str| {
+            format!(
+                r#"{{
+                    "name": "Broken",
+                    "entities": [{{
+                        "id": 0, "name": "Tri",
+                        "transform": {{ "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] }},
+                        "components": [{{
+                            "type": "mesh_renderer", "mesh": "{mesh}", "material": "{material}",
+                            "cast_shadows": true, "receive_shadows": true
+                        }}]
+                    }}]
+                }}"#
+            )
+        };
+
+        let missing_mesh = json("assets/models/gone.glb#mesh/Torso", "$default");
+        let Err(err) = Scene::from_json(&missing_mesh, &assets) else {
+            panic!("expected a missing-asset error");
+        };
+        assert!(
+            matches!(err, SceneError::MissingAsset(ref p) if p == "assets/models/gone.glb#mesh/Torso"),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("gone.glb#mesh/Torso"), "{err}");
+
+        // A missing material is caught too, even when the mesh resolves.
+        let missing_material = json("primitives/cube", "materials/nope");
+        let Err(err) = Scene::from_json(&missing_material, &assets) else {
+            panic!("expected a missing-material error");
+        };
+        assert!(matches!(err, SceneError::MissingAsset(ref p) if p == "materials/nope"));
+
+        // The lenient `from_desc` still tolerates it (used for known-good snapshots).
+        let desc: SceneDesc = serde_json::from_str(&missing_mesh).unwrap();
+        let _ = Scene::from_desc(&desc, &assets);
+    }
+
+    #[test]
+    fn a_missing_audio_clip_is_a_load_error() {
+        let assets = AssetRegistry::with_builtins();
+        let json = r#"{
+            "name": "Snd",
+            "entities": [{
+                "id": 0, "name": "Speaker",
+                "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                "components": [{
+                    "type": "audio_source", "clip": "audio/gone.wav",
+                    "volume": 1.0, "pitch": 1.0, "looped": false, "playing": true,
+                    "spatial": true, "max_distance": 20.0, "rolloff": 1.0
+                }]
+            }]
+        }"#;
+        let err = match Scene::from_json(json, &assets) {
+            Ok(_) => panic!("expected a missing-asset error"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, SceneError::MissingAsset(ref p) if p == "audio/gone.wav"));
     }
 
     #[test]

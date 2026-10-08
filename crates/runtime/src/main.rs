@@ -217,7 +217,7 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
             );
             imported.registry
         }
-        None => AssetRegistry::with_defaults(),
+        None => AssetRegistry::with_builtins(),
     };
     register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, project, &mut assets)?;
