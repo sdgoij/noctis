@@ -990,6 +990,49 @@ impl Editor {
         }
     }
 
+    /// Borrow a component of an entity, if it is alive and carries it.
+    pub fn component<C: Send + Sync + 'static>(&self, entity: Entity) -> Option<&C> {
+        self.scene.world.get::<C>(entity)
+    }
+
+    /// Insert (or replace) a component, recording one undo step.
+    ///
+    /// Returns `false` (recording nothing) if the entity is not alive.
+    pub fn insert_component<C: Send + Sync + 'static>(
+        &mut self,
+        entity: Entity,
+        component: C,
+    ) -> bool {
+        if !self.scene.world.is_alive(entity) {
+            return false;
+        }
+        let before = self.snapshot();
+        self.scene.world.insert(entity, component);
+        self.record_history(before);
+        true
+    }
+
+    /// Edit a component in place, recording one undo step.
+    ///
+    /// Returns `false` (recording nothing) if the entity does not carry the
+    /// component. In-place editing preserves fields the command path would reset
+    /// (a light's `shadow_bias`, a collider's `rotation`, a body's damping).
+    pub fn edit_component<C: Send + Sync + 'static>(
+        &mut self,
+        entity: Entity,
+        edit: impl FnOnce(&mut C),
+    ) -> bool {
+        let before = self.snapshot();
+        match self.scene.world.get_mut::<C>(entity) {
+            Some(component) => {
+                edit(component);
+                self.record_history(before);
+                true
+            }
+            None => false,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Asset ops
     // -----------------------------------------------------------------------
@@ -2000,6 +2043,47 @@ mod tests {
         assert!(ed.has_component(e, ComponentName::Collider));
         ed.remove_component(e, ComponentName::Collider).unwrap();
         assert!(!ed.has_component(e, ComponentName::Collider));
+    }
+
+    #[test]
+    fn edit_component_edits_in_place_and_is_undoable() {
+        let mut ed = editor();
+        let e = ed.spawn("Sun", None);
+        ed.add_light(e, LightParams::default()).unwrap();
+
+        // Fields the command path would reset survive an in-place edit.
+        assert!(ed.edit_component::<Light>(e, |light| {
+            light.intensity = 5.0;
+            light.shadow_bias = 0.02;
+        }));
+        let light = ed.component::<Light>(e).unwrap();
+        assert_eq!(light.intensity, 5.0);
+        assert_eq!(light.shadow_bias, 0.02);
+
+        assert!(ed.undo());
+        let light = ed.component::<Light>(e).unwrap();
+        assert_eq!(light.intensity, 1.0);
+        assert_eq!(light.shadow_bias, 0.001);
+    }
+
+    #[test]
+    fn edit_component_without_the_component_records_nothing() {
+        let mut ed = editor();
+        let e = ed.spawn("E", None);
+        let history = ed.history_len();
+        assert!(!ed.edit_component::<Light>(e, |_| {}));
+        assert_eq!(ed.history_len(), history);
+    }
+
+    #[test]
+    fn insert_component_adds_and_undoes() {
+        let mut ed = editor();
+        let e = ed.spawn("E", None);
+        assert!(!ed.has_component(e, ComponentName::Camera));
+        assert!(ed.insert_component(e, Camera::default()));
+        assert!(ed.has_component(e, ComponentName::Camera));
+        assert!(ed.undo());
+        assert!(!ed.has_component(e, ComponentName::Camera));
     }
 
     #[test]

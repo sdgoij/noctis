@@ -50,6 +50,7 @@ pub mod editor;
 pub mod error;
 pub mod gizmo;
 pub mod info;
+mod inspector;
 pub mod picking;
 pub mod window;
 

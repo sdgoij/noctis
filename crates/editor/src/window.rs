@@ -12,6 +12,7 @@ use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
 use crate::gizmo;
+use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams};
 
 /// The kind of object the "Add" buttons create.
@@ -90,6 +91,8 @@ pub struct EditorDriver {
     /// The world pivot an orbit turns about, captured when the drag begins so
     /// the point stays fixed on screen for the whole gesture.
     orbit_pivot: Option<Vec3>,
+    /// Inspector UI state (the add-component selection).
+    inspector: InspectorState,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -113,10 +116,11 @@ impl std::fmt::Debug for EditorDriver {
 impl EditorDriver {
     /// Wrap an editor for windowed display.
     pub fn new(editor: Editor) -> Self {
+        let selected = editor.selection().first().copied();
         Self {
             editor,
             input: InputState::new(),
-            selected: None,
+            selected,
             show_outliner: true,
             show_inspector: true,
             fly_speed: 6.0,
@@ -127,6 +131,7 @@ impl EditorDriver {
             controls: CameraControls::default(),
             nav_down: false,
             orbit_pivot: None,
+            inspector: InspectorState::default(),
         }
     }
 
@@ -387,93 +392,9 @@ impl EditorDriver {
             return;
         }
 
-        let name = self
-            .editor
-            .list_entities()
-            .iter()
-            .find(|info| info.entity == entity)
-            .map(|info| info.name.clone())
-            .unwrap_or_default();
-        let mut name_buffer = name;
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            if ui.text_edit_singleline(&mut name_buffer).changed() {
-                let _ = self.editor.rename(entity, name_buffer.clone());
-            }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            crate::inspector::show(&mut self.editor, entity, &mut self.inspector, ui);
         });
-
-        ui.separator();
-        ui.label("Transform");
-
-        let mut translation = self
-            .editor
-            .translation(entity)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        let mut moved = false;
-        ui.horizontal(|ui| {
-            ui.label("Position");
-            moved |= ui
-                .add(egui::DragValue::new(&mut translation.x).speed(0.05))
-                .changed();
-            moved |= ui
-                .add(egui::DragValue::new(&mut translation.y).speed(0.05))
-                .changed();
-            moved |= ui
-                .add(egui::DragValue::new(&mut translation.z).speed(0.05))
-                .changed();
-        });
-        if moved {
-            let _ = self.editor.set_translation(entity, translation);
-        }
-
-        let mut rotation = self
-            .editor
-            .rotation_euler_degrees(entity)
-            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        let mut rotated = false;
-        ui.horizontal(|ui| {
-            ui.label("Rotation");
-            rotated |= ui
-                .add(egui::DragValue::new(&mut rotation.x).speed(0.5))
-                .changed();
-            rotated |= ui
-                .add(egui::DragValue::new(&mut rotation.y).speed(0.5))
-                .changed();
-            rotated |= ui
-                .add(egui::DragValue::new(&mut rotation.z).speed(0.5))
-                .changed();
-        });
-        if rotated {
-            let _ = self.editor.set_rotation_euler(entity, rotation);
-        }
-
-        let mut scale = self
-            .editor
-            .scale(entity)
-            .unwrap_or_else(|| vec3(1.0, 1.0, 1.0));
-        let mut scaled = false;
-        ui.horizontal(|ui| {
-            ui.label("Scale");
-            scaled |= ui
-                .add(egui::DragValue::new(&mut scale.x).speed(0.02))
-                .changed();
-            scaled |= ui
-                .add(egui::DragValue::new(&mut scale.y).speed(0.02))
-                .changed();
-            scaled |= ui
-                .add(egui::DragValue::new(&mut scale.z).speed(0.02))
-                .changed();
-        });
-        if scaled {
-            let _ = self.editor.set_scale(entity, scale);
-        }
-
-        ui.separator();
-        if let Some(json) = self.editor.inspect(entity) {
-            egui::CollapsingHeader::new("Components").show(ui, |ui| {
-                ui.monospace(json);
-            });
-        }
     }
 
     /// A world-space ray through `pointer` inside the viewport `rect`, or `None`

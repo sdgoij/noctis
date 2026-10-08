@@ -105,6 +105,12 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per
   drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. The
+  inspector edits every component of the selection — name, Active/Visible, the
+  transform, and Camera/Light/MeshRenderer/RigidBody/Collider/AudioSource/Script
+  — with add/remove buttons, asset pickers for meshes/materials/audio clips, and
+  an in-place material editor that assigns textures to each map slot. Edits go
+  through `Editor::edit_component`/`insert_component`, so they preserve fields
+  the command path would reset and each is one undo step. The
   viewport is navigated with WASD (fly), Q/E (down/up), a middle-mouse drag
   (orbit about the selection, or the origin when nothing is selected), Shift +
   middle-mouse (pan) and the scroll wheel (dolly); these bindings live in

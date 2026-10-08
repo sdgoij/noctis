@@ -174,6 +174,17 @@ impl<T> Assets<T> {
         self.entries.get(&handle.id).map(|e| Arc::clone(&e.value))
     }
 
+    /// Mutably borrow an asset by handle, cloning it out of the shared store if
+    /// the value is aliased elsewhere.
+    pub fn get_mut(&mut self, handle: AssetHandle<T>) -> Option<&mut T>
+    where
+        T: Clone,
+    {
+        self.entries
+            .get_mut(&handle.id)
+            .map(|entry| Arc::make_mut(&mut entry.value))
+    }
+
     /// The handle registered at `path`, if any.
     pub fn handle(&self, path: &str) -> Option<AssetHandle<T>> {
         self.paths.get(path).map(|&id| AssetHandle::new(id))
@@ -511,6 +522,15 @@ mod tests {
         assert_eq!(h1, h2);
         assert_eq!(meshes.get(h1).unwrap().name, "second");
         assert_eq!(meshes.len(), 1);
+    }
+
+    #[test]
+    fn get_mut_edits_in_place_and_keeps_the_handle() {
+        let mut materials: Assets<Material> = Assets::new();
+        let h = materials.insert_named("m", Material::default());
+        materials.get_mut(h).expect("present").roughness = 0.9;
+        assert_eq!(materials.get(h).unwrap().roughness, 0.9);
+        assert_eq!(materials.path_of(h), Some("m"));
     }
 
     #[test]
