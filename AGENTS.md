@@ -105,10 +105,11 @@ cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per
   drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. The
-  viewport is navigated with WASD (fly), a middle-mouse drag (orbit about the
-  selection, or the origin when nothing is selected), Shift + middle-mouse (pan)
-  and the scroll wheel (dolly); these bindings live in `editor::CameraControls`
-  and are remappable. It spawns primitive objects (cube/sphere/plane/light/camera)
+  viewport is navigated with WASD (fly), Q/E (down/up), a middle-mouse drag
+  (orbit about the selection, or the origin when nothing is selected), Shift +
+  middle-mouse (pan) and the scroll wheel (dolly); these bindings live in
+  `editor::CameraControls` (loadable from JSON with `--controls <file>`) and are
+  remappable. It spawns primitive objects (cube/sphere/plane/light/camera)
   from the Outliner's **Add** buttons and `--testscene` loads the all-features test
   scene.
   `noctis-runtime --export <dir> --scene <file>` writes a self-contained game

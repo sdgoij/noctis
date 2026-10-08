@@ -33,6 +33,7 @@ OPTIONS:
         --out <PATH>        Save the resulting scene to <PATH>
         --window            Open the scene in a window with a live viewport
         --testscene         Load the engine's all-features test scene
+        --controls <PATH>   Load camera-navigation bindings (JSON) for --window
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
 
@@ -103,6 +104,7 @@ struct Options {
     scene: Option<String>,
     command: Option<String>,
     out: Option<String>,
+    controls: Option<String>,
     window: bool,
     testscene: bool,
     print_schema: bool,
@@ -206,6 +208,11 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
                 options.out = Some(value);
                 index = consumed;
             }
+            "--controls" | "--bindings" => {
+                let (value, consumed) = value_for(&inline, args, index, &flag)?;
+                options.controls = Some(value);
+                index = consumed;
+            }
             other if other.starts_with('-') => {
                 return Err(CliError::Usage(format!("unknown option {other:?}")));
             }
@@ -265,7 +272,15 @@ fn run_windowed(options: &Options) -> Result<(), CliError> {
         width: 1280,
         height: 720,
     };
-    editor::window::run(editor, config).map_err(|e| CliError::Message(e.to_string()))
+    match &options.controls {
+        Some(path) => {
+            let controls = editor::CameraControls::load(path)
+                .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
+            editor::window::run_with_controls(editor, config, controls)
+                .map_err(|e| CliError::Message(e.to_string()))
+        }
+        None => editor::window::run(editor, config).map_err(|e| CliError::Message(e.to_string())),
+    }
 }
 
 /// Read the command batch from a file, stdin (`-`), or the literal argument.
@@ -316,6 +331,13 @@ mod tests {
         let options = parse_args(&args(&["-s=level.json", "-c=edits.json"])).unwrap();
         assert_eq!(options.scene.as_deref(), Some("level.json"));
         assert_eq!(options.command.as_deref(), Some("edits.json"));
+    }
+
+    #[test]
+    fn parses_the_controls_path() {
+        let options = parse_args(&args(&["--window", "--controls", "controls.json"])).unwrap();
+        assert!(options.window);
+        assert_eq!(options.controls.as_deref(), Some("controls.json"));
     }
 
     #[test]

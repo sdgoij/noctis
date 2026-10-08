@@ -783,6 +783,7 @@ impl AppDriver for EditorDriver {
     fn update(&mut self, dt: f32) {
         let forward_axis = self.controls.forward_axis(&self.input);
         let right_axis = self.controls.right_axis(&self.input);
+        let up_axis = self.controls.up_axis(&self.input);
         let speed = self.fly_speed;
         let world = &mut self.editor.scene_mut().world;
         let Some(camera) = render::first_active_camera(world) else {
@@ -794,7 +795,8 @@ impl AppDriver for EditorDriver {
             .unwrap_or_else(Quat::identity);
         let forward = rotation.rotate_vec3(vec3(0.0, 0.0, -1.0));
         let right = rotation.rotate_vec3(vec3(1.0, 0.0, 0.0));
-        let delta = forward * forward_axis + right * right_axis;
+        let up = rotation.rotate_vec3(vec3(0.0, 1.0, 0.0));
+        let delta = forward * forward_axis + right * right_axis + up * up_axis;
         if (delta.x != 0.0 || delta.y != 0.0 || delta.z != 0.0)
             && let Some(transform) = world.get_mut::<LocalTransform>(camera)
         {
@@ -881,7 +883,7 @@ impl AppDriver for EditorDriver {
                 }
                 ui.separator();
                 ui.label(format!("{} entities", self.editor.list_entities().len()));
-                ui.label("|  WASD: fly  ·  MMB: orbit  ·  Shift+MMB: pan  ·  wheel: zoom");
+                ui.label("|  WASD/QE: fly  ·  MMB: orbit  ·  Shift+MMB: pan  ·  wheel: zoom");
             });
         });
 
@@ -932,7 +934,7 @@ impl AppDriver for EditorDriver {
                 ui.label("Viewport");
                 ui.separator();
                 ui.label(
-                    "WASD flies the camera; drag the middle mouse button to orbit \
+                    "WASD and Q/E fly the camera; drag the middle mouse button to orbit \
                      (hold Shift to pan); the wheel zooms.\n\
                      Click to select. Drag a handle to transform.",
                 );
@@ -960,4 +962,15 @@ impl AppDriver for EditorDriver {
 /// Open `editor` in a window with egui panels. Blocks until the window closes.
 pub fn run(editor: Editor, config: WindowConfig) -> Result<(), PlatformError> {
     platform::run(EditorDriver::new(editor), config)
+}
+
+/// Open `editor` in a window with explicit camera-navigation bindings.
+pub fn run_with_controls(
+    editor: Editor,
+    config: WindowConfig,
+    controls: CameraControls,
+) -> Result<(), PlatformError> {
+    let mut driver = EditorDriver::new(editor);
+    *driver.camera_controls_mut() = controls;
+    platform::run(driver, config)
 }

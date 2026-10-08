@@ -53,7 +53,9 @@ pub mod info;
 pub mod picking;
 pub mod window;
 
-pub use camera::{CAMERA_BACK, CAMERA_FORWARD, CAMERA_LEFT, CAMERA_RIGHT, CameraControls};
+pub use camera::{
+    CAMERA_BACK, CAMERA_DOWN, CAMERA_FORWARD, CAMERA_LEFT, CAMERA_RIGHT, CAMERA_UP, CameraControls,
+};
 pub use command::{
     AlphaModeSpec, AssetRef, AudioSourceParams, BodyTypeSpec, CameraParams, ColliderParams,
     ColliderShapeSpec, CommandOutcome, ComponentName, EditorCommand, EntityRef, LightParams,

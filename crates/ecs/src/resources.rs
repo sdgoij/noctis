@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 /// Frame timing and the fixed-step accumulator.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Time {
@@ -207,6 +209,27 @@ impl Key {
     }
 }
 
+impl Serialize for Key {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as the canonical name so bindings survive enum changes.
+        serializer.serialize_str(&self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Key {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        Key::from_name(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown key name {name:?}")))
+    }
+}
+
 /// A mouse button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MouseButton {
@@ -225,6 +248,45 @@ impl MouseButton {
             MouseButton::Right => 1,
             MouseButton::Middle => 2,
         }
+    }
+
+    /// The canonical (lowercase) name, used in serialized bindings.
+    pub fn name(self) -> &'static str {
+        match self {
+            MouseButton::Left => "left",
+            MouseButton::Right => "right",
+            MouseButton::Middle => "middle",
+        }
+    }
+
+    /// Parse a mouse button from its canonical name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "left" => Some(MouseButton::Left),
+            "right" => Some(MouseButton::Right),
+            "middle" => Some(MouseButton::Middle),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for MouseButton {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for MouseButton {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        MouseButton::from_name(&name)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown mouse button {name:?}")))
     }
 }
 
@@ -353,7 +415,8 @@ impl InputState {
 }
 
 /// A named action bound to one or more keys.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ActionMap {
     bindings: HashMap<String, Vec<Key>>,
 }
@@ -552,6 +615,55 @@ mod tests {
         assert_eq!(actions.axis("Left", "Right", &input), 1.0);
         input.press_key(Key::Letter(0)); // Left too
         assert_eq!(actions.axis("Left", "Right", &input), 0.0);
+    }
+
+    #[test]
+    fn keys_serialize_as_canonical_names() {
+        let json = serde_json::to_string(&Key::Letter(22)).unwrap();
+        assert_eq!(json, "\"KeyW\"");
+        assert_eq!(
+            serde_json::to_string(&Key::ShiftLeft).unwrap(),
+            "\"ShiftLeft\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Key>("\"Digit3\"").unwrap(),
+            Key::Digit(3)
+        );
+    }
+
+    #[test]
+    fn unknown_key_names_are_rejected() {
+        let err = serde_json::from_str::<Key>("\"KeyZZ\"").unwrap_err();
+        assert!(err.to_string().contains("unknown key name"), "{err}");
+    }
+
+    #[test]
+    fn mouse_buttons_serialize_as_names() {
+        assert_eq!(
+            serde_json::to_string(&MouseButton::Middle).unwrap(),
+            "\"middle\""
+        );
+        assert_eq!(
+            serde_json::from_str::<MouseButton>("\"right\"").unwrap(),
+            MouseButton::Right
+        );
+        assert!(serde_json::from_str::<MouseButton>("\"thumb\"").is_err());
+        assert_eq!(
+            MouseButton::from_name(MouseButton::Left.name()),
+            Some(MouseButton::Left)
+        );
+    }
+
+    #[test]
+    fn action_map_round_trips_through_json() {
+        let mut actions = ActionMap::new();
+        actions.bind("Forward", [Key::Letter(22)]);
+        actions.bind("Back", [Key::Letter(18)]);
+
+        let json = serde_json::to_string(&actions).unwrap();
+        let back: ActionMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.keys("Forward"), [Key::Letter(22)]);
+        assert_eq!(back.keys("Back"), [Key::Letter(18)]);
     }
 
     #[test]
