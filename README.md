@@ -18,7 +18,7 @@ repository.
 | `render` | PBR renderer: glTF, IBL, shadows, SSAO, HDR tonemapping, gizmos, text. |
 | `physics` | rapier3d integration. |
 | `audio` | rodio playback + 3D spatialization + file decoding. |
-| `script` | Script runtime + engine API (Slag JS/WASM backend optional). |
+| `script` | Script runtime + engine API (JavaScript/WebAssembly via Slag). |
 | `testscene` | The all-features scene used for testing. |
 | `project` | The project model: `noctis.toml`, asset paths, import, build. |
 | `editor` | Editor library + AI-controllable command API (the `noctis editor` command). |
@@ -41,16 +41,13 @@ cargo run -- --help                       # every command
 prefabs, scripts, and generated assets exercising every engine feature. See its
 [README](examples/showcase/README.md).
 
-Enable the real JavaScript backend:
+Scripting is JavaScript, executed by the Slag engine, which is always built — a
+project's scripts run out of the box. The example project's JavaScript is covered
+directly:
 
 ```sh
-cargo test -p script --features slag               # the backend's smoke tests
-cargo run --features slag -- run --project <dir>   # JS in a game, in-process
+cargo test -p script --test showcase_scripts
 ```
-
-Without the `slag` feature, `noctis run` and `noctis build` refuse a project that
-attaches scripts rather than silently producing a still game; `--allow-inert`
-overrides.
 
 ## Usage
 
@@ -105,7 +102,7 @@ order) are also supported; see `docs/project.md`.
 ```sh
 # 1. Author: open the project, import its assets, edit a scene, save it back.
 cargo run -- editor --project mygame                         # interactive
-cargo run -- editor --project mygame \
+cargo run -- editor --project mygame --headless \
     --command '[{ "op": "spawn", "name": "Box" }]' --out mygame/scenes/main.scene.json
 
 # 2. Run: import the project's assets and play its default scene.
@@ -159,7 +156,7 @@ scenes, and a scene may override it.
 
 ```sh
 # Create / open a 2D scene; in a 2D scene the editor adds an orthographic camera.
-cargo run -- editor --scene menu.scene.json --mode 2d --out menu.scene.json
+cargo run -- editor --headless --scene menu.scene.json --mode 2d --out menu.scene.json
 
 # A project with mode = "2d" makes new scenes 2D automatically.
 cargo run -- editor --project mygame
@@ -275,8 +272,7 @@ noctis rename [OPTIONS]     move an asset and rewrite its references
 --render           render each frame with a headless GPU (skipped if unavailable)
 --export <DIR>     export a self-contained game folder
 --name <NAME>      exported executable name
---wasm <name>=<path>   register a .wasm script (requires the `slag` feature)
---allow-inert      run even if scripts cannot execute (they are skipped)
+--wasm <name>=<path>   register a .wasm script
 --no-audio         do not open an audio device
 --print-summary / --quiet
 ```

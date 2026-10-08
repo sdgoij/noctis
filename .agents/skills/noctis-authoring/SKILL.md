@@ -100,19 +100,9 @@ function vec3(raw) {
 to act on the edge. There is no per-entity or "pressed-this-frame" binding — use
 the `entity` argument, not a `current_entity()` call.
 
-**Scripts do not run unless the `slag` feature is on.** The default build uses
-`NoopHost` (scripts are discovered and tracked but inert), and `noctis run` and
-`noctis build` *refuse* a project that attaches scripts unless the backend is
-present. To execute them:
-
-```sh
-cargo run --features slag -- run --project <dir>          # run with JS, in-process
-cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game  # a JS game
-```
-
-(Use the manifest path for the game binary: `-p runtime --features slag` is
-ambiguous with a transitive Slag crate.) Pass `--allow-inert` to run or build
-anyway, accepting that the scripts are skipped.
+Scripts run out of the box: the engine always builds the Slag JavaScript backend,
+so `noctis run` and `noctis build` execute `.js` and `.wasm` scripts with no
+feature to enable.
 
 ## Prefabs
 
@@ -129,7 +119,7 @@ After authoring:
 - `cargo test --workspace` — the test scene and the `examples/showcase`
   integration test are the regression net; a scene that references a missing
   asset, or an asset that fails to import, fails here.
-- For scripts, `cargo test -p script --features slag --test showcase_scripts`
-  runs the example's JavaScript in the real engine.
+- For scripts, `cargo test -p script --test showcase_scripts` runs the example's
+  JavaScript in the real engine.
 - Load your scene through the runtime before claiming success:
-  `cargo run -- run --headless --project <dir> --frames 120 --allow-inert`.
+  `cargo run -- run --headless --project <dir> --frames 120`.

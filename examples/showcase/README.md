@@ -35,31 +35,24 @@ showcase/
 
 ## Run it
 
-The showcase attaches JavaScript, so `noctis run` and `noctis build` refuse it
-unless the `slag` backend is present. Give the runtime the backend once, then run
-the full demo:
+The project attaches JavaScript, which the engine always runs. Watch the demo:
 
 ```sh
-cargo run --features slag -- run --project examples/showcase
-```
+# The default scene, in a window (Esc closes it).
+cargo run -- run --project examples/showcase
 
-That opens the default scene in a window (Esc closes it). Without the backend, add
-`--allow-inert` to watch the scenery — physics and rendering still run, the
-scripts do not:
-
-```sh
 # Headless: import the assets, run 120 frames, print a summary.
-cargo run -- run --headless --project examples/showcase --frames 120 --allow-inert
+cargo run -- run --headless --project examples/showcase --frames 120
 
 # Headless with the GPU on a dummy surface (needs a graphics adapter).
-cargo run -- run --headless --project examples/showcase --render --frames 4 --allow-inert
+cargo run -- run --headless --project examples/showcase --render --frames 4
 ```
 
-Run a different scene with `--scene`, project-relative (both attach scripts too):
+Run a different scene with `--scene`, project-relative:
 
 ```sh
-cargo run -- run --project examples/showcase --scene scenes/physics.scene.json --allow-inert
-cargo run -- run --project examples/showcase --scene scenes/menu.scene.json --allow-inert
+cargo run -- run --project examples/showcase --scene scenes/physics.scene.json
+cargo run -- run --project examples/showcase --scene scenes/menu.scene.json
 ```
 
 ## Edit it
@@ -72,8 +65,7 @@ cargo run -- editor --project examples/showcase
 ```
 
 The editor viewport is authoring-only: it does not run scripts, so a scene with
-behaviours looks static there. Use the runtime (with `--features slag`) to watch
-them run.
+behaviours looks static there. Use `noctis run` to watch them run.
 
 The editor is fully drivable by an agent through its JSON command API — spawn
 entities, set transforms, add components, import a glTF, save a prefab, and write
@@ -81,7 +73,7 @@ the scene back:
 
 ```sh
 cargo run -- editor --print-schema
-cargo run -- editor --project examples/showcase \
+cargo run -- editor --project examples/showcase --headless \
     --command '[{ "op": "spawn", "name": "Box" },
                 { "op": "add_rigid_body", "entity": { "name": "Box" } }]' \
     --out scenes/new.scene.json
@@ -98,7 +90,7 @@ A scene's `mode` is a presentation hint, not a schema fork. `--mode 2d` records
 commands apply in order and address earlier entities by name:
 
 ```sh
-cargo run -- editor --project examples/showcase \
+cargo run -- editor --project examples/showcase --headless \
     --scene scenes/board.scene.json --mode 2d \
     --command '[
       { "op": "spawn", "name": "Camera" },
@@ -146,15 +138,12 @@ cargo run -- run --project examples/showcase --scene scenes/board.scene.json
 ## Build it
 
 ```sh
-# A JavaScript game: build the slag-enabled game runtime, then bundle.
-cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game
-cargo run --features slag -- build --project examples/showcase
-
-# An inert game (scripts skipped; --allow-inert acknowledges it).
-cargo run -- build --project examples/showcase --allow-inert
+# Bundle the default scene. With no --target the game takes the project's name,
+# so this writes showcase/dist/Noctis Showcase/.
+cargo run -- build --project examples/showcase
 
 # A named [[build]] target supplies its own name and output dir, e.g. dist/showcase/.
-cargo run --features slag -- build --project examples/showcase --target showcase
+cargo run -- build --project examples/showcase --target showcase
 ```
 
 A build copies the `noctis-game` runtime, the scene, every asset the scene
@@ -220,7 +209,7 @@ The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 runs them in the real engine:
 
 ```sh
-cargo test -p script --features slag --test showcase_scripts
+cargo test -p script --test showcase_scripts
 ```
 
 ## Prefabs
@@ -313,4 +302,4 @@ cargo test --workspace
   GPU and requires a non-blank frame (skips when there is no adapter). Set
   `NOCTIS_PREVIEWS=target/previews` to also write the frames out as PNGs.
 - `crates/script/tests/showcase_scripts.rs` — runs all five scripts in the real
-  engine (`cargo test -p script --features slag --test showcase_scripts`).
+  engine (`cargo test -p script --test showcase_scripts`).

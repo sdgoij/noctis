@@ -7,20 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-# The crate ships one binary: `noctis-game`, the stripped game runtime an export
-# copies. Development runs and builds go through the `noctis` tool (crates/noctis),
-# which drives this crate's library.
-
-[features]
-# Run JavaScript in a game: forwards to the `script` crate's real backend. Slag
-# ships a transitive crate that is also named `runtime`, so prefer the manifest
-# path when enabling it: `cargo build --manifest-path crates/runtime/Cargo.toml
-# --features slag`.
-slag = ["script/slag"]
-
-[[bin]]
-name = "noctis-game"
-path = "src/main.rs"
+# The library only. The distributable game binary is `noctis-game` in
+# `crates/client`, and the development tool is `noctis` in `crates/noctis`; both
+# drive this crate.
 
 [dependencies]
 math.workspace = true

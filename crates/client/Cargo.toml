@@ -1,0 +1,17 @@
+[package]
+name = "client"
+description = "The distributable Noctis game client: a stripped runtime binary."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# The binary `noctis build` copies into an exported game folder. It links the
+# game runtime and nothing else — no editor, no authoring tools.
+[[bin]]
+name = "noctis-game"
+path = "src/main.rs"
+
+[dependencies]
+runtime.workspace = true

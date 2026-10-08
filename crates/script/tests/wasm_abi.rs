@@ -1,15 +1,7 @@
 //! End-to-end tests for the native WebAssembly script host.
 //!
-//! Compiled only with the `slag` feature:
-//!
-//! ```text
-//! cargo test -p script --features slag
-//! ```
-//!
 //! The fixtures are built with a tiny inline encoder so the tests need no
 //! toolchain and no binary blobs in the tree.
-
-#![cfg(feature = "slag")]
 
 use ecs::assets::AssetRegistry;
 use ecs::components::{LocalTransform, Name, Script};

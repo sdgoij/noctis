@@ -1,15 +1,4 @@
 //! End-to-end proof that a game run by the runtime executes scripts.
-//!
-//! Compiled only with the `slag` feature. Run it with:
-//!
-//! ```text
-//! cargo test --manifest-path crates/runtime/Cargo.toml --features slag
-//! ```
-//!
-//! The manifest path is used because `-p runtime` is ambiguous: the Slag engine
-//! ships a transitive crate that is also named `runtime`.
-
-#![cfg(feature = "slag")]
 
 use ecs::components::{LocalTransform, Script};
 use ecs::scene::Scene;

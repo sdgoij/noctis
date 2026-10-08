@@ -1,14 +1,5 @@
-//! The real JavaScript backend, compiled only with the `slag` feature.
-//!
-//! This module embeds the [Slag](https://github.com/sdgoij/slag) JavaScript
-//! engine, including its WebAssembly JS API and its Cranelift JIT hook. It is
-//! **off by default** because those pull a from-scratch WASM engine, Cranelift,
-//! and a very large pinned `test262` submodule, which is inappropriate for the
-//! ordinary engine build. Enable it with:
-//!
-//! ```text
-//! cargo build -p script --features slag
-//! ```
+//! The JavaScript backend: the embedded [Slag](https://github.com/sdgoij/slag)
+//! engine, including its WebAssembly JS API and its Cranelift JIT hook.
 //!
 //! # How the bridge works
 //!

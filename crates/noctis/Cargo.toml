@@ -11,13 +11,6 @@ repository.workspace = true
 # editor (the workspace root sets `default-members = ["crates/noctis"]`).
 default-run = "noctis"
 
-[features]
-# Run JavaScript and WebAssembly in projects: forwards to the game runtime, and
-# so to the `script` crate's real backend. Off by default (it pulls the JS
-# engine); without it `noctis run`/`noctis build` refuse a project that attaches
-# scripts unless `--allow-inert` is passed.
-slag = ["runtime/slag"]
-
 [[bin]]
 name = "noctis"
 path = "src/main.rs"

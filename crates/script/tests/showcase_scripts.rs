@@ -1,18 +1,9 @@
 //! The example project's JavaScript, executed by the real Slag engine.
 //!
-//! The scripts under `examples/showcase/scripts` are a deliverable, but the
-//! default build (`NoopHost`) never runs them. Gated on the off-by-default
-//! `slag` feature, this test loads each one under its project asset path, drives
-//! a world for a couple of seconds, presses the keys the scripts listen for, and
-//! requires the engine to report no script errors and to have seen the effects.
-//!
-//! Run it with:
-//!
-//! ```text
-//! cargo test -p script --features slag --test showcase_scripts
-//! ```
-
-#![cfg(feature = "slag")]
+//! The scripts under `examples/showcase/scripts` are a deliverable, so this test
+//! loads each one under its project asset path, drives a world for a couple of
+//! seconds, presses the keys the scripts listen for, and requires the engine to
+//! report no script errors and to have seen the effects.
 
 use std::path::PathBuf;
 

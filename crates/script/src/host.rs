@@ -4,14 +4,13 @@
 //! something executable and invokes its lifecycle functions. This crate ships
 //! two engine-free hosts:
 //!
-//! * [`NoopHost`] — compiles nothing and calls nothing. It is the zero-cost
-//!   default, useful when scripting is disabled.
+//! * [`NoopHost`] — compiles nothing and calls nothing. A test seam for a world
+//!   with no scripting.
 //! * [`RecordingHost`] — records every lifecycle call and can execute
 //!   registered [`ScriptBehaviour`]s, so the runtime and the API can be tested
 //!   without a JavaScript engine.
 //!
-//! The real JavaScript backend is the optional `slag` feature; see
-//! [`crate::slag::SlagHost`].
+//! The JavaScript backend is [`crate::slag::SlagHost`].
 
 use std::collections::HashMap;
 
@@ -89,7 +88,7 @@ pub trait ScriptHost {
 }
 
 /// A host that does nothing: it compiles sources to module `0` and never calls
-/// them. Use it when scripting is disabled.
+/// them. A test seam for a world with no scripting.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoopHost;
 

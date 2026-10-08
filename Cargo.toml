@@ -17,6 +17,7 @@ members = [
     "crates/runtime",
     "crates/platform",
     "crates/noctis",
+    "crates/client",
 ]
 
 # `cargo run -- editor` (and friends) must resolve to the `noctis` tool without a
@@ -45,6 +46,7 @@ editor = { path = "crates/editor" }
 runtime = { path = "crates/runtime" }
 platform = { path = "crates/platform" }
 noctis = { path = "crates/noctis" }
+client = { path = "crates/client" }
 
 # Math
 glm = "0.3"

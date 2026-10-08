@@ -35,9 +35,8 @@ description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier
 - **Audio code must be device-free in tests.** Use `AudioEngine::silent()`.
 - **`render` uses wgpu 30** and `physics` uses **rapier3d 0.36** — both are recent
   and their APIs move; check `docs.rs` and let the compiler guide you.
-- The Slag JS backend is behind the `script` crate's `slag` feature (off by
-  default because it fetches a large submodule). Enable it with
-  `cargo build -p script --features slag`.
+- The Slag JS backend is a plain dependency of the `script` crate (no feature):
+  it pulls a from-scratch WASM engine and Cranelift, so a cold build is heavier.
 
 ## Component workflow
 
@@ -54,6 +53,4 @@ cargo test -p <crate>
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -- editor                      # the noctis tool is the default binary
-cargo build -p script --features slag
-cargo build --manifest-path crates/runtime/Cargo.toml --features slag --bin noctis-game
 ```

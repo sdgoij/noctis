@@ -20,7 +20,6 @@ use platform::WindowConfig;
 use project::Project;
 use render::RendererConfig;
 
-use crate::scripts;
 use crate::window::run_in_window;
 use crate::{
     BuildOptions, ExportReport, RunSummary, Runtime, RuntimeConfig, build_project, bundled_scene,
@@ -47,7 +46,6 @@ struct Args {
     wasm: Vec<(String, String)>,
     print_summary: bool,
     quiet: bool,
-    allow_inert: bool,
 }
 
 impl Default for Args {
@@ -67,7 +65,6 @@ impl Default for Args {
             wasm: Vec::new(),
             print_summary: false,
             quiet: false,
-            allow_inert: false,
         }
     }
 }
@@ -92,7 +89,6 @@ impl Args {
                 "--no-audio" => args.audio = false,
                 "--print-summary" => args.print_summary = true,
                 "--quiet" | "-q" => args.quiet = true,
-                "--allow-inert" => args.allow_inert = true,
                 "--scene" => {
                     let value = it.next().ok_or("--scene requires a file path")?;
                     args.scene = Some(value);
@@ -230,10 +226,7 @@ OPTIONS:
     --export <dir>     Export a self-contained game folder (requires --scene).
     --name <name>      Exported executable name (default: the scene file stem).
     --wasm <name>=<path>
-                       Register a .wasm module as a script asset (repeatable;
-                       requires a build with the `slag` feature).
-    --allow-inert      Run even if the project attaches scripts this build cannot
-                       execute (they are skipped).
+                       Register a .wasm module as a script asset (repeatable).
     --print-summary    Print the run summary (printed by default).
     --quiet            Suppress the run summary.
     -h, --help         Show this help.
@@ -242,26 +235,15 @@ ENVIRONMENT:
     NOCTIS_LOG         error | warn | info (default) | debug | trace | off"
 }
 
-/// The script host a game runs with: the Slag JavaScript engine plus the native
-/// WebAssembly host when the `slag` feature is enabled, otherwise the inert
-/// default.
-#[cfg(feature = "slag")]
+/// The script host a game runs with: the Slag engine — JavaScript with its
+/// Cranelift JIT and WebAssembly JS API, plus native `.wasm` scripts.
 type Host = script::engine_host::EngineHost;
-#[cfg(not(feature = "slag"))]
-type Host = script::NoopHost;
 
 /// Build the script host for a run.
-#[cfg(feature = "slag")]
 fn make_host() -> Result<Host, String> {
     log::info!("JavaScript and WebAssembly scripting enabled (Slag engine)");
     script::engine_host::EngineHost::new()
         .map_err(|err| format!("failed to start the JavaScript engine: {err}"))
-}
-
-/// Build the inert script host (scripts are discovered but not executed).
-#[cfg(not(feature = "slag"))]
-fn make_host() -> Result<Host, String> {
-    Ok(script::NoopHost)
 }
 
 /// Build the runtime for the requested scene.
@@ -314,10 +296,6 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
     register_wasm_modules(args, &mut assets)?;
     let scene = load_scene(args, project, &mut assets)?;
 
-    // Refuse to run a game whose scripts this build cannot execute, unless the
-    // caller opted into an inert run.
-    scripts::require_scripting(scripts::attached_scripts(&scene.world), args.allow_inert)?;
-
     let host = make_host()?;
 
     let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
@@ -341,23 +319,12 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
 
 /// Register every `--wasm name=path` module as a script asset, so a scene can
 /// reference it with `Script::from_path(name)`.
-#[cfg(feature = "slag")]
 fn register_wasm_modules(args: &Args, assets: &mut AssetRegistry) -> Result<(), String> {
     for (name, path) in &args.wasm {
         script::wasm_host::register(assets, name.clone(), path)
             .map_err(|err| format!("failed to register wasm module {path:?}: {err}"))?;
     }
     Ok(())
-}
-
-/// `--wasm` needs the `slag` feature that compiles the WebAssembly host.
-#[cfg(not(feature = "slag"))]
-fn register_wasm_modules(args: &Args, _assets: &mut AssetRegistry) -> Result<(), String> {
-    if args.wasm.is_empty() {
-        Ok(())
-    } else {
-        Err("--wasm requires a build with the `slag` feature".to_string())
-    }
 }
 
 /// Load the scene to run: an explicit file (resolved against `--project` when
@@ -412,7 +379,6 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
             destination: Some(PathBuf::from(destination)),
             name: args.name.clone(),
             scene: args.scene.clone(),
-            allow_inert: args.allow_inert,
             ..BuildOptions::default()
         };
         return build_project(Path::new(&dir), args.target.as_deref(), &options);
@@ -424,7 +390,6 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
         .ok_or("--export requires --scene <path>, or a project with a default scene")?;
     let scene_json = fs::read_to_string(&scene)
         .map_err(|err| format!("failed to read scene '{scene}': {err}"))?;
-    scripts::require_scripting(scripts::scripts_in_document(&scene_json)?, args.allow_inert)?;
     let name = args
         .name
         .clone()
@@ -591,10 +556,5 @@ mod tests {
     fn the_removed_window_flag_is_rejected_with_a_hint() {
         let error = parse(&["--window"]).unwrap_err();
         assert!(error.contains("--headless"), "{error}");
-    }
-
-    #[test]
-    fn allow_inert_is_parsed() {
-        assert!(parse(&["--allow-inert"]).unwrap().unwrap().allow_inert);
     }
 }

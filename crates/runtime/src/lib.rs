@@ -14,22 +14,12 @@
 //!
 //! ## Running JavaScript
 //!
-//! The runtime is generic over its script host. The default is the inert
-//! [`NoopHost`](script::NoopHost) — scripts are discovered and tracked but not
-//! executed. With the `slag` feature the game runs the real Slag engine instead,
-//! with its Cranelift JIT, its WebAssembly JS API, and the native WebAssembly
-//! script host enabled, so a game runs `.js` and `.wasm` scripts through one
-//! runtime:
-//!
-//! ```text
-//! cargo build --manifest-path crates/runtime/Cargo.toml --features slag
-//! ```
-//!
-//! (The manifest path is used because `-p runtime` is ambiguous: the Slag engine
-//! ships a transitive crate that is also named `runtime`.) [`scripts`] is the gate
-//! that stops `run` and `build` from silently producing a game whose scripts never
-//! execute. The loop runs on a single thread, so a host need not be `Send`; see
-//! [`Runtime`].
+//! The runtime is generic over its script host; the engine always runs the real
+//! Slag engine ([`EngineHost`](script::engine_host::EngineHost)), which supports
+//! JavaScript with its Cranelift JIT and WebAssembly JS API, and native `.wasm`
+//! scripts, through one runtime. The inert [`NoopHost`](script::NoopHost) and
+//! [`RecordingHost`](script::RecordingHost) remain for tests. The loop runs on a
+//! single thread, so a host need not be `Send`; see [`Runtime`].
 //!
 //! ```
 //! use ecs::prelude::*;
@@ -67,7 +57,6 @@ mod runtime;
 pub mod build;
 pub mod cli;
 pub mod demo;
-pub mod scripts;
 pub mod window;
 
 pub use build::{BuildOptions, build_project};

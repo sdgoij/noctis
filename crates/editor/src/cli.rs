@@ -46,8 +46,7 @@ OPTIONS:
     -c, --command <SRC>     Apply a JSON command batch. <SRC> is a file path,
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
-        --headless          Do not open a window (implied by --command/--out/
-                            --save-prefabs/--print-schema)
+        --headless          Do not open a window (the window is the default)
         --testscene         Load the engine's all-features test scene
         --save-prefabs      Write the prefab library to the project's prefabs/
                             directory (requires --project)
@@ -109,15 +108,10 @@ fn report(error: CliError) -> ExitCode {
 
 /// Whether the invocation should open the editor window.
 ///
-/// The window is the default; `--headless` disables it, and a batch operation
-/// implies it, because those write files or print and exit.
+/// The window is the default; `--headless` opts out. `--help` and
+/// `--print-schema` print and exit, so they never open one.
 fn opens_a_window(options: &Options) -> bool {
-    !options.headless
-        && !options.help
-        && !options.print_schema
-        && options.command.is_none()
-        && options.out.is_none()
-        && !options.save_prefabs
+    !options.headless && !options.help && !options.print_schema
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -510,16 +504,24 @@ mod tests {
     }
 
     #[test]
-    fn batch_operations_do_not_open_a_window() {
-        // `--command`/`--out`/`--print-schema` are file/print operations.
+    fn commands_and_out_keep_the_window() {
+        // `--command` and `--out` do not force headless: the window is the default
+        // and `--headless` is how you opt out.
         for flags in [
             args(&["--command", "edits.json"]),
             args(&["--out", "out.json"]),
-            args(&["--print-schema"]),
-            args(&["--help"]),
+            args(&["--save-prefabs"]),
         ] {
             let options = parse_args(&flags).unwrap();
-            assert!(!opens_a_window(&options), "{flags:?} should be headless");
+            assert!(opens_a_window(&options), "{flags:?} should open a window");
+        }
+        // Printing and exiting never opens one.
+        for flags in [args(&["--print-schema"]), args(&["--help"])] {
+            let options = parse_args(&flags).unwrap();
+            assert!(
+                !opens_a_window(&options),
+                "{flags:?} should not open a window"
+            );
         }
     }
 

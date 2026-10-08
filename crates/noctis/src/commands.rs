@@ -33,8 +33,6 @@ OPTIONS:
     --scene <PATH>       Override the scene (project-relative).
     --name <NAME>        Override the game/executable name.
     --out <DIR>          Override the output directory.
-    --allow-inert        Build even if the scene attaches scripts this build
-                         cannot execute (they are bundled but will not run).
     -h, --help           Show this help.";
 
 const RENAME_USAGE: &str = "\
@@ -70,12 +68,6 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
         };
         match flag {
             "-h" | "--help" => return Ok(BUILD_USAGE.to_string()),
-            "--allow-inert" => {
-                if inline.is_some() {
-                    return Err(CliError::Usage("--allow-inert takes no value".into()));
-                }
-                options.allow_inert = true;
-            }
             "--project" | "-p" => {
                 let (value, consumed) = value_for("--project")?;
                 project = Some(value);
@@ -113,10 +105,11 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
     let runtime = default_runtime_executable()
         .map_err(|error| CliError::Message(format!("cannot locate the game runtime: {error}")))?;
     if runtime.file_stem().and_then(|stem| stem.to_str()) != Some(RUNTIME_BIN) {
-        return Err(CliError::Message(format!(
+        return Err(CliError::Message(
             "the game runtime was not found next to noctis; build it first \
-             (`cargo build --manifest-path crates/runtime/Cargo.toml --bin {RUNTIME_BIN}`)"
-        )));
+             (`cargo build --workspace`, which builds the noctis-game client)"
+                .to_string(),
+        ));
     }
     options.runtime = Some(runtime);
 
@@ -205,20 +198,6 @@ mod tests {
     fn unknown_build_option_is_a_usage_error() {
         assert!(matches!(
             build(&args(&["--project", "p", "--nope"])),
-            Err(CliError::Usage(_))
-        ));
-    }
-
-    #[test]
-    fn allow_inert_bit_parses() {
-        // The flag parses; with a missing project the failure is a message, not a
-        // usage error about the flag.
-        assert!(matches!(
-            build(&args(&["--project", "does-not-exist-xyz", "--allow-inert"])),
-            Err(CliError::Message(_))
-        ));
-        assert!(matches!(
-            build(&args(&["--project", "p", "--allow-inert=yes"])),
             Err(CliError::Usage(_))
         ));
     }

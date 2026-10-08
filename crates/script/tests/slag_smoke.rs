@@ -1,17 +1,8 @@
 //! Smoke test for the real Slag JavaScript backend.
 //!
-//! This file compiles only when the `slag` feature is on; otherwise the default
-//! testable host is used and this is empty. Run it with:
-//!
-//! ```text
-//! cargo test -p script --features slag
-//! ```
-//!
 //! It drives the full engine-side lifecycle ([`ScriptRuntime`]) through the real
 //! JS engine, exercising transforms, spawning, the vector getters/setters, and
 //! name lookup, so a break in the Slag binding or the replay bridge fails here.
-
-#![cfg(feature = "slag")]
 
 use ecs::assets::AssetRegistry;
 use ecs::components::{LocalTransform, Name, Script};
@@ -211,8 +202,8 @@ fn each_spawned_handle_addresses_its_own_entity() {
     );
 }
 
-/// A hot counting loop. With the `jit` feature on (which this crate's `slag`
-/// feature enables) `SlagHost::new` installs the Cranelift hook, so this drives
+/// A hot counting loop. With the `jit` feature on (which the Slag dependency
+/// enables) `SlagHost::new` installs the Cranelift hook, so this drives
 /// the compiled path; the result also guards correctness.
 const JIT_SCRIPT: &str = "
     function on_start(entity, dt) {

@@ -1,4 +1,4 @@
-//! The native WebAssembly script host (feature `slag`).
+//! The native WebAssembly script host.
 //!
 //! A `.wasm` module can be a first-class script alongside a `.js` one. The engine
 //! feeds every script through one channel (a source string), so a WebAssembly

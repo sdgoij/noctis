@@ -1,43 +1,24 @@
 //! # script — JavaScript behaviours for the Noctis engine
 //!
-//! This crate is the scripting layer. It has two halves that meet at the
-//! [`ScriptHost`] trait:
+//! Scripting is JavaScript, executed by the "Slag" engine, so the backend is a
+//! plain dependency with no feature to enable. The crate has two halves that meet
+//! at the [`ScriptHost`] trait:
 //!
 //! * **The engine side** ([`ScriptRuntime`], [`ScriptApi`]) discovers
 //!   [`Script`](ecs::components::Script) components in a
 //!   [`World`](ecs::world::World), compiles each unique source once, and drives
 //!   the `on_start` / `on_update` / `on_destroy` lifecycle. It exposes an engine
 //!   API to scripts and records every effect as a [`ScriptCommand`].
-//! * **The host side** ([`ScriptHost`]) actually executes script code. The real
-//!   JavaScript engine is the optional `slag` feature; the default build ships
-//!   [`NoopHost`] and [`RecordingHost`], which make the whole runtime testable
-//!   without a JS engine.
-//!
-//! ## The `slag` feature
-//!
-//! Scripting is JavaScript, executed by the "Slag" engine. Because pulling in a
-//! JS engine (its WebAssembly runtime, the Cranelift JIT, and an enormous
-//! test262 submodule) is not appropriate for every build, the real backend lives
-//! behind the **off-by-default** `slag` feature:
-//!
-//! ```text
-//! cargo build -p script --features slag
-//! ```
-//!
-//! The feature enables Slag's **WebAssembly JS API** (scripts see the
-//! `WebAssembly` global and can build and instantiate modules) and its
-//! **Cranelift JIT hook** (`SlagHost::jit_enabled`, hot certified bodies run at
-//! machine speed).
-//!
-//! It also adds `wasm_host`, a **native WebAssembly script host**: a `.wasm`
-//! module is a first-class script alongside a `.js` one, calling the engine
-//! through the import ABI documented on `wasm_host::WasmHost`. The
-//! `engine_host::EngineHost` host runs both languages in one runtime, choosing
-//! the backend from the script source.
-//!
-//! Without the feature the crate is fully functional but inert: scripts are
-//! discovered and their lifecycles are tracked, but no user code runs. See
-//! [`slag`] (only compiled with the feature) for the backend.
+//! * **The host side** ([`ScriptHost`]) actually executes script code.
+//!   [`slag::SlagHost`] runs JavaScript, with Slag's **WebAssembly JS API**
+//!   (scripts see the `WebAssembly` global and can build and instantiate modules)
+//!   and its **Cranelift JIT hook** (hot certified bodies run at machine speed).
+//!   [`wasm_host::WasmHost`] runs a native `.wasm` module as a first-class script
+//!   through the import ABI documented on that type, and
+//!   [`engine_host::EngineHost`] runs both languages in one runtime, choosing the
+//!   backend from the script source. [`NoopHost`] and [`RecordingHost`] are the
+//!   inert and recording hosts, so the runtime stays testable without leaning on
+//!   Slag's behaviour.
 //!
 //! ## Example
 //!
@@ -67,21 +48,14 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod engine_host;
 pub mod host;
 pub mod runtime;
-
-/// The shared snapshot/replay bridge used by the script backends.
-#[cfg(feature = "slag")]
-mod bridge;
-
-#[cfg(feature = "slag")]
+pub mod slag;
 pub mod wasm_host;
 
-#[cfg(feature = "slag")]
-pub mod engine_host;
-
-#[cfg(feature = "slag")]
-pub mod slag;
+/// The shared snapshot/replay bridge used by the script backends.
+mod bridge;
 
 pub use api::{EntityId, ScriptApi, ScriptCommand, ScriptContext, entity_from_id, entity_id};
 pub use ecs::world::Entity;
