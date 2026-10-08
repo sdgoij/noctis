@@ -1,0 +1,305 @@
+# Noctis projects
+
+**Status: design.** This document defines what a Noctis *project* is and how the
+engine will resolve it. It is not implemented yet; the "What already exists"
+section lists the pieces it builds on. Treat this as the contract to implement
+against and update deliberately.
+
+A project is a **directory with a `noctis.toml` manifest**. It owns one shared
+asset registry, zero or more scenes, prefabs, and scripts, and it defines how the
+game is built and exported.
+
+## Decisions
+
+These were chosen deliberately; changing them is a design change, not a tweak.
+
+1. **References are project-relative paths**, with rename-rewrite to keep them
+   valid. No GUIDs.
+2. **The import cache is generated and gitignored** (`.noctis/`). Revisit if a
+   committed cache proves useful.
+3. **Convention-first layout with overrides** in the manifest.
+4. **The project is the build/export unit**; `noctis.toml` defines the build
+   targets.
+5. **The project owns the asset registry**; a scene may bring its own to stay
+   self-contained.
+
+## Directory layout (convention + overrides)
+
+```
+mygame/
+  noctis.toml           # the manifest (required)
+  assets/               # imported source files
+    models/             #   .glb/.gltf
+    textures/           #   .png/.jpg/.hdr/...
+    audio/              #   .wav/.ogg
+    materials/          #   material definitions, if authored separately
+  scenes/               # *.scene.json
+  prefabs/              # *.prefab.json
+  scripts/              # *.js / *.wasm
+  .noctis/              # GENERATED import cache, thumbnails (gitignored)
+```
+
+Every directory is a convention, not a requirement: `[paths]` in the manifest
+overrides any of them, and assets are referenced by their path, so a developer
+may organise the tree however they like. The conventions exist so drag & drop and
+`noctis` tooling have a sensible default.
+
+## The manifest: `noctis.toml`
+
+```toml
+[project]
+name = "MyGame"
+version = "0.1.0"
+description = "A small platformer."
+
+[project.settings]
+default_scene = "scenes/main.scene.json"
+mode = "3d"                       # "2d" | "3d"; a hint, not a separate format
+gravity = [0.0, -9.81, 0.0]
+
+# Optional: override the conventional directories.
+[paths]
+assets = "assets"
+scenes = "scenes"
+prefabs = "prefabs"
+scripts = "scripts"
+
+[window]
+title = "MyGame"
+width = 1280
+height = 720
+
+[render]
+hdr = true                        # HDR pipeline + tonemapping
+sample_count = 1
+
+# The input bindings the editor viewport loads (see `--controls` today).
+[input]
+controls = "input/controls.json"
+
+# Build/export targets. Each is a self-contained artifact.
+[[build]]
+name = "mygame"
+scene = "scenes/main.scene.json"  # defaults to project.settings.default_scene
+platform = "host"                 # "host" | "windows" | "macos" | "linux"
+profile = "release"               # "dev" | "release"
+output = "dist/mygame"
+```
+
+Notes:
+
+- `mode` is a **presentation hint**, not a schema fork (see [Scenes](#scenes)).
+- Build targets describe *what to produce*. The first cut produces a
+  self-contained folder exactly like today's
+  `noctis-runtime --export`, but bundling every referenced asset rather than just
+  the scene JSON.
+- Unknown keys should be a load **error** (typos in a manifest are bugs), with the
+  exception of forward-compatible tables we explicitly allow.
+
+## Assets
+
+### Canonical asset paths
+
+An **asset path** is a logical, project-relative path:
+
+- POSIX (`/`) separators, no leading `./`, no `..`, no leading `/`.
+- Case-sensitive and exact.
+- Extensions preserved: `assets/textures/wood.png`.
+
+Asset paths are what appears in scene/prefab JSON and in the editor. They are
+**not** OS filesystem paths; the project maps a logical path to a file (by
+default, the file at `<project-root>/<logical-path>`).
+
+A single file may yield several sub-assets. Those get a **fragment**:
+
+```
+assets/models/robot.glb                 # the model
+assets/models/robot.glb#mesh/Torso      # a mesh inside it
+assets/models/robot.glb#material/Red    # a material inside it
+assets/models/robot.glb#texture/0       # a texture inside it
+```
+
+Fragments make glTF import deterministic and give every sub-asset a stable,
+greppable reference.
+
+### References
+
+Scene and prefab documents reference assets by asset path (this is already how
+`Scene::to_json` works — handles are written as paths and resolved against the
+registry on load). A reference resolves to a registry handle at load time. A
+missing reference is a load error that names the path, never a silent blank.
+
+### Rename and move: rewrite references
+
+Renaming or moving an asset:
+
+1. moves the file on disk,
+2. updates the import cache mapping,
+3. **rewrites every reference** to the old path in `scenes/`, `prefabs/`, and any
+   script/asset metadata that carries asset paths.
+
+This is a first-class operation (`Editor::rename_asset` / a `noctis` command),
+not a manual find-and-replace, because a stale path is a broken scene. Sub-asset
+fragments are rewritten together with their source file.
+
+### Type detection (drag & drop)
+
+Auto-detect by extension, confirm, then import:
+
+| Extension(s)                         | Kind    | Default location      |
+| ------------------------------------ | ------- | --------------------- |
+| `.glb`, `.gltf`, `.fbx`              | model   | `assets/models/`      |
+| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`, `.hdr` | texture | `assets/textures/`    |
+| `.wav`, `.ogg`, `.mp3`               | audio   | `assets/audio/`       |
+| `.js`, `.mjs`                        | script  | `scripts/`            |
+| `.wasm`                              | script  | `scripts/`            |
+| `.scene.json`                        | scene   | `scenes/`             |
+| `.prefab.json`                       | prefab  | `prefabs/`            |
+| anything else                        | ask     | —                     |
+
+Drop targets differ: dropping on the **viewport** imports *and* instantiates;
+dropping on the **outliner** instantiates (a model or prefab); dropping anywhere
+else just imports the file into the project. If a file with the target name
+exists, import must not clobber it — suffix a counter or ask.
+
+### Import pipeline and cache
+
+Importing decodes a source file into engine assets and records how. Because
+decoding can be expensive (a glTF with textures), the results are cached under
+`.noctis/` keyed by the source file's content hash plus import settings. The cache
+is generated and gitignored.
+
+Per-asset **import settings** (persisted, not in the gitignored cache) control
+decoding: a texture is sRGB (color) or linear (data) — the inspector already has
+this toggle; a model may set scale and up-axis. The project records settings as
+sidecar metadata next to the asset (e.g. `wood.png.import.toml`) so they are
+versioned and portable.
+
+## Scenes
+
+### One scene type; 2D is a mode
+
+There is exactly one scene format (`*.scene.json`, `SceneDesc` with a
+`format_version`). **Do not fork it into 2D and 3D.** The engine is 3D today; a
+"2D scene" would only be *3D with an orthographic camera*, and a forked schema
+would duplicate every component, the renderer, physics, and the editor.
+
+`mode = "2d"` is therefore a **presentation hint** that drives editor defaults
+(orthographic camera, top-down grid, planar gizmo, snapping). If genuine 2D is
+wanted later, it arrives as a **component set** (`SpriteRenderer`, `Collider2D`,
+Z-ordering) on the same format — 2D vs 3D then means "which components you use".
+
+### Scene list and the default scene
+
+`project.settings.default_scene` names the scene the runtime runs when none is
+given. A project discovers scenes by scanning `[paths].scenes`; the manifest may
+also list them explicitly to set names and order.
+
+## Prefabs
+
+A prefab is a `Prefab { name, scene: SceneDesc }` — already serializable today.
+Prefabs become project assets: `prefabs/*.prefab.json`, referenced from scenes as
+`assets` are, by project-relative path. (Today they live only in the editor's
+in-memory library and are lost on save; a project gives them a home.)
+
+## Scripts
+
+- `.js` scripts are project assets resolved by asset path; the scene's `Script`
+  component references them by path (already the case).
+- `.wasm` scripts use the existing descriptor path (`wasm_host`); the project
+  registers them the way `noctis-runtime --wasm name=path` does today, but from
+  the asset map.
+- Scripts resolve assets and each other by the same project-relative paths.
+
+## Asset registry ownership
+
+The **project owns one shared `AssetRegistry`**, loaded from its asset map and
+shared by every scene. Scenes reference assets by path and resolve against it.
+
+A scene **may bring its own** assets to stay self-contained (as the test scene
+does today by building its own registry). Such scene-local assets are layered
+*over* the project registry: project entries are the base, scene entries win on
+collision. This lets a scene be opened and run on its own — useful for tests,
+demos, and sharing a single scene file — without dragging the whole project.
+
+```
+resolve(path) = scene_registry.get(path) or project_registry.get(path)
+```
+
+Loading a scene therefore needs *a* registry; the project supplies the default
+one.
+
+## Build and export
+
+`[[build]]` targets define artifacts. A build:
+
+1. resolves the target's scene (and every asset/prefab/script it references,
+   transitively),
+2. writes a self-contained folder: the runtime executable, the scene, the
+   referenced assets, and a manifest (`noctis-game.json`) — an extension of
+   today's `export_game`, which currently bundles only the scene,
+3. applies render/window/input settings from the manifest and the target.
+
+The exported game loads its bundled default scene when run with no arguments
+(already true today).
+
+## Version control
+
+- Manifests, scenes, prefabs, and import settings are **text** (TOML/JSON) and
+  belong in version control.
+- `.noctis/` is generated and **gitignored**; a fresh clone regenerates it by
+  importing.
+- Serialization must be **deterministic** (stable key/entity order, stable float
+  formatting) so a no-op save produces no diff. This is a real requirement on
+  `SceneDesc`/`Prefab` serialization and should be tested.
+
+## Command line (planned)
+
+```
+noctis-editor  --project <dir> [--scene <path>] [--window]
+noctis-runtime --project <dir> [--scene <path>] [--window] [--export ...]
+noctis build   --project <dir> --target <name>
+```
+
+`--project` locates the manifest, loads the project registry, and makes
+`--scene` a project-relative path. `--scene` alone still works for a loose,
+self-contained scene file (the current behaviour).
+
+## What already exists
+
+Built on (reuse, do not reinvent):
+
+- `ecs::scene::SceneDesc` — scene document with `format_version`; asset handles
+  serialize as **paths** (`Scene::to_json` / `from_json` take an `AssetRegistry`).
+- `ecs::scene::Prefab` — `{ name, scene: SceneDesc }`, `to_json` / `from_json`.
+- `ecs::assets::AssetRegistry` — typed stores: `meshes`, `materials`, `textures`,
+  `audio`, `scripts`.
+- `runtime::export_game` — writes `scene.json` + `noctis-game.json` + the exe
+  (to be extended to bundle assets).
+- `RuntimeConfig` — `physics`, `audio`, `gravity`, `timestep`.
+- `editor::EditorCommand` + `--print-schema` — the agent-drivable edit API.
+- `render::load_gltf` / `load_gltf_bytes`, `render::load_texture` — importers.
+- `editor --controls <file>` — camera bindings (to move under the project).
+
+New work this design implies:
+
+- A `project` crate depending on `ecs`/`render`: manifest parsing, asset-path
+  canonicalization, a resolver (logical path + fragment → handle), import (with
+  cache), type detection, and build.
+- Rename-rewrite across scene/prefab documents.
+- Drag & drop in the editor, wired to project import.
+- Deterministic serialization tests.
+- `--project` in `noctis-editor` / `noctis-runtime`, and a `noctis` build CLI.
+
+## Open questions
+
+- **Import settings location**: sidecar `*.import.toml` next to the asset (this
+  doc's proposal) vs a single `imports.toml` at the project root.
+- **Cache key**: content hash only, or content hash + settings? (Both, to keep
+  settings changes invalidating.)
+- **Loose `.scene.json` without a project**: keep working forever as the
+  "self-contained scene" case, or require a project from some version onward?
+- **Asset packs / virtual file system**: defer; bundles are a build output, and
+  the project always works from loose files on disk.
+- **`.fbx` import**: listed as a model type, but there is no FBX decoder today —
+  either add one or drop it from the table until there is.

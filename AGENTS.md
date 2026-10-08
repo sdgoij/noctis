@@ -24,6 +24,11 @@ The frozen interface between `math`/`ecs` and everything else is documented in
 needs a change, change the contract deliberately and update this doc and the
 affected crates together — never bend `math`/`ecs` to fit one caller.
 
+What a *project* is — the `noctis.toml` manifest, the directory conventions, asset
+paths and references, import, and build targets — is designed in
+[`docs/project.md`](docs/project.md). That document is the contract for the
+`project` crate; update it deliberately when the design changes.
+
 ## Commands
 
 ```sh
