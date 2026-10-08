@@ -38,16 +38,29 @@ const GIZMO_HIT_FRACTION: f32 = 0.09;
 /// An in-progress gizmo drag.
 #[derive(Clone, Copy, Debug)]
 struct GizmoDrag {
-    /// The entity being moved.
+    /// The entity being transformed.
     entity: Entity,
-    /// The axis handle being dragged.
+    /// The tool that began the drag.
+    mode: GizmoMode,
+    /// The handle being dragged.
     axis: GizmoAxis,
-    /// The (unit) world direction of that axis.
+    /// The (unit) world direction of the handle: the axis for translate and
+    /// scale, the ring normal for rotate.
     direction: Vec3,
     /// The entity's world position when the drag began.
-    start: Vec3,
-    /// The ray/axis parameter at grab time.
-    grab: f32,
+    start_world: Vec3,
+    /// The entity's local rotation when the drag began.
+    start_rotation: Quat,
+    /// The entity's local scale when the drag began.
+    start_scale: Vec3,
+    /// The gizmo shaft length at grab time (the scale drag reference).
+    length: f32,
+    /// The axis parameter at grab time (translate and scale).
+    grab_linear: f32,
+    /// The ring angle at grab time (rotate).
+    grab_angle: f32,
+    /// The parent's world matrix at grab time, for world-to-local conversion.
+    parent: Option<Mat4>,
 }
 
 /// A windowed editor: owns an [`Editor`] and renders it with egui panels.
@@ -108,6 +121,19 @@ impl EditorDriver {
     pub fn select(&mut self, entity: Entity) {
         self.selected = Some(entity);
         let _ = self.editor.select(entity);
+    }
+
+    /// The active transform tool.
+    pub fn gizmo_mode(&self) -> GizmoMode {
+        self.gizmo_mode
+    }
+
+    /// Switch the active transform tool.
+    pub fn set_gizmo_mode(&mut self, mode: GizmoMode) {
+        if self.gizmo_mode != mode {
+            self.gizmo_mode = mode;
+            self.hovered_axis = None;
+        }
     }
 
     fn axis(&self, positive: Key, negative: Key) -> f32 {
@@ -399,14 +425,137 @@ impl EditorDriver {
         gizmo::gizmo_length(&view, &projection, origin, GIZMO_SCREEN_FRACTION)
     }
 
-    /// The gizmo axis handle the ray is over, if any.
-    fn axis_at(&self, entity: Entity, ray: &crate::picking::Ray) -> Option<GizmoAxis> {
-        let origin = self.world_position(entity)?;
-        let length = self.gizmo_length(origin);
-        gizmo::pick_axis(ray, origin, length, length * GIZMO_HIT_FRACTION)
+    /// An entity's world matrix, if it has a world transform.
+    fn world_matrix(&self, entity: Entity) -> Option<Mat4> {
+        self.editor
+            .scene()
+            .world
+            .get::<GlobalTransform>(entity)
+            .map(|g| g.matrix)
     }
 
-    /// Handle gizmo hover, axis dragging, and click-to-select in the viewport.
+    /// The unit world directions of the three gizmo handles for `entity`.
+    ///
+    /// Translate and rotate handles are world-oriented; scale handles follow the
+    /// entity's own frame.
+    fn gizmo_axes(&self, entity: Entity) -> [Vec3; 3] {
+        if self.gizmo_mode != GizmoMode::Scale {
+            return gizmo::world_axes();
+        }
+        match self.world_matrix(entity) {
+            Some(matrix) => {
+                let rotation = gizmo::rotation_of(&matrix);
+                [0, 1, 2].map(|i| {
+                    let c = rotation[i];
+                    vec3(c.x, c.y, c.z)
+                })
+            }
+            None => gizmo::world_axes(),
+        }
+    }
+
+    /// The gizmo handle the ray is over for the selected `entity`, if any.
+    fn pick_handle(&self, entity: Entity, ray: &crate::picking::Ray) -> Option<GizmoAxis> {
+        let origin = self.world_position(entity)?;
+        let length = self.gizmo_length(origin);
+        let threshold = length * GIZMO_HIT_FRACTION;
+        match self.gizmo_mode {
+            GizmoMode::Rotate => {
+                gizmo::pick_ring(ray, origin, gizmo::world_axes(), length, threshold)
+            }
+            _ => gizmo::pick_axis(ray, origin, self.gizmo_axes(entity), length, threshold),
+        }
+    }
+
+    /// Capture the state a drag needs, or `None` if the grab ray is degenerate.
+    fn begin_drag(
+        &self,
+        entity: Entity,
+        axis: GizmoAxis,
+        ray: &crate::picking::Ray,
+    ) -> Option<GizmoDrag> {
+        let start_world = self.world_position(entity)?;
+        let direction = match self.gizmo_mode {
+            GizmoMode::Rotate => gizmo::axis_vector(axis),
+            _ => self.gizmo_axes(entity)[gizmo::axis_index(axis)],
+        };
+        let (grab_linear, grab_angle) = match self.gizmo_mode {
+            GizmoMode::Rotate => {
+                let (u, v) = gizmo::basis_for_axis(axis);
+                (0.0, gizmo::ring_angle(ray, start_world, direction, u, v)?)
+            }
+            _ => (gizmo::axis_parameter(ray, start_world, direction)?, 0.0),
+        };
+        Some(GizmoDrag {
+            entity,
+            mode: self.gizmo_mode,
+            axis,
+            direction,
+            start_world,
+            start_rotation: self.editor.rotation(entity)?,
+            start_scale: self.editor.scale(entity)?,
+            length: self.gizmo_length(start_world),
+            grab_linear,
+            grab_angle,
+            parent: self.parent_world(entity),
+        })
+    }
+
+    /// Apply an in-progress drag for the current pointer ray.
+    fn update_drag(&mut self, drag: GizmoDrag, ray: &crate::picking::Ray) {
+        match drag.mode {
+            GizmoMode::Translate => {
+                let Some(current) = gizmo::axis_parameter(ray, drag.start_world, drag.direction)
+                else {
+                    return;
+                };
+                let world = gizmo::dragged_position(
+                    drag.start_world,
+                    drag.direction,
+                    drag.grab_linear,
+                    current,
+                );
+                let local = gizmo::local_from_world(drag.parent.as_ref(), world);
+                let _ = self.editor.set_translation(drag.entity, local);
+            }
+            GizmoMode::Rotate => {
+                let (u, v) = gizmo::basis_for_axis(drag.axis);
+                let Some(now) = gizmo::ring_angle(ray, drag.start_world, drag.direction, u, v)
+                else {
+                    return;
+                };
+                let angle = gizmo::wrap_angle(now - drag.grab_angle);
+                // Rotate about the world axis, expressed in the parent's frame,
+                // so the result is correct for a parented entity.
+                let local_axis = match drag.parent.as_ref() {
+                    Some(parent) => {
+                        gizmo::axis_into_frame(&gizmo::rotation_of(parent), drag.direction)
+                    }
+                    None => drag.direction,
+                };
+                let delta = Quat::from_axis_angle(local_axis, angle);
+                let _ = self
+                    .editor
+                    .set_rotation_quat(drag.entity, delta * drag.start_rotation);
+            }
+            GizmoMode::Scale => {
+                let Some(current) = gizmo::axis_parameter(ray, drag.start_world, drag.direction)
+                else {
+                    return;
+                };
+                let factor = (1.0 + (current - drag.grab_linear) / drag.length).max(0.01);
+                let mut scale = drag.start_scale;
+                match drag.axis {
+                    GizmoAxis::X => scale.x = drag.start_scale.x * factor,
+                    GizmoAxis::Y => scale.y = drag.start_scale.y * factor,
+                    GizmoAxis::Z => scale.z = drag.start_scale.z * factor,
+                }
+                let _ = self.editor.set_scale(drag.entity, scale);
+            }
+        }
+    }
+
+    /// Handle gizmo hover, handle dragging, and click-to-select in the viewport.
     fn viewport_interaction(&mut self, ui: &egui::Ui, rect: egui::Rect, response: &egui::Response) {
         let pointer = if response.hovered() || response.dragged() {
             response
@@ -419,7 +568,7 @@ impl EditorDriver {
 
         // While idle, highlight whichever handle the cursor is over.
         let handle = match (ray.as_ref(), self.selected) {
-            (Some(ray), Some(entity)) => self.axis_at(entity, ray),
+            (Some(ray), Some(entity)) => self.pick_handle(entity, ray),
             _ => None,
         };
         if self.drag.is_none() {
@@ -429,29 +578,18 @@ impl EditorDriver {
         // Begin a drag when a press lands on a handle.
         if response.drag_started()
             && let (Some(ray), Some(entity), Some(axis)) = (ray.as_ref(), self.selected, handle)
-            && let Some(start) = self.world_position(entity)
-            && let Some(grab) = gizmo::axis_parameter(ray, start, gizmo::axis_vector(axis))
+            && let Some(drag) = self.begin_drag(entity, axis, ray)
         {
             self.editor.begin_interactive_edit();
-            self.drag = Some(GizmoDrag {
-                entity,
-                axis,
-                direction: gizmo::axis_vector(axis),
-                start,
-                grab,
-            });
+            self.drag = Some(drag);
             self.hovered_axis = Some(axis);
         }
 
-        // Move the entity along the grabbed axis as the pointer moves.
+        // Apply the drag as the pointer moves.
         if response.dragged()
             && let (Some(drag), Some(ray)) = (self.drag, ray.as_ref())
-            && let Some(current) = gizmo::axis_parameter(ray, drag.start, drag.direction)
         {
-            let world = gizmo::dragged_position(drag.start, drag.direction, drag.grab, current);
-            let parent = self.parent_world(drag.entity);
-            let local = gizmo::local_from_world(parent.as_ref(), world);
-            let _ = self.editor.set_translation(drag.entity, local);
+            self.update_drag(drag, ray);
             self.hovered_axis = Some(drag.axis);
         }
 
@@ -527,7 +665,16 @@ impl AppDriver for EditorDriver {
         let origin = self.world_position(entity)?;
         let length = self.gizmo_length(origin);
         let geometry = render::build_gizmo(self.gizmo_mode, length, self.hovered_axis);
-        Some((geometry, math::translation(origin)))
+        // Scale handles follow the entity's frame; the others are world-aligned.
+        let transform = if self.gizmo_mode == GizmoMode::Scale {
+            match self.world_matrix(entity) {
+                Some(matrix) => math::translation(origin) * gizmo::rotation_of(&matrix),
+                None => math::translation(origin),
+            }
+        } else {
+            math::translation(origin)
+        };
+        Some((geometry, transform))
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) {
@@ -538,10 +685,30 @@ impl AppDriver for EditorDriver {
                 ui.toggle_value(&mut self.show_outliner, "Outliner");
                 ui.toggle_value(&mut self.show_inspector, "Inspector");
                 ui.separator();
+                ui.label("Tool:");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "Rotate (2)");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Scale, "Scale (3)");
+                ui.separator();
                 ui.label(format!("{} entities", self.editor.list_entities().len()));
                 ui.label("|  WASD: fly camera");
             });
         });
+
+        // The digit keys switch tools. They are handled through egui's input (not
+        // the engine's key state) so they are properly edge-triggered, and are
+        // ignored while a text field has focus. W/E/R cannot be used because
+        // WASD flies the camera.
+        if !ui.ctx().egui_wants_keyboard_input() {
+            let pressed = |key: egui::Key| ui.ctx().input(|input| input.key_pressed(key));
+            if pressed(egui::Key::Num1) {
+                self.set_gizmo_mode(GizmoMode::Translate);
+            } else if pressed(egui::Key::Num2) {
+                self.set_gizmo_mode(GizmoMode::Rotate);
+            } else if pressed(egui::Key::Num3) {
+                self.set_gizmo_mode(GizmoMode::Scale);
+            }
+        }
 
         if self.show_outliner {
             egui::Panel::left("noctis_outliner").show(ui, |ui| self.outliner(ui));
@@ -557,7 +724,7 @@ impl AppDriver for EditorDriver {
             .show(ui, |ui| {
                 ui.label("Viewport");
                 ui.separator();
-                ui.label("Click to select. Drag the arrows to move. WASD flies the camera.");
+                ui.label("Click to select. Drag a handle to transform. WASD flies the camera.");
                 let rect = ui.max_rect();
                 let response = ui.interact(
                     rect,

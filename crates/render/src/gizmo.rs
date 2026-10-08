@@ -128,7 +128,10 @@ fn cross(a: Vec3, b: Vec3) -> Vec3 {
 }
 
 /// Two unit vectors spanning the plane perpendicular to `axis`.
-fn basis_for_axis(axis: GizmoAxis) -> (Vec3, Vec3) {
+///
+/// This is the ring basis used both to draw rotation rings and to measure a
+/// drag angle around an axis, so the two must agree.
+pub fn basis_for_axis(axis: GizmoAxis) -> (Vec3, Vec3) {
     match axis {
         GizmoAxis::X => (vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0)),
         GizmoAxis::Y => (vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0)),

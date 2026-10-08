@@ -2,13 +2,14 @@
 //!
 //! The drag math is unit-tested in `editor::gizmo`; this test covers the wiring
 //! the renderer depends on: a selected entity must hand the host a non-empty
-//! translate gizmo placed at that entity's world position, and no selection must
-//! hand it none.
+//! gizmo, in every tool, placed at that entity's world position — and no
+//! selection must hand it none.
 
 use ecs::components::GlobalTransform;
 use editor::Editor;
 use editor::window::EditorDriver;
 use platform::AppDriver;
+use render::GizmoMode;
 
 fn testscene_editor() -> Editor {
     let mut editor = Editor::new();
@@ -26,7 +27,7 @@ fn no_selection_yields_no_gizmo() {
 }
 
 #[test]
-fn a_selected_entity_yields_a_gizmo_at_its_world_position() {
+fn every_tool_yields_a_gizmo_at_the_entities_world_position() {
     let editor = testscene_editor();
     let info = editor
         .list_entities()
@@ -43,15 +44,31 @@ fn a_selected_entity_yields_a_gizmo_at_its_world_position() {
     let mut driver = EditorDriver::new(editor);
     driver.select(info.entity);
 
-    let (geometry, transform) = driver
-        .gizmo()
-        .expect("a selected entity shows a translate gizmo");
-    assert!(geometry.line_segment_count() >= 3, "three axis shafts");
-    assert!(geometry.triangle_count() >= 3, "three arrowheads");
+    for (mode, has_triangles) in [
+        (GizmoMode::Translate, true),
+        (GizmoMode::Rotate, false),
+        (GizmoMode::Scale, true),
+    ] {
+        driver.set_gizmo_mode(mode);
+        assert_eq!(driver.gizmo_mode(), mode);
 
-    let placed = math::vec3(transform[3].x, transform[3].y, transform[3].z);
-    assert!(
-        math::vec3_approx_eq(placed, expected, 1e-4),
-        "gizmo placed at {placed:?}, expected {expected:?}"
-    );
+        let (geometry, transform) = driver
+            .gizmo()
+            .unwrap_or_else(|| panic!("{mode:?} shows a gizmo for a selected entity"));
+        assert!(
+            geometry.line_segment_count() >= 3,
+            "{mode:?} should draw at least three handles"
+        );
+        assert_eq!(
+            !geometry.triangles.is_empty(),
+            has_triangles,
+            "{mode:?} triangle-handle presence"
+        );
+
+        let placed = math::vec3(transform[3].x, transform[3].y, transform[3].z);
+        assert!(
+            math::vec3_approx_eq(placed, expected, 1e-4),
+            "{mode:?} gizmo placed at {placed:?}, expected {expected:?}"
+        );
+    }
 }
