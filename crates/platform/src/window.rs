@@ -45,6 +45,33 @@ pub fn map_key(code: KeyCode) -> Option<ecs::resources::Key> {
     ecs::resources::Key::from_name(&format!("{code:?}"))
 }
 
+/// Map a winit mouse button to an engine [`ecs::resources::MouseButton`], or
+/// `None` for the extra buttons the engine does not model.
+fn map_mouse_button(button: winit::event::MouseButton) -> Option<ecs::resources::MouseButton> {
+    use ecs::resources::MouseButton as M;
+    use winit::event::MouseButton as W;
+    Some(match button {
+        W::Left => M::Left,
+        W::Right => M::Right,
+        W::Middle => M::Middle,
+        _ => return None,
+    })
+}
+
+/// Convert a winit scroll delta to engine scroll points.
+///
+/// A line-wheel notch maps to [`LINE_SCROLL_POINTS`] points so that wheel and
+/// trackpad scrolls share one scale; a pixel/trackpad delta is already in points.
+fn scroll_points(delta: winit::event::MouseScrollDelta) -> f32 {
+    match delta {
+        winit::event::MouseScrollDelta::LineDelta(_, y) => y * LINE_SCROLL_POINTS,
+        winit::event::MouseScrollDelta::PixelDelta(position) => position.y as f32,
+    }
+}
+
+/// Scroll points per line-wheel notch, matching egui's native line size.
+const LINE_SCROLL_POINTS: f32 = 40.0;
+
 /// The egui integration state (context, winit bridge, wgpu renderer).
 struct EguiLayer {
     ctx: egui::Context,
@@ -307,6 +334,32 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                 }
                 self.forward_to_egui(&event);
             }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Some(button) = map_mouse_button(*button)
+                    && let Some(input) = self.driver.input_mut()
+                {
+                    match state {
+                        ElementState::Pressed => input.press_mouse(button),
+                        ElementState::Released => input.release_mouse(button),
+                    }
+                }
+                self.forward_to_egui(&event);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // `InputState` stores the cursor in logical pixels; winit reports
+                // physical pixels.
+                let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor()) as f32;
+                if let Some(input) = self.driver.input_mut() {
+                    input.set_mouse_position(position.x as f32 / scale, position.y as f32 / scale);
+                }
+                self.forward_to_egui(&event);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(input) = self.driver.input_mut() {
+                    input.add_scroll(scroll_points(*delta));
+                }
+                self.forward_to_egui(&event);
+            }
             other => self.forward_to_egui(other),
         }
     }
@@ -350,5 +403,26 @@ mod tests {
     fn unmapped_keys_are_none() {
         assert_eq!(map_key(KeyCode::F12), None);
         assert_eq!(map_key(KeyCode::Home), None);
+    }
+
+    #[test]
+    fn maps_the_modelled_mouse_buttons() {
+        use ecs::resources::MouseButton as M;
+        use winit::event::MouseButton as W;
+        assert_eq!(map_mouse_button(W::Left), Some(M::Left));
+        assert_eq!(map_mouse_button(W::Right), Some(M::Right));
+        assert_eq!(map_mouse_button(W::Middle), Some(M::Middle));
+        assert_eq!(map_mouse_button(W::Back), None);
+        assert_eq!(map_mouse_button(W::Forward), None);
+    }
+
+    #[test]
+    fn scroll_units_are_normalised_to_points() {
+        use winit::event::MouseScrollDelta::{LineDelta, PixelDelta};
+        // One notch up (positive) is one line of points, in the zoom-in direction.
+        assert_eq!(scroll_points(LineDelta(0.0, 1.0)), LINE_SCROLL_POINTS);
+        assert_eq!(scroll_points(LineDelta(0.0, -1.0)), -LINE_SCROLL_POINTS);
+        // A trackpad/pixel delta is already in points and passes through.
+        assert_eq!(scroll_points(PixelDelta((0.0, 12.0).into())), 12.0);
     }
 }
