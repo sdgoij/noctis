@@ -91,7 +91,12 @@ impl RenderTargets {
         let ldr = color(
             "ldr",
             wgpu::TextureFormat::Rgba8Unorm,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // RENDER_ATTACHMENT: the tonemap pass renders into it. COPY_SRC: the
+            // headless readback copies from it. TEXTURE_BINDING: the present
+            // pass samples it to blit onto the surface.
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
         );
         let depth = color(
             "depth",

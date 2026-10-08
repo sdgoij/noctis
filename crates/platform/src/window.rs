@@ -170,7 +170,7 @@ impl<D: AppDriver> WindowHost<D> {
 
         if let Some(mut egui) = egui {
             let raw_input = egui.state.take_egui_input(&window);
-            let output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
+            let mut output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
             egui.state
                 .handle_platform_output(&window, output.platform_output);
             let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
@@ -238,6 +238,9 @@ impl<D: AppDriver> WindowHost<D> {
             for id in &output.textures_delta.free {
                 egui.renderer.free_texture(id);
             }
+            // Tell epaint the deltas have been applied; otherwise its `Drop`
+            // check panics about unapplied deltas.
+            output.textures_delta.clear();
             self.egui = Some(egui);
         } else if let Some(camera) = camera {
             if let Err(err) = renderer.present(self.driver.world(), self.driver.assets(), camera) {
