@@ -33,6 +33,9 @@ pub struct ProjectManifest {
     /// `[[build]]` targets.
     #[serde(default, rename = "build")]
     pub build_targets: Vec<BuildTarget>,
+    /// `[[scene]]` entries: explicit scenes, for names and order.
+    #[serde(default, rename = "scene")]
+    pub scene_list: Vec<SceneListEntry>,
 }
 
 impl ProjectManifest {
@@ -89,8 +92,32 @@ impl ProjectManifest {
             }
         }
 
+        let mut listed = std::collections::HashSet::new();
+        for entry in &self.scene_list {
+            AssetPath::parse(&entry.path).map_err(|error| {
+                ProjectError::Manifest(format!("[[scene]] path is invalid: {error}"))
+            })?;
+            if !listed.insert(entry.path.as_str()) {
+                return Err(ProjectError::Manifest(format!(
+                    "duplicate [[scene]] path {:?}",
+                    entry.path
+                )));
+            }
+        }
+
         Ok(())
     }
+}
+
+/// A `[[scene]]` entry: an explicit scene, for its display name and order.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneListEntry {
+    /// The scene document, project-relative.
+    pub path: String,
+    /// A display name; defaults to the file stem.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// The `[project]` table.
@@ -419,6 +446,27 @@ platform = "linux"
         .unwrap();
         assert!(matches!(
             manifest.validate(),
+            Err(ProjectError::Manifest(_))
+        ));
+    }
+
+    #[test]
+    fn parses_scene_entries_and_rejects_duplicates() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[[scene]]\npath = \"scenes/a.scene.json\"\nname = \"A\"\n",
+        )
+        .unwrap();
+        assert_eq!(manifest.scene_list.len(), 1);
+        assert_eq!(manifest.scene_list[0].path, "scenes/a.scene.json");
+        assert_eq!(manifest.scene_list[0].name.as_deref(), Some("A"));
+        manifest.validate().unwrap();
+
+        let duplicate = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[[scene]]\npath = \"scenes/a.scene.json\"\n\n[[scene]]\npath = \"scenes/a.scene.json\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            duplicate.validate(),
             Err(ProjectError::Manifest(_))
         ));
     }

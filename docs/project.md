@@ -82,6 +82,12 @@ scene = "scenes/main.scene.json"  # defaults to project.settings.default_scene
 platform = "host"                 # "host" | "windows" | "macos" | "linux"
 profile = "release"               # "dev" | "release"
 output = "dist/mygame"
+
+# Optional: list scenes explicitly, to set a display name and order. Discovered
+# scenes not listed here are appended, named after their file.
+[[scene]]
+path = "scenes/main.scene.json"
+name = "Main Menu"
 ```
 
 Notes:
@@ -255,6 +261,11 @@ components you use".
 given. A project discovers scenes by scanning `[paths].scenes`; the manifest may
 also list them explicitly to set names and order.
 
+*Implemented*: `Project::scenes` returns the manifest's explicit `[[scene]]`
+entries first (in order, with their names) followed by any discovered scene not
+listed (named after its file, without `.scene.json`), deduplicated and
+deterministic. `Project::discover_scenes` alone is the raw scan.
+
 ## Prefabs
 
 A prefab is a `Prefab { name, scene: SceneDesc }` — already serializable today.
@@ -407,6 +418,8 @@ New work this design implies (✔ = implemented):
   a font importer that bakes a glyph atlas into the cache, and a text component.
 - ✔ A `mode` field on `SceneDesc` (`"2d" | "3d"`, defaulted) so scenes carry their
   own dimension.
+- ✔ An explicit `[[scene]]` list in the manifest (`Project::scenes`): names and
+  order, with discovered scenes appended.
 - ✔ `--project` in `noctis-editor` / `noctis-runtime` (both import the project's
   assets), and a `noctis build` CLI that bundles a project's referenced assets.
   Remaining: the UI project picker.

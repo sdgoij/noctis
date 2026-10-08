@@ -84,6 +84,42 @@ fn a_project_with_no_asset_folders_discovers_nothing() {
 }
 
 #[test]
+fn the_scene_list_orders_explicit_entries_then_discovered() {
+    let dir = temp_project("scenelist");
+    write(
+        &dir.join(MANIFEST_FILE),
+        r#"
+[project]
+name = "Ordered"
+
+[[scene]]
+path = "scenes/level.scene.json"
+name = "The Level"
+"#,
+    );
+    write(&dir.join("scenes/level.scene.json"), "{}");
+    write(&dir.join("scenes/menu.scene.json"), "{}");
+
+    let project = Project::open(&dir).expect("open");
+    let scenes = project.scenes().expect("scenes");
+    let listed: Vec<(&str, &str)> = scenes
+        .iter()
+        .map(|s| (s.path.as_str(), s.name.as_str()))
+        .collect();
+    // The explicit entry comes first (with its name); the discovered one follows
+    // (named after its file), and the listed path is not repeated.
+    assert_eq!(
+        listed,
+        vec![
+            ("scenes/level.scene.json", "The Level"),
+            ("scenes/menu.scene.json", "menu"),
+        ]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn an_invalid_manifest_fails_to_open() {
     let dir = temp_project("bad");
     write(&dir.join(MANIFEST_FILE), "[project]\nname = \"\"\n");

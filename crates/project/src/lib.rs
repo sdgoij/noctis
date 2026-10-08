@@ -38,10 +38,10 @@ pub use ecs::scene::SceneMode;
 pub use error::ProjectError;
 pub use manifest::{
     BuildTarget, InputSettings, Paths, Platform, Profile, ProjectInfo, ProjectManifest,
-    RenderSettings, Settings, WindowSettings,
+    RenderSettings, SceneListEntry, Settings, WindowSettings,
 };
 pub use path::{AssetKind, AssetPath, detect};
-pub use project::{MANIFEST_FILE, Project};
+pub use project::{MANIFEST_FILE, Project, SceneInfo};
 pub use rename::{RenameReport, rewrite_references};
 pub use resolve::{is_builtin, referenced_files, scene_references};
 pub use settings::{SIDECAR_SUFFIX, TextureImportSettings};

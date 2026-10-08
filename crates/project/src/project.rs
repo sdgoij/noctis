@@ -11,6 +11,15 @@ use crate::path::AssetPath;
 /// The manifest file name.
 pub const MANIFEST_FILE: &str = "noctis.toml";
 
+/// A project scene: its document path and a display name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneInfo {
+    /// The scene document, project-relative.
+    pub path: AssetPath,
+    /// The display name (the `[[scene]]` name, or the file stem).
+    pub name: String,
+}
+
 /// An open Noctis project: a root directory and its parsed manifest.
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -143,6 +152,28 @@ impl Project {
         self.discover(&self.manifest.paths.scenes, ".scene.json")
     }
 
+    /// The project's scenes: the manifest's explicit `[[scene]]` entries first (in
+    /// order, with their names), then any discovered scene not listed.
+    pub fn scenes(&self) -> Result<Vec<SceneInfo>, ProjectError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut scenes = Vec::new();
+        for entry in &self.manifest.scene_list {
+            let path = AssetPath::parse(&entry.path)?;
+            let name = entry.name.clone().unwrap_or_else(|| scene_name(&path));
+            seen.insert(path.clone());
+            scenes.push(SceneInfo { path, name });
+        }
+        for path in self.discover_scenes()? {
+            if seen.insert(path.clone()) {
+                scenes.push(SceneInfo {
+                    name: scene_name(&path),
+                    path,
+                });
+            }
+        }
+        Ok(scenes)
+    }
+
     /// Every prefab document under the prefabs directory, sorted.
     pub fn discover_prefabs(&self) -> Result<Vec<AssetPath>, ProjectError> {
         self.discover(&self.manifest.paths.prefabs, ".prefab.json")
@@ -213,6 +244,12 @@ impl Project {
     }
 }
 
+/// The display name for a scene path: its file name without `.scene.json`.
+fn scene_name(path: &AssetPath) -> String {
+    let file = path.file_name();
+    file.strip_suffix(".scene.json").unwrap_or(file).to_string()
+}
+
 /// Whether `path`'s file name ends with `suffix` (case-insensitive).
 fn has_suffix(path: &Path, suffix: &str) -> bool {
     path.file_name()
@@ -251,6 +288,21 @@ pub(crate) fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Proje
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scenes_lists_explicit_entries_first_with_names() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"S\"\n\n[[scene]]\npath = \"scenes/menu.scene.json\"\nname = \"Main Menu\"\n\n[[scene]]\npath = \"scenes/level.scene.json\"\n",
+        )
+        .unwrap();
+        let project = Project::from_manifest("/nonexistent-root", manifest);
+        let scenes = project.scenes().unwrap();
+        assert_eq!(scenes.len(), 2);
+        assert_eq!(scenes[0].name, "Main Menu");
+        assert_eq!(scenes[0].path.as_str(), "scenes/menu.scene.json");
+        // A missing name defaults to the file stem without `.scene.json`.
+        assert_eq!(scenes[1].name, "level");
+    }
 
     #[test]
     fn dirs_follow_the_defaults() {
