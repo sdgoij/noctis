@@ -15,6 +15,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `audio` | `crates/audio` | rodio 0.22 engine with 3D spatialization. |
 | `script` | `crates/script` | Script runtime + engine API; Slag JS backend behind the `slag` feature. |
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
+| `project` | `crates/project` | The project model: `noctis.toml`, canonical asset paths, type detection, discovery. |
 | `editor` | `crates/editor` | Scene editor library + AI-controllable command API + `noctis-editor` CLI. |
 | `runtime` | `crates/runtime` | Game runtime/export loop + `noctis-runtime` CLI. |
 | `platform` | `crates/platform` | Window + winit event loop + egui overlay; drives any `AppDriver` into a surface-backed viewport. |
