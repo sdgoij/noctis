@@ -10,6 +10,21 @@
 //! `startup` / `fixed` / `update` / `late` stages (see the `runtime` module
 //! source for the exact ordering).
 //!
+//! ## Running JavaScript
+//!
+//! The runtime is generic over its script host. The default is the inert
+//! [`NoopHost`](script::NoopHost) — scripts are discovered and tracked but not
+//! executed. With the `slag` feature the `noctis-runtime` binary runs the real
+//! Slag engine instead:
+//!
+//! ```text
+//! cargo build --manifest-path crates/runtime/Cargo.toml --features slag
+//! ```
+//!
+//! (The manifest path is used because `-p runtime` is ambiguous: the Slag engine
+//! ships a transitive crate that is also named `runtime`.) The loop runs on a
+//! single thread, so a host need not be `Send`; see [`Runtime`].
+//!
 //! ```
 //! use ecs::prelude::*;
 //! use math::vec3;

@@ -138,8 +138,29 @@ ENVIRONMENT:
     NOCTIS_LOG         error | warn | info (default) | debug | trace | off"
 }
 
+/// The script host a game runs with: the real Slag engine when the `slag`
+/// feature is enabled, otherwise the inert default.
+#[cfg(feature = "slag")]
+type Host = script::slag::SlagHost;
+#[cfg(not(feature = "slag"))]
+type Host = script::NoopHost;
+
+/// Build the script host for a run.
+#[cfg(feature = "slag")]
+fn make_host() -> Result<Host, String> {
+    log::info!("JavaScript enabled: running the Slag engine");
+    script::slag::SlagHost::new()
+        .map_err(|err| format!("failed to start the JavaScript engine: {err}"))
+}
+
+/// Build the inert script host (scripts are discovered but not executed).
+#[cfg(not(feature = "slag"))]
+fn make_host() -> Result<Host, String> {
+    Ok(script::NoopHost)
+}
+
 /// Build the runtime for the requested scene.
-fn build_runtime(args: &Args) -> Result<Runtime, String> {
+fn build_runtime(args: &Args) -> Result<Runtime<Host>, String> {
     let config = RuntimeConfig {
         audio: args.audio,
         timestep: args.dt,
@@ -148,8 +169,9 @@ fn build_runtime(args: &Args) -> Result<Runtime, String> {
 
     let mut assets = AssetRegistry::with_defaults();
     let scene = load_scene(args, &mut assets)?;
+    let host = make_host()?;
 
-    let mut runtime: Runtime = Runtime::from_assets(scene, assets, config);
+    let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
 
     if args.render {
         match runtime.enable_renderer(RendererConfig::default()) {

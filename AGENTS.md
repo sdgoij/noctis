@@ -32,7 +32,8 @@ cargo test  --workspace                 # run the whole suite (required before c
 cargo test  -p ecs                      # one crate
 cargo clippy --workspace --all-targets  # lints
 cargo fmt --all                         # format (max_width = 100)
-cargo test  -p script --features slag   # real JavaScript backend + its smoke tests
+cargo test  -p script  --features slag  # real JavaScript backend + its smoke tests
+cargo test  --manifest-path crates/runtime/Cargo.toml --features slag  # JS in a game
 ```
 
 ## Non-negotiable standards
@@ -77,10 +78,12 @@ cargo test  -p script --features slag   # real JavaScript backend + its smoke te
 - `script`: the real Slag backend is the `slag` feature (off by default). It
   builds from the pinned `github.com/sdgoij/slag` and its smoke tests pass
   (`cargo test -p script --features slag`); the default build uses the testable
-  `NoopHost`/`RecordingHost`. `runtime` cannot yet *host* Slag: `App`'s systems
-  are `Send + Sync` and `SlagHost` is `!Send`, so a game run by `noctis-runtime`
-  uses `NoopHost` (scripts are discovered and tracked but not executed). Relaxing
-  that bound is a deliberate `ecs` contract change, not made yet.
+  `NoopHost`/`RecordingHost`. `runtime` forwards the feature, so a game built and
+  run with it executes real JavaScript (see the `slag` entry under Commands; use
+  `--manifest-path`, as `-p runtime` is ambiguous with a transitive Slag crate).
+  To make that possible, `App` systems are deliberately **not** `Send + Sync`:
+  the loop owns them on one thread, which lets a system own a non-thread-safe
+  engine. Component types remain `Send + Sync + 'static`.
 - `editor`/`runtime` open a live windowed viewport (`--window`). The editor draws
   egui panels (outliner, inspector, transform editing), supports click-to-select
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /

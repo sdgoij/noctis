@@ -81,7 +81,13 @@ impl Default for EngineContext {
 }
 
 /// A system is a closure over the engine context.
-pub type System = Box<dyn FnMut(&mut EngineContext) + Send + Sync>;
+///
+/// Systems run strictly on the thread that owns the [`App`], in registration
+/// order, so they are **not** required to be `Send` or `Sync`. That is what lets
+/// a system own single-threaded state — most importantly a JavaScript engine,
+/// which is not thread-safe. (Component *types* are still `Send + Sync + 'static`;
+/// only the closures are unbound.)
+pub type System = Box<dyn FnMut(&mut EngineContext)>;
 
 /// A named group of systems.
 #[derive(Default)]
@@ -94,7 +100,7 @@ impl Stage {
     pub fn add(
         &mut self,
         name: impl Into<String>,
-        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+        system: impl FnMut(&mut EngineContext) + 'static,
     ) {
         self.systems.push((name.into(), Box::new(system)));
     }
@@ -149,7 +155,7 @@ impl App {
     pub fn on_startup(
         &mut self,
         name: impl Into<String>,
-        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+        system: impl FnMut(&mut EngineContext) + 'static,
     ) -> &mut Self {
         self.startup.add(name, system);
         self
@@ -159,7 +165,7 @@ impl App {
     pub fn on_fixed(
         &mut self,
         name: impl Into<String>,
-        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+        system: impl FnMut(&mut EngineContext) + 'static,
     ) -> &mut Self {
         self.fixed.add(name, system);
         self
@@ -169,7 +175,7 @@ impl App {
     pub fn on_update(
         &mut self,
         name: impl Into<String>,
-        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+        system: impl FnMut(&mut EngineContext) + 'static,
     ) -> &mut Self {
         self.update.add(name, system);
         self
@@ -179,7 +185,7 @@ impl App {
     pub fn on_late(
         &mut self,
         name: impl Into<String>,
-        system: impl FnMut(&mut EngineContext) + Send + Sync + 'static,
+        system: impl FnMut(&mut EngineContext) + 'static,
     ) -> &mut Self {
         self.late.add(name, system);
         self
@@ -316,5 +322,21 @@ mod tests {
         });
         let ran = app.run_headless(100, 0.016);
         assert_eq!(ran, 5);
+    }
+
+    #[test]
+    fn systems_need_not_be_send_or_sync() {
+        // A system that owns single-threaded state (an `Rc`/`Cell`) must compile
+        // and run: this is what lets the runtime host a non-`Send` JS engine.
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let mut app = App::new("t");
+        let ticks = Rc::new(Cell::new(0));
+        let shared = Rc::clone(&ticks);
+        app.on_update("non_send", move |_| shared.set(shared.get() + 1));
+        app.tick(0.016);
+        app.tick(0.016);
+        assert_eq!(ticks.get(), 2);
     }
 }

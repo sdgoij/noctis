@@ -65,8 +65,11 @@ impl std::fmt::Display for RunSummary {
 /// The game/export loop.
 ///
 /// Generic over the script host so callers can pick a backend; the default is
-/// [`NoopHost`], which discovers scripts but runs no code.
-pub struct Runtime<H: ScriptHost + Send + 'static = NoopHost> {
+/// [`NoopHost`], which discovers scripts but runs no code. A host need not be
+/// `Send`: the loop (and the [`App`](ecs::app::App) systems it is built from) run
+/// on a single thread, which is what lets a game drive a non-thread-safe engine
+/// such as Slag.
+pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     app: App,
     config: RuntimeConfig,
     physics: Arc<Mutex<PhysicsWorld>>,
@@ -83,7 +86,7 @@ impl Runtime<NoopHost> {
     }
 }
 
-impl<H: ScriptHost + Send + 'static> Runtime<H> {
+impl<H: ScriptHost + 'static> Runtime<H> {
     /// Build a runtime for `scene` driven by `host`, using a default asset
     /// registry.
     pub fn with_host(scene: Scene, config: RuntimeConfig, host: H) -> Self {
@@ -296,7 +299,7 @@ impl<H: ScriptHost + Send + 'static> Runtime<H> {
     }
 }
 
-impl<H: ScriptHost + Default + Send + 'static> Runtime<H> {
+impl<H: ScriptHost + Default + 'static> Runtime<H> {
     /// Build a runtime for `scene` with an explicit asset registry, using the
     /// host's `Default`.
     pub fn from_assets(scene: Scene, assets: AssetRegistry, config: RuntimeConfig) -> Self {
@@ -304,7 +307,7 @@ impl<H: ScriptHost + Default + Send + 'static> Runtime<H> {
     }
 }
 
-impl<H: ScriptHost + Send + 'static> std::fmt::Debug for Runtime<H> {
+impl<H: ScriptHost + 'static> std::fmt::Debug for Runtime<H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Runtime")
             .field("config", &self.config)
@@ -560,5 +563,61 @@ mod tests {
             math::vec3(0.0, -9.81, 0.0),
             1e-6
         ));
+    }
+
+    #[test]
+    fn runs_with_a_non_send_host() {
+        // The runtime must accept a host that is not `Send` (a JS engine is not),
+        // because `App` systems now run on the loop thread. `Rc`/`Cell` make this
+        // host deliberately `!Send` at compile time.
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use script::{ModuleId, PendingApi, ScriptContext, ScriptHost};
+
+        struct NonSendHost {
+            starts: Rc<Cell<usize>>,
+        }
+
+        impl ScriptHost for NonSendHost {
+            fn eval_script(&mut self, _source: &str) -> ModuleId {
+                1
+            }
+
+            fn call_lifecycle(
+                &mut self,
+                _module: ModuleId,
+                func: &str,
+                _ctx: &mut ScriptContext<'_>,
+            ) {
+                if func == script::ON_START {
+                    self.starts.set(self.starts.get() + 1);
+                }
+            }
+
+            fn set_pending_api(&mut self, _api: PendingApi) {}
+        }
+
+        let starts = Rc::new(Cell::new(0));
+        let mut scene = Scene::new("NonSend");
+        let entity = scene.world.spawn();
+        scene
+            .world
+            .insert(entity, ecs::components::Script::from_source("ignored();"));
+
+        let mut runtime = Runtime::with_host(
+            scene,
+            RuntimeConfig {
+                audio: false,
+                ..RuntimeConfig::default()
+            },
+            NonSendHost {
+                starts: Rc::clone(&starts),
+            },
+        );
+        runtime.run_headless(2, 1.0 / 60.0);
+
+        // The host was driven: its `on_start` ran exactly once.
+        assert_eq!(starts.get(), 1);
     }
 }

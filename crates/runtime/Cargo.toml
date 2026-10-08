@@ -7,6 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+# Run JavaScript in a game: forwards to the `script` crate's real backend.
+# `cargo test -p runtime --features slag`
+slag = ["script/slag"]
+
 [[bin]]
 name = "noctis-runtime"
 path = "src/main.rs"

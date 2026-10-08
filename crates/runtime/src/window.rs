@@ -14,7 +14,7 @@ use script::ScriptHost;
 
 use crate::Runtime;
 
-impl<H: ScriptHost + Send + 'static> AppDriver for Runtime<H> {
+impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
     fn prepare(&mut self) {
         let world = &mut self.app_mut().context.scene.world;
         if render::first_active_camera(world).is_none() {
@@ -54,7 +54,7 @@ impl<H: ScriptHost + Send + 'static> AppDriver for Runtime<H> {
 }
 
 /// Run `runtime` in a window until it is closed. Blocks.
-pub fn run_in_window<H: ScriptHost + Send + 'static>(
+pub fn run_in_window<H: ScriptHost + 'static>(
     runtime: Runtime<H>,
     config: WindowConfig,
 ) -> Result<(), PlatformError> {

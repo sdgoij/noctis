@@ -132,6 +132,10 @@ Component types must be `Send + Sync + 'static`.
   `run_headless(max_frames, dt)`, `context`, `fixed_steps_taken`),
   `EngineContext { scene, assets, time, input, actions, events, exit_requested }`,
   `EngineEvent`.
+  Systems run on the thread that owns the `App`, in registration order, so they
+  are **not** required to be `Send`/`Sync` — a system may own single-threaded
+  state (e.g. a JavaScript engine). Component *types* are still
+  `Send + Sync + 'static`.
 - `ecs::scene`: `Scene { name, world }`, `propagate_transforms(&mut World)`,
   `set_parent(&mut World, child, Option<Entity>)`, `children_of(&World, Entity)`,
   `instantiate_into(&mut World, &SceneDesc, &AssetRegistry, Option<Entity>)`,
