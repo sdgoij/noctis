@@ -221,6 +221,21 @@ platform = "host"                 # "host" | "windows" | "macos" | "linux"
 profile = "release"               # "dev" | "release"
 ```
 
+The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md)):
+
+```sh
+# release (the default): the project's .js/.wasm scripts are baked into the
+# client, so dist carries no scripts/ directory.
+cargo run -- build --project mygame
+
+# dev: scripts are copied into dist and loaded from disk, watched for edits.
+cargo run -- build --project mygame --profile dev
+```
+
+A **release** client embeds its scripts; a **dev** client reads them from disk and
+hot-reloads a `.js`/`.mjs`/`.wasm` file when it changes, so iterating does not
+require rebuilding the executable. `noctis run` always uses the dev shape.
+
 ### Renaming assets (`noctis rename`)
 
 Renaming or moving an asset is a first-class operation: it moves the file and

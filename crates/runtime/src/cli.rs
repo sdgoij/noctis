@@ -17,13 +17,13 @@ use ecs::assets::AssetRegistry;
 use ecs::scene::Scene;
 use math::vec3;
 use platform::WindowConfig;
-use project::Project;
+use project::{Profile, Project};
 use render::RendererConfig;
 
 use crate::window::run_in_window;
 use crate::{
-    BuildOptions, ExportReport, RunSummary, Runtime, RuntimeConfig, build_project, bundled_scene,
-    demo, export_game,
+    BuildOptions, EmbeddedScript, ExportReport, RunSummary, Runtime, RuntimeConfig, build_project,
+    bundled_scene, demo, export_game,
 };
 
 /// The prefix on every diagnostic message.
@@ -155,7 +155,17 @@ impl Args {
 /// Run the game command line and return the process exit code.
 ///
 /// Used by both `noctis run` and the `noctis-game` binary an export ships.
+/// Run the game command line (`noctis run`) with no embedded scripts.
 pub fn run_cli(args: Vec<String>) -> ExitCode {
+    run_cli_with(args, &[])
+}
+
+/// Run the game command line, seeding `embedded` into the asset registry.
+///
+/// The `noctis-game` client passes the scripts baked into it; `noctis run` passes
+/// an empty slice and loads scripts from disk (and watches them). See
+/// `docs/scripts.md`.
+pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> ExitCode {
     init_logging();
 
     let args = match Args::parse(args.into_iter()) {
@@ -173,7 +183,7 @@ pub fn run_cli(args: Vec<String>) -> ExitCode {
 
     // A window is the default; `--export` never opens one.
     if !args.headless && args.export.is_none() {
-        return match run_windowed(&args) {
+        return match run_windowed(&args, embedded) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => fail(&message),
         };
@@ -193,7 +203,7 @@ pub fn run_cli(args: Vec<String>) -> ExitCode {
         };
     }
 
-    match run(&args) {
+    match run(&args, embedded) {
         Ok(summary) => {
             if args.print_summary || !args.quiet {
                 println!("{summary}");
@@ -255,7 +265,11 @@ fn make_host() -> Result<Host, String> {
 }
 
 /// Build the runtime for the requested scene.
-fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>, String> {
+fn build_runtime(
+    args: &Args,
+    project: Option<&Project>,
+    embedded: &'static [EmbeddedScript],
+) -> Result<Runtime<Host>, String> {
     let mut config = RuntimeConfig {
         audio: args.audio,
         timestep: args.dt,
@@ -302,6 +316,13 @@ fn build_runtime(args: &Args, project: Option<&Project>) -> Result<Runtime<Host>
     }
 
     register_wasm_modules(args, &mut assets)?;
+
+    // Scripts baked into the client (a release build) take precedence over any
+    // loose file, so seed them before the scene resolves its script paths.
+    if !embedded.is_empty() {
+        let seeded = crate::embed::seed(&mut assets, embedded);
+        log::info!("seeded {seeded} embedded script(s)");
+    }
     let scene = load_scene(args, project, &mut assets)?;
 
     let host = make_host()?;
@@ -381,19 +402,21 @@ fn bundled_next_to_exe() -> Option<PathBuf> {
 
 /// Export a self-contained game folder for `destination`.
 fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
-    // Always ship the stripped game client, never this tool.
-    let client = crate::export::game_client()?;
-
-    // A project build bundles the referenced assets; a loose scene does not.
+    // A project build bundles the referenced assets and acquires the client
+    // itself (embedding the project's scripts for a release build).
     if let Some(dir) = export_project_dir(args) {
         let options = BuildOptions {
             destination: Some(PathBuf::from(destination)),
             name: args.name.clone(),
             scene: args.scene.clone(),
-            runtime: Some(client),
+            ..BuildOptions::default()
         };
         return build_project(Path::new(&dir), args.target.as_deref(), &options);
     }
+
+    // A loose scene has no project, so no scripts to embed: ship the stripped
+    // client built for this tool's own profile.
+    let client = crate::export::game_client(tool_profile(), None)?;
 
     let scene = args
         .scene
@@ -414,6 +437,16 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
         Some(&client),
     )
     .map_err(|err| err.to_string())
+}
+
+/// The cargo profile this tool was built with, used for a build that has no
+/// project profile to honour (a loose-scene export).
+fn tool_profile() -> Profile {
+    if cfg!(debug_assertions) {
+        Profile::Dev
+    } else {
+        Profile::Release
+    }
 }
 
 /// The directory of the project to export from: `--project`, else a bundled one
@@ -485,23 +518,39 @@ fn window_config(args: &Args, project: Option<&Project>) -> WindowConfig {
 }
 
 /// Load the scene and run the loop headlessly. Returns the run summary.
-fn run(args: &Args) -> Result<RunSummary, String> {
+fn run(args: &Args, embedded: &'static [EmbeddedScript]) -> Result<RunSummary, String> {
     let project = open_project(args)?;
-    let mut runtime = build_runtime(args, project.as_ref())?;
+    let mut runtime = build_runtime(args, project.as_ref(), embedded)?;
     Ok(runtime.run_headless(args.frames, args.dt))
 }
 
 /// Run the scene in a window until it is closed.
-fn run_windowed(args: &Args) -> Result<(), String> {
+fn run_windowed(args: &Args, embedded: &'static [EmbeddedScript]) -> Result<(), String> {
     // `--frames`/`--dt` only shape a headless run: a window runs on wall-clock
     // time until it is closed, so say so rather than silently ignoring them.
     if args.frames_given || args.dt_given {
         log::warn!("--frames/--dt only apply to a headless run and are ignored in a window");
     }
     let project = open_project(args)?;
-    let runtime = build_runtime(args, project.as_ref())?;
+    let mut runtime = build_runtime(args, project.as_ref(), embedded)?;
+    // A development run loads scripts from disk; watch them so an edit reloads
+    // on the next frame. An embedded build needs no watching.
+    if embedded.is_empty()
+        && let Some(root) = script_root(project.as_ref())
+        && let Err(error) = runtime.watch_scripts(root)
+    {
+        log::warn!("not watching scripts for changes: {error}");
+    }
     let config = window_config(args, project.as_ref());
     run_in_window(runtime, config).map_err(|err| err.to_string())
+}
+
+/// The directory a development run watches for script changes: the project root,
+/// else the directory the executable runs from (an exported game).
+fn script_root(project: Option<&Project>) -> Option<PathBuf> {
+    project
+        .map(|project| project.root().to_path_buf())
+        .or_else(|| Some(std::env::current_exe().ok()?.parent()?.to_path_buf()))
 }
 
 /// A minimal logger that writes `log` records to stderr.

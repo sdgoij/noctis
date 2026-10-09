@@ -16,6 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use project::Profile;
+
 /// The scene file name inside an exported folder.
 pub const BUNDLED_SCENE: &str = "scene.json";
 
@@ -159,15 +161,21 @@ pub fn bundled_project(directory: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
+/// The environment variable that names the embed pack `crates/client/build.rs`
+/// bakes into the client.
+pub const EMBED_PACK_ENV: &str = "NOCTIS_EMBED_PACK";
+
 /// The game client an export should ship, building it first if needed.
 ///
-/// An export ships [`RUNTIME_BIN`] (`noctis-game`), which lives in `crates/client`.
-/// Rather than require a separate `cargo build`, this builds it from the
-/// workspace — a no-op when it is already up to date — and returns its path. It
-/// needs `cargo` and the workspace; when neither is available it falls back to a
-/// client that already sits beside the running executable, and fails with the
-/// manual command otherwise.
-pub fn game_client() -> Result<PathBuf, String> {
+/// `profile` selects the cargo profile ([`Profile::Release`] builds with
+/// `--release`, which is where scripts are embedded); `pack` names the embed pack
+/// to bake in (see [`EMBED_PACK_ENV`]), or `None` for a development client that
+/// loads scripts from disk. An export ships [`RUNTIME_BIN`] (`noctis-game`),
+/// which lives in `crates/client`; this builds it from the workspace — a no-op
+/// when it is already up to date — and returns its path. When the workspace is
+/// unavailable it falls back to a client beside the running executable, and
+/// fails with the manual command otherwise.
+pub fn game_client(profile: Profile, pack: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(root) = workspace_root() {
         let manifest = root.join("crates/client/Cargo.toml");
         if manifest.is_file() {
@@ -180,10 +188,11 @@ pub fn game_client() -> Result<PathBuf, String> {
                 .arg(&manifest)
                 .arg("--bin")
                 .arg(RUNTIME_BIN);
-            // Match the profile this tool was built with, so the client lands in
-            // the same directory and is found below.
-            if !cfg!(debug_assertions) {
+            if profile == Profile::Release {
                 command.arg("--release");
+            }
+            if let Some(pack) = pack {
+                command.env(EMBED_PACK_ENV, pack);
             }
             match command.status() {
                 Ok(status) if status.success() => {}
@@ -192,6 +201,13 @@ pub fn game_client() -> Result<PathBuf, String> {
                     log::warn!("could not run cargo to build the game client: {error}");
                 }
             }
+            let client = target_dir(&root)
+                .join(profile_dir(profile))
+                .join(executable_name(RUNTIME_BIN));
+            if client.is_file() {
+                return Ok(client);
+            }
+            log::warn!("the built client was not found at {}", client.display());
         }
     }
 
@@ -203,6 +219,21 @@ pub fn game_client() -> Result<PathBuf, String> {
         ));
     }
     Ok(client)
+}
+
+/// The workspace `target` directory, honouring `CARGO_TARGET_DIR`.
+fn target_dir(root: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"))
+}
+
+/// The cargo profile subdirectory a build lands in.
+fn profile_dir(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Dev => "debug",
+        Profile::Release => "release",
+    }
 }
 
 /// The workspace root, derived from this crate's manifest directory.

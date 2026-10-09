@@ -51,8 +51,10 @@
 #![forbid(unsafe_code)]
 
 mod config;
+pub mod embed;
 pub mod export;
 mod runtime;
+mod watch;
 
 pub mod build;
 pub mod cli;
@@ -61,6 +63,7 @@ pub mod window;
 
 pub use build::{BuildOptions, build_project};
 pub use config::RuntimeConfig;
+pub use embed::EmbeddedScript;
 pub use export::{ExportError, ExportFile, ExportReport, bundled_scene, export_game};
 pub use runtime::{RunSummary, Runtime};
 pub use window::run_in_window;
@@ -70,6 +73,7 @@ pub mod prelude {
     pub use crate::build::{BuildOptions, build_project};
     pub use crate::config::RuntimeConfig;
     pub use crate::demo::demo_scene;
+    pub use crate::embed::EmbeddedScript;
     pub use crate::runtime::{RunSummary, Runtime};
     pub use audio::AudioEngine;
     pub use ecs::prelude::*;

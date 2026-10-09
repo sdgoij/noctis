@@ -20,11 +20,12 @@
 //! enabled, a frame is drawn each tick and the last [`Frame`] is kept. A missing
 //! GPU adapter is logged and ignored, never fatal.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use audio::AudioEngine;
 use ecs::app::App;
-use ecs::assets::AssetRegistry;
+use ecs::assets::{AssetRegistry, ScriptAsset};
 use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
 use render::{Frame, IblConfig, RenderError, Renderer, RendererConfig};
@@ -77,6 +78,8 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     script: Arc<Mutex<ScriptRuntime<H>>>,
     renderer: Option<Renderer>,
     last_frame: Option<Frame>,
+    /// The development script watcher, when scripts load from disk.
+    watch: Option<crate::watch::ScriptWatch>,
 }
 
 impl Runtime<NoopHost> {
@@ -165,11 +168,13 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             script,
             renderer: None,
             last_frame: None,
+            watch: None,
         }
     }
 
     /// Advance the simulation by one frame with raw delta `dt` seconds.
     pub fn tick(&mut self, dt: f32) {
+        self.pump_script_watch();
         self.app.tick(dt);
         self.render();
     }
@@ -235,6 +240,64 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// The script runtime.
     pub fn script(&self) -> MutexGuard<'_, ScriptRuntime<H>> {
         lock(&self.script)
+    }
+
+    /// Watch `root` for `.js`/`.mjs`/`.wasm` changes and reload scripts as they
+    /// are edited. A development run ([`cli`](crate::cli)) calls this when scripts
+    /// are not embedded in the binary; see `docs/scripts.md`.
+    pub fn watch_scripts(&mut self, root: impl AsRef<Path>) -> std::io::Result<()> {
+        self.watch = Some(
+            crate::watch::ScriptWatch::new(root.as_ref())
+                .map_err(|error| std::io::Error::other(error.to_string()))?,
+        );
+        log::info!("watching {} for script changes", root.as_ref().display());
+        Ok(())
+    }
+
+    /// Re-read the `relative` (project-relative) script from disk into the asset
+    /// registry, returning `true` when it changed. The script runtime recompiles
+    /// the new source on the next frame. Requires a watched root.
+    pub fn reload_script(&mut self, relative: &str) -> bool {
+        let Some(root) = self.watch.as_ref().map(|watch| watch.root().to_path_buf()) else {
+            return false;
+        };
+        let file = root.join(relative);
+        match std::fs::read(&file).and_then(|bytes| {
+            ScriptAsset::from_file_bytes(relative, &bytes).map_err(std::io::Error::other)
+        }) {
+            Ok(asset) => {
+                self.app
+                    .context
+                    .assets
+                    .scripts
+                    .insert_named(relative, asset);
+                log::info!("reloaded script {relative}");
+                true
+            }
+            Err(error) => {
+                log::warn!("could not reload script {relative}: {error}");
+                false
+            }
+        }
+    }
+
+    /// Re-read every script the watcher reported changed since the last frame.
+    fn pump_script_watch(&mut self) {
+        let Some(watch) = self.watch.as_ref() else {
+            return;
+        };
+        let changed = watch.drain();
+        if changed.is_empty() {
+            return;
+        }
+        let root = watch.root().to_path_buf();
+        for path in changed {
+            let Ok(relative) = path.strip_prefix(&root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            self.reload_script(&relative);
+        }
     }
 
     /// `true` if the audio engine is connected to a real output device.
@@ -359,7 +422,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ecs::components::{GlobalTransform, Name};
+    use ecs::components::{GlobalTransform, LocalTransform, Name, Script};
     use math::vec3_approx_eq;
     use script::{RecordingHost, ScriptApi};
 
@@ -507,6 +570,47 @@ mod tests {
         assert_eq!(summary.frames, 1);
         assert!(summary.elapsed_seconds > 0.0);
         assert_eq!(summary.fixed_steps, 1);
+    }
+
+    #[test]
+    fn editing_a_script_reloads_it() {
+        // A project on disk with one script the scene references by path.
+        let root = std::env::temp_dir().join(format!("noctis-reload-{}", std::process::id()));
+        let scripts = root.join("scripts");
+        std::fs::create_dir_all(&scripts).expect("scripts dir");
+        let file = scripts.join("spin.js");
+        std::fs::write(&file, "first();").expect("write script");
+
+        let mut host = RecordingHost::new();
+        host.on("on_start", |_api: &mut ScriptApi<'_, '_>| {});
+
+        let mut scene = Scene::new("Reload");
+        let entity = scene.world.spawn();
+        scene.world.insert(entity, LocalTransform::default());
+        scene
+            .world
+            .insert(entity, Script::from_path("scripts/spin.js"));
+
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::from_parts(scene, AssetRegistry::new(), config, host);
+        runtime.watch_scripts(&root).expect("watch the project");
+        assert!(runtime.reload_script("scripts/spin.js"), "the file loads");
+
+        runtime.run_headless(1, 1.0 / 60.0);
+        assert_eq!(runtime.script().host().count_calls("on_start"), 1);
+        assert_eq!(runtime.script().host().compiled_count(), 1);
+
+        // Editing the file and reloading recompiles it and re-runs `on_start`.
+        std::fs::write(&file, "second();").expect("rewrite script");
+        assert!(runtime.reload_script("scripts/spin.js"));
+        runtime.run_headless(1, 1.0 / 60.0);
+        assert_eq!(runtime.script().host().count_calls("on_start"), 2);
+        assert_eq!(runtime.script().host().compiled_count(), 2);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

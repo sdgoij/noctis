@@ -82,3 +82,6 @@ egui-winit = "0.36"
 
 # Logging
 log = "0.4"
+
+# Filesystem watching (development script hot reload)
+notify = "8"

@@ -116,14 +116,24 @@ needed.
   both languages in one runtime. Both backends address entities through small
   per-call handle indices rather than raw ids, because a JavaScript `f64` cannot
   represent a 64-bit `EntityId` exactly. A WebAssembly module travels as a
-  `wasm:`-prefixed hex descriptor (the script channel is text);
-  `wasm_host::load`/`register` read a `.wasm` file into that form, and
-  `noctis run --wasm <name>=<path>` registers one for a game. `NoopHost` and
-  `RecordingHost` remain as inert/recording test hosts.
+  `wasm:`-prefixed hex descriptor (the script channel is text); the descriptor
+  encode/decode lives in `ecs::assets`, a `.wasm` file imports as a script asset
+  (so a scene references it by path like a `.js`), `wasm_host::load`/`register`
+  read one into that form, and `noctis run --wasm <name>=<path>` registers one
+  for a game. `NoopHost` and `RecordingHost` remain as inert/recording test
+  hosts.
   To make the single-threaded loop possible, `App` systems are deliberately
   **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.
+- `noctis build` ships scripts by **profile** (see [`docs/scripts.md`](docs/scripts.md)):
+  a `release` build bakes the scene's `.js`/`.wasm` into the `noctis-game` client
+  (via `NOCTIS_EMBED_PACK` → `crates/client/build.rs` → `include_bytes!`) and
+  writes no `scripts/` into the game folder; a `dev` build copies them in, and the
+  client watches the project root (`notify`) and hot-reloads a changed script,
+  which works because the script runtime's module cache is keyed by source. Only
+  scripts embed for now — scenes, models, textures, audio, fonts, and HDR
+  environments stay loose files, so packaging larger assets is still to come.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

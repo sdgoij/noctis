@@ -22,3 +22,4 @@ platform.workspace = true
 project.workspace = true
 serde_json.workspace = true
 log.workspace = true
+notify.workspace = true

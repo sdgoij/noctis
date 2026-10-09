@@ -216,17 +216,15 @@ fn import_texture(
     Ok(())
 }
 
-/// Import a `.js` script, registered under its asset path.
+/// Import a `.js`/`.mjs` (UTF-8 text) or `.wasm` (binary, stored as a `wasm:`
+/// descriptor) script, registered under its asset path.
 fn import_script(
     registry: &mut AssetRegistry,
     path: &AssetPath,
     file: &Path,
 ) -> Result<(), String> {
-    let source = std::fs::read_to_string(file).map_err(|error| error.to_string())?;
-    let asset = ScriptAsset {
-        name: path.as_str().to_string(),
-        source,
-    };
+    let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+    let asset = ScriptAsset::from_file_bytes(path.as_str(), &bytes)?;
     registry.scripts.insert_named(path.as_str(), asset);
     Ok(())
 }
@@ -307,5 +305,28 @@ mod tests {
         let path = AssetPath::parse(fragment_path("m.glb", "material", "Red")).unwrap();
         assert_eq!(path.file_path(), "m.glb");
         assert_eq!(path.fragment(), Some("material/Red"));
+    }
+
+    #[test]
+    fn a_wasm_file_imports_as_a_descriptor() {
+        let dir = std::env::temp_dir().join(format!("noctis-wasm-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("brain.wasm");
+        std::fs::write(&file, [0x00, 0x61, 0x73, 0x6d, 0x01]).expect("write");
+
+        let path = AssetPath::parse("scripts/brain.wasm").expect("asset path");
+        let mut registry = AssetRegistry::new();
+        import_script(&mut registry, &path, &file).expect("import a wasm file");
+
+        let asset = registry
+            .scripts
+            .get_by_path("scripts/brain.wasm")
+            .expect("registered");
+        assert!(ecs::assets::is_wasm_source(&asset.source));
+        assert_eq!(
+            asset.source,
+            ecs::assets::encode_wasm(&[0x00, 0x61, 0x73, 0x6d, 0x01])
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

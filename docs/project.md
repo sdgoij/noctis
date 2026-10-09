@@ -297,12 +297,21 @@ reference — a live `PrefabInstance` reference is future work.
 
 ## Scripts
 
-- `.js` scripts are project assets resolved by asset path; the scene's `Script`
-  component references them by path (already the case).
-- `.wasm` scripts use the existing descriptor path (`wasm_host`); the project
-  registers them the way `noctis run --wasm name=path` does today, but from
-  the asset map.
+*Implemented*:
+
+- `.js` and `.wasm` scripts are project assets resolved by asset path; the
+  scene's `Script` component references them by path. A `.wasm` file imports as a
+  `wasm:` hex descriptor (the binary bytes encoded into the text script channel),
+  so a native module is a first-class script asset rather than only a
+  `noctis run --wasm name=path` registration. The descriptor encode/decode lives
+  in `ecs::assets`, shared by the importer and the script host.
 - Scripts resolve assets and each other by the same project-relative paths.
+
+**Shipping** (see [`docs/scripts.md`](scripts.md)): the `[build] profile` decides
+how scripts travel. A `release` build embeds the scene's scripts in the client and
+omits them from the game folder; a `dev` build copies them in, and the client
+watches and hot-reloads them. Embedded scripts are seeded into the registry at
+startup, so a scene's script paths resolve with no file on disk.
 
 ## Fonts
 

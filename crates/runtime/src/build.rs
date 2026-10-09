@@ -10,9 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use ecs::scene::SceneDesc;
-use project::{AssetPath, BuildTarget, Project};
+use project::{AssetKind, AssetPath, BuildTarget, Profile, Project, detect};
 
-use crate::export::{ExportFile, ExportReport, export_game};
+use crate::export::{ExportFile, ExportReport, export_game, game_client};
 
 /// Overrides applied on top of a project's build target (or its default scene).
 #[derive(Clone, Debug, Default)]
@@ -24,9 +24,11 @@ pub struct BuildOptions {
     pub name: Option<String>,
     /// The scene, project-relative. Overrides the target and project default.
     pub scene: Option<String>,
-    /// The runtime executable to ship. Defaults to the sibling `noctis-game`
-    /// (see [`crate::export::default_runtime_executable`]).
+    /// The runtime executable to ship. When `None`, the client is built (with
+    /// the project's scripts embedded for a release build).
     pub runtime: Option<PathBuf>,
+    /// The build profile, overriding the target's; defaults to release.
+    pub profile: Option<Profile>,
 }
 
 /// Build `project_dir` into a self-contained game folder.
@@ -83,29 +85,100 @@ pub fn build_project(
         })
         .unwrap_or_else(|| project.dir("dist").join(&name));
 
-    let (files, environment) = bundle_files(&project, &scene_json)?;
+    // A release build bakes the scripts into the client and leaves them out of
+    // the folder; a development build ships them as loose files to watch.
+    let profile = options
+        .profile
+        .or_else(|| target.map(|target| target.profile))
+        .unwrap_or_default();
+    let embed_scripts = profile == Profile::Release;
+
+    let bundle = bundle_files(&project, &scene_json, embed_scripts)?;
+    let pack = if bundle.scripts.is_empty() {
+        None
+    } else {
+        Some(write_script_pack(&project, &bundle.scripts)?)
+    };
+    let client = match &options.runtime {
+        Some(runtime) => runtime.clone(),
+        None => game_client(profile, pack.as_deref())?,
+    };
     export_game(
         &destination,
         &name,
         &scene_json,
-        &files,
-        environment.as_deref(),
-        options.runtime.as_deref(),
+        &bundle.files,
+        bundle.environment.as_deref(),
+        Some(&client),
     )
     .map_err(|error| error.to_string())
+}
+
+/// Write the embed pack `noctis build` hands to the client build: the scripts to
+/// bake in, as `{ "scripts": [{ "path", "source" }] }` with absolute source paths.
+/// It lives under the project's `.noctis/` cache (gitignored); the list changes
+/// each build, so it is not a stable artifact.
+fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBuf, String> {
+    let directory = absolute(project.dir(project::CACHE_DIR));
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("failed to create {}: {error}", directory.display()))?;
+    let entries: Vec<serde_json::Value> = scripts
+        .iter()
+        .map(|file| {
+            // `include_bytes!` resolves a relative path against the generated
+            // file, so the source must be absolute.
+            let source = absolute(file.source.clone());
+            serde_json::json!({ "path": file.relative, "source": source.to_string_lossy() })
+        })
+        .collect();
+    let document = serde_json::json!({ "scripts": entries });
+    let text = serde_json::to_string_pretty(&document)
+        .map_err(|error| format!("failed to serialise the embed pack: {error}"))?;
+    let path = directory.join("scripts.pack.json");
+    std::fs::write(&path, text)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+/// Make `path` absolute against the current directory.
+///
+/// This deliberately avoids `fs::canonicalize`, whose Windows `\\?\` verbatim
+/// prefix `include_bytes!` does not accept.
+fn absolute(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(&path),
+        Err(_) => path,
+    }
 }
 
 /// The project files a scene references, plus the project's `[render]`
 /// environment, ready to bundle. A file that is referenced but absent from disk
 /// is an error (the build would ship a broken game).
 ///
+/// Returns `(files, scripts, environment)`. When `embed_scripts` is set, the
+/// scene's script files are returned separately in `scripts` (to bake into the
+/// client) instead of in `files` (to copy into the folder).
+///
 /// The environment is returned alongside the files because it is referenced by
 /// the *manifest*, not by the scene, so the exported `noctis.toml` has to name it
 /// even though no entity refers to it.
+/// The files a build bundles: the ones copied into the folder, the scripts to
+/// embed in the client (empty when not embedding), and the `[render]`
+/// environment named by the manifest.
+struct Bundle {
+    files: Vec<ExportFile>,
+    scripts: Vec<ExportFile>,
+    environment: Option<String>,
+}
+
 fn bundle_files(
     project: &Project,
     scene_json: &str,
-) -> Result<(Vec<ExportFile>, Option<String>), String> {
+    embed_scripts: bool,
+) -> Result<Bundle, String> {
     let imported = project
         .import_assets()
         .map_err(|error| format!("failed to import project assets: {error}"))?;
@@ -121,8 +194,15 @@ fn bundle_files(
     let referenced = project::referenced_files(&desc, &imported.lookup)
         .map_err(|error| format!("cannot bundle the scene: {error}"))?;
     let mut files = Vec::with_capacity(referenced.len());
+    let mut scripts = Vec::new();
     for asset in referenced {
-        files.push(export_file(project, &asset)?);
+        let file = export_file(project, &asset)?;
+        // An embedded script rides inside the client, not as a loose file.
+        if embed_scripts && detect(asset.as_str()) == AssetKind::Script {
+            scripts.push(file);
+        } else {
+            files.push(file);
+        }
     }
 
     // The environment is part of the game even though no scene references it.
@@ -138,7 +218,11 @@ fn bundle_files(
             files.push(export_file(project, &asset)?);
         }
     }
-    Ok((files, environment))
+    Ok(Bundle {
+        files,
+        scripts,
+        environment,
+    })
 }
 
 /// A `(relative, source)` pair for one project asset, erroring when the file is
@@ -179,6 +263,11 @@ mod tests {
         std::fs::write(path, contents).expect("write");
     }
 
+    /// A stand-in runtime executable, so a build test never invokes cargo.
+    fn test_runtime() -> PathBuf {
+        std::env::current_exe().expect("the test executable")
+    }
+
     const MANIFEST: &str = "[project]\nname = \"Game\"\n\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n";
 
     #[test]
@@ -203,8 +292,11 @@ mod tests {
             }"#,
         );
         let out = temp_dir("out");
+        // A development build ships scripts as loose files.
         let options = BuildOptions {
             destination: Some(out.clone()),
+            runtime: Some(test_runtime()),
+            profile: Some(Profile::Dev),
             ..BuildOptions::default()
         };
 
@@ -291,6 +383,7 @@ mod tests {
         let out = temp_dir("env-out");
         let options = BuildOptions {
             destination: Some(out.clone()),
+            runtime: Some(test_runtime()),
             ..BuildOptions::default()
         };
         let report = build_project(&project, None, &options).expect("build");
@@ -333,8 +426,11 @@ mod tests {
             "{ \"name\": \"Level\", \"entities\": [] }",
         );
 
-        let report =
-            build_project(&project, Some("release"), &BuildOptions::default()).expect("build");
+        let options = BuildOptions {
+            runtime: Some(test_runtime()),
+            ..BuildOptions::default()
+        };
+        let report = build_project(&project, Some("release"), &options).expect("build");
         // `output` is project-relative; the name comes from the target.
         assert_eq!(report.directory, project.join("out/release"));
         assert_eq!(
@@ -345,5 +441,48 @@ mod tests {
         assert!(report.project_manifest.is_none(), "no assets to bundle");
 
         std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_release_build_embeds_scripts_and_omits_them() {
+        let project = temp_dir("embed-project");
+        write(&project.join("noctis.toml"), MANIFEST);
+        write(
+            &project.join("scripts/hello.js"),
+            "function on_update() {}\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            r#"{
+                "name": "Main",
+                "entities": [{
+                    "id": 0, "name": "Box",
+                    "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "script", "source": null, "path": "scripts/hello.js", "enabled": true }
+                    ]
+                }]
+            }"#,
+        );
+        let out = temp_dir("embed-out");
+        let options = BuildOptions {
+            destination: Some(out.clone()),
+            runtime: Some(test_runtime()),
+            profile: Some(Profile::Release),
+            ..BuildOptions::default()
+        };
+
+        let report = build_project(&project, None, &options).expect("build");
+
+        // The script is baked into the client, so it is neither copied into the
+        // folder nor listed among the bundled files — but it is in the pack.
+        assert!(report.files.is_empty(), "{:?}", report.files);
+        assert!(!out.join("scripts/hello.js").exists());
+        let pack = project.join(project::CACHE_DIR).join("scripts.pack.json");
+        let pack = std::fs::read_to_string(&pack).expect("the embed pack was written");
+        assert!(pack.contains("\"path\": \"scripts/hello.js\""), "{pack}");
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&out).ok();
     }
 }

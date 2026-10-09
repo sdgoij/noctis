@@ -431,13 +431,83 @@ impl AudioClip {
     }
 }
 
-/// A JavaScript source asset.
+/// The prefix that marks a script source as a WebAssembly module descriptor.
+pub const WASM_PREFIX: &str = "wasm:";
+
+/// The four bytes every WebAssembly module begins with (`\0asm`).
+pub const WASM_MAGIC: &[u8] = b"\0asm";
+
+const HEX: [char; 16] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+];
+
+/// Encode a WebAssembly module as a script source: [`WASM_PREFIX`] plus the hex
+/// bytes. The engine's script channel is text, so a binary module travels
+/// hex-encoded.
+pub fn encode_wasm(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(WASM_PREFIX.len() + bytes.len() * 2);
+    out.push_str(WASM_PREFIX);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize]);
+        out.push(HEX[(byte & 0x0f) as usize]);
+    }
+    out
+}
+
+/// `true` if `source` is a WebAssembly module descriptor.
+pub fn is_wasm_source(source: &str) -> bool {
+    source.starts_with(WASM_PREFIX)
+}
+
+/// Decode a descriptor produced by [`encode_wasm`].
+pub fn decode_wasm(source: &str) -> Option<Vec<u8>> {
+    let hex = source.strip_prefix(WASM_PREFIX)?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let digits = hex.as_bytes();
+    for pair in digits.as_chunks::<2>().0 {
+        let high = (pair[0] as char).to_digit(16)?;
+        let low = (pair[1] as char).to_digit(16)?;
+        bytes.push(((high << 4) | low) as u8);
+    }
+    Some(bytes)
+}
+
+/// A script source asset: JavaScript text, or a `wasm:` descriptor for a native
+/// WebAssembly module.
 #[derive(Clone, Debug)]
 pub struct ScriptAsset {
     /// A human-readable name (usually the file path).
     pub name: String,
-    /// The JavaScript source text.
+    /// The script source: JavaScript text, or a `wasm:` descriptor.
     pub source: String,
+}
+
+impl ScriptAsset {
+    /// A script asset from a name and the file's raw bytes.
+    ///
+    /// A WebAssembly module (magic [`WASM_MAGIC`]) becomes a `wasm:` descriptor;
+    /// anything else must be UTF-8 JavaScript. This is how a `.js` or `.wasm`
+    /// file on disk becomes a script, whether it is imported at build time or
+    /// embedded in the client.
+    pub fn from_file_bytes(name: impl Into<String>, bytes: &[u8]) -> Result<Self, String> {
+        let name = name.into();
+        if bytes.starts_with(WASM_MAGIC) {
+            return Ok(Self {
+                name,
+                source: encode_wasm(bytes),
+            });
+        }
+        let source = std::str::from_utf8(bytes).map_err(|error| {
+            format!("script is neither a WebAssembly module nor UTF-8 text: {error}")
+        })?;
+        Ok(Self {
+            name,
+            source: source.to_string(),
+        })
+    }
 }
 
 /// A font source asset: the font file's bytes, ready for an atlas builder.
@@ -670,6 +740,30 @@ mod tests {
             samples: vec![0.0; 48_000 * 2],
         };
         assert!((clip.duration() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wasm_descriptors_round_trip() {
+        let module = [0x00u8, 0x61, 0x73, 0x6d, 0xff, 0x00, 0x7f];
+        let source = encode_wasm(&module);
+        assert!(is_wasm_source(&source));
+        assert_eq!(decode_wasm(&source).as_deref(), Some(module.as_slice()));
+        assert!(!is_wasm_source("on_update();"));
+        assert_eq!(decode_wasm("wasm:abc"), None); // odd digit count
+    }
+
+    #[test]
+    fn script_assets_are_built_from_bytes_by_magic() {
+        let js = ScriptAsset::from_file_bytes("scripts/a.js", b"function on_update() {}")
+            .expect("utf-8 javascript");
+        assert_eq!(js.source, "function on_update() {}");
+
+        let wasm =
+            ScriptAsset::from_file_bytes("scripts/b.wasm", b"\0asm\x01\x00").expect("wasm magic");
+        assert_eq!(wasm.source, encode_wasm(b"\0asm\x01\x00"));
+
+        // Binary that is neither a module nor UTF-8 is an error, not a panic.
+        assert!(ScriptAsset::from_file_bytes("scripts/x", &[0xff, 0xfe]).is_err());
     }
 
     #[test]

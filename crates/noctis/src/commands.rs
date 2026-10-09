@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use project::{AssetPath, Project};
+use project::{AssetPath, Profile, Project};
 use runtime::build::{BuildOptions, build_project};
 
 /// A top-level CLI failure, distinguished so usage problems can exit `2`.
@@ -32,6 +32,8 @@ OPTIONS:
     --scene <PATH>       Override the scene (project-relative).
     --name <NAME>        Override the game/executable name.
     --out <DIR>          Override the output directory.
+    --profile <PROFILE>  'release' (default) embeds scripts in the client; 'dev'
+                         ships them as loose files, watched at run time.
     -h, --help           Show this help.";
 
 const RENAME_USAGE: &str = "\
@@ -92,6 +94,19 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
                 options.destination = Some(PathBuf::from(value));
                 index = consumed;
             }
+            "--profile" | "-P" => {
+                let (value, consumed) = value_for("--profile")?;
+                options.profile = Some(match value.as_str() {
+                    "dev" => Profile::Dev,
+                    "release" => Profile::Release,
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "--profile must be 'dev' or 'release', got {other:?}"
+                        )));
+                    }
+                });
+                index = consumed;
+            }
             other => return Err(CliError::Usage(format!("unknown option {other:?}"))),
         }
         index += 1;
@@ -102,13 +117,8 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
     // Fail fast on a bad project before spending time building the client.
     Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
 
-    // Ship the stripped game client, not this tool. `game_client` builds it from
-    // the workspace when it is missing, so `noctis build` is one command.
-    options.runtime =
-        Some(runtime::export::game_client().map_err(|error| {
-            CliError::Message(format!("cannot build the game client: {error}"))
-        })?);
-
+    // `build_project` acquires the stripped game client itself (embedding the
+    // project's scripts for a release build), so `noctis build` is one command.
     let report = build_project(&PathBuf::from(&project), target.as_deref(), &options)
         .map_err(CliError::Message)?;
     Ok(report.to_string())

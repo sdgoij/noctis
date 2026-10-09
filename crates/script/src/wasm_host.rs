@@ -71,46 +71,13 @@ use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// The module name a WebAssembly script imports the engine API from.
 pub const IMPORT_MODULE: &str = "noctis";
-/// The prefix that marks a script source as a WebAssembly module descriptor.
-pub const PREFIX: &str = "wasm:";
 
-/// Encode a WebAssembly module as script source: `PREFIX` plus the hex bytes.
-///
-/// The engine's script channel is text, so a binary module travels hex-encoded.
-pub fn encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(PREFIX.len() + bytes.len() * 2);
-    out.push_str(PREFIX);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize]);
-        out.push(HEX[(byte & 0x0f) as usize]);
-    }
-    out
-}
-
-/// `true` if `source` is a WebAssembly module descriptor.
-pub fn is_wasm_source(source: &str) -> bool {
-    source.starts_with(PREFIX)
-}
-
-const HEX: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-];
-
-/// Decode a WebAssembly module descriptor produced by [`encode`].
-pub fn decode_source(source: &str) -> Option<Vec<u8>> {
-    let hex = source.strip_prefix(PREFIX)?;
-    if hex.len() % 2 != 0 {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    let digits = hex.as_bytes();
-    for pair in digits.as_chunks::<2>().0 {
-        let high = (pair[0] as char).to_digit(16)?;
-        let low = (pair[1] as char).to_digit(16)?;
-        bytes.push(((high << 4) | low) as u8);
-    }
-    Some(bytes)
-}
+// The `wasm:` module descriptor is an asset-encoding concern shared with the
+// `project` importer (a `.wasm` file is a script asset), so it lives in
+// `ecs::assets` and is re-exported here for the host code that decodes it.
+pub use ecs::assets::{
+    WASM_PREFIX as PREFIX, decode_wasm as decode_source, encode_wasm as encode, is_wasm_source,
+};
 
 /// One engine function a WebAssembly script may import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
