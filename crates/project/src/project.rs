@@ -39,11 +39,24 @@ impl Project {
         let text = std::fs::read_to_string(path).map_err(|e| ProjectError::Io(e.to_string()))?;
         let manifest = ProjectManifest::from_toml(&text)?;
         manifest.validate()?;
-        let root = path
+        let manifest_dir = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
+            .unwrap_or_else(|| Path::new("."));
+        // A `[project] root` relocates the project, so a development build's
+        // manifest can sit beside its client while the files live in the project
+        // it was built from.
+        let root = match manifest.project.root.as_deref() {
+            Some(root) => {
+                let root = Path::new(root);
+                if root.is_absolute() {
+                    root.to_path_buf()
+                } else {
+                    manifest_dir.join(root)
+                }
+            }
+            None => manifest_dir.to_path_buf(),
+        };
         Ok(Self { root, manifest })
     }
 
@@ -368,5 +381,31 @@ mod tests {
     fn opening_a_missing_project_is_an_io_error() {
         let error = Project::open("/definitely/not/a/real/noctis/dir").unwrap_err();
         assert!(matches!(error, ProjectError::Io(_)), "{error:?}");
+    }
+
+    #[test]
+    fn a_root_override_relocates_the_project() {
+        let dir = std::env::temp_dir().join(format!("noctis-root-{}", std::process::id()));
+        let nested = dir.join("dist/dev");
+        std::fs::create_dir_all(&nested).expect("dirs");
+        // An absolute root, as a development build writes.
+        let root = dir.to_string_lossy().replace('\\', "/");
+        std::fs::write(
+            nested.join(MANIFEST_FILE),
+            format!(
+                "[project]\nname = \"G\"\nroot = {root:?}\n\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n"
+            ),
+        )
+        .expect("manifest");
+
+        let project = Project::open(&nested).expect("open");
+        // The files live at the declared root, not beside the manifest.
+        assert_eq!(project.root(), Path::new(&root));
+        assert_eq!(
+            project.default_scene_file(),
+            Some(Path::new(&root).join("scenes/main.scene.json"))
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

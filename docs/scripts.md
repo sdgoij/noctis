@@ -13,10 +13,11 @@ text descriptor `wasm:<hex>` because the script channel is text. See
 
 ## Decisions
 
-1. **The build profile decides the script source.** A `release` build bakes the
+1. **The build profile decides how scripts travel.** A `release` build bakes the
    scripts into the client executable and does *not* copy them into `dist`; a
-   `dev` build copies them into `dist` and loads them from disk. `noctis run`
-   (the development tool) always loads from disk.
+   `dev` build does not copy the project at all — it writes a manifest that points
+   at the project, so the game runs it in place and its scripts stay live.
+   `noctis run` (the development tool) also loads from disk.
 2. **Embedding is scripts only, for now.** Scenes, models, textures, audio,
    fonts, and HDR environments stay as loose files in `dist`. Packaging and
    streaming larger assets is a separate design.
@@ -29,36 +30,47 @@ text descriptor `wasm:<hex>` because the script channel is text. See
    then builds the client with `NOCTIS_EMBED_PACK` set. `crates/client/build.rs`
    turns that into a `&'static [EmbeddedScript]` with `include_bytes!`.
 
-## How a script reaches a running game today
+## How a script reaches a running game (release)
 
-1. `noctis build` resolves a scene, imports the project's assets, and computes
-   the files the scene references ([`referenced_files`](../crates/project)).
-2. [`export_game`](../crates/runtime/src/export.rs) copies the client executable,
-   writes `scene.json`, and copies each referenced file — **including scripts** —
-   preserving its project-relative path, plus a `noctis.toml` when any file was
-   bundled.
-3. The client (`noctis-game`) runs `runtime::cli`, opens the bundled project,
-   imports its assets, and runs. The script runtime resolves each `Script.path`
-   from the registry's script store.
-
-Scripts are therefore loose files under `dist/<game>/scripts/`. This is the
-**development** shape; a release build changes step 2 and 3.
+1. `noctis build` resolves a scene, imports the project's assets, and computes the
+   files the scene references ([`referenced_files`](../crates/project)).
+2. The scene's scripts are written to an embed pack and baked into the client; the
+   rest of the referenced files are copied into the folder by
+   [`export_game`](../crates/runtime/src/export.rs), preserving their
+   project-relative paths, plus a `noctis.toml` the runtime opens.
+3. The client (`noctis-game`) runs `runtime::cli`, seeds the embedded scripts into
+   the registry, opens the bundled project, imports its assets, and runs. The
+   script runtime resolves each `Script.path` from the registry's script store.
 
 ## Profiles
 
 `[build] profile` in the manifest (`dev` | `release`, default `release`) selects
 the shape, and `noctis build --profile` overrides it. The mapping:
 
-| profile | client | scripts in `dist` | script source | output |
-|---|---|---|---|---|
-| `release` | `--release` | no | embedded (`NOCTIS_EMBED_PACK`) | `dist/release/` |
-| `dev` | debug | yes | disk, watched | `dist/dev/` |
+| profile | client | scripts | output |
+|---|---|---|---|
+| `release` | `--release` | embedded in the client (`NOCTIS_EMBED_PACK`) | `dist/release/` |
+| `dev` | debug | the live project's, watched | `dist/dev/` |
 
 A dev build never shares a folder with a release build: the default destination is
 organised by profile. A named `[[build]]` target writes to `dist/<profile>/<target>`;
 an explicit `--out`, or a target's `output`, is used verbatim instead.
 
 `noctis run` is always the development shape, regardless of any manifest.
+
+## Development runs the project in place
+
+A dev build copies **nothing**. [`export_dev_game`](../crates/runtime/src/export.rs)
+writes only the client and a `noctis.toml` whose `[project] root` is the absolute
+path of the project it was built from, plus `noctis-game.json`. The runtime opens
+that root, so the game runs the project's live scenes, assets, and scripts — the
+same files you edit — and the watcher (below) reloads a script the moment it
+changes. This is what makes `dist/dev/<game>` a usable iteration loop rather than a
+frozen copy.
+
+`[project] root` is a general manifest field: a manifest may name the directory
+its files live in, so it can sit beside a client while the project stays put. An
+absent `root` means the manifest's own directory.
 
 ## The embed pack
 
@@ -111,7 +123,7 @@ definition.
 
 ```sh
 noctis build --project <dir>                 # release: scripts embedded, not in dist
-noctis build --project <dir> --profile dev   # dev: scripts in dist, watched at run time
+noctis build --project <dir> --profile dev   # dev: client runs the project in place
 noctis run   --project <dir>                 # dev: never embedded
 ```
 
@@ -126,8 +138,8 @@ at boot. The pack format is versioned to allow this additively.
 - `project::import_assets` imports `.js` and `.wasm` (both `AssetKind::Script`)
   into the script store.
 - `ScriptRuntime` reloads a script when its resolved source changes.
-- `runtime::build::build_project` / `runtime::export::export_game` produce a game
-  folder; `noctis build` drives them.
+- `runtime::build::build_project` drives `runtime::export::export_game` (release)
+  or `export_dev_game` (dev); `noctis build` runs it.
 
 ## Open questions
 

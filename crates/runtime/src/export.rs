@@ -341,6 +341,99 @@ pub fn export_game(
     })
 }
 
+/// Export a development game folder: the client plus a manifest that runs the
+/// project it was built from *in place*, so the live scenes, assets, and scripts
+/// are used and script edits are picked up (the runtime watches them). Nothing is
+/// copied.
+///
+/// `project_root` is the project directory the build was made from, `scene` the
+/// project-relative default scene, and `environment` the `[render] environment`.
+pub fn export_dev_game(
+    destination: &Path,
+    name: &str,
+    project_root: &Path,
+    scene: &str,
+    environment: Option<&str>,
+    runtime: Option<&Path>,
+) -> Result<ExportReport, ExportError> {
+    if !valid_name(name) {
+        return Err(ExportError::InvalidName(name.to_string()));
+    }
+    // The manifest lives in the game folder but must point at the project, so the
+    // root has to be absolute (a relative one would resolve against the folder).
+    let project_root = absolute(project_root);
+    let project_root = project_root.as_path();
+    fs::create_dir_all(destination).map_err(io)?;
+
+    let executable = destination.join(executable_name(name));
+    let source = match runtime {
+        Some(path) => path.to_path_buf(),
+        None => default_runtime_executable().map_err(io)?,
+    };
+    if source != executable {
+        fs::copy(&source, &executable).map_err(io)?;
+    }
+
+    let project_manifest = destination.join(BUNDLED_PROJECT);
+    fs::write(
+        &project_manifest,
+        dev_project_toml(name, project_root, scene, environment),
+    )
+    .map_err(io)?;
+
+    let manifest = destination.join(MANIFEST);
+    let document = serde_json::json!({
+        "name": name,
+        "engine": concat!("noctis ", env!("CARGO_PKG_VERSION")),
+        "executable": executable_name(name),
+        "scene": scene,
+        "environment": environment,
+        "project": project_root.to_string_lossy(),
+        "assets": [],
+    });
+    let text =
+        serde_json::to_string_pretty(&document).map_err(|e| ExportError::Json(e.to_string()))?;
+    fs::write(&manifest, text).map_err(io)?;
+
+    Ok(ExportReport {
+        directory: destination.to_path_buf(),
+        executable,
+        scene: project_root.join(scene),
+        manifest,
+        project_manifest: Some(project_manifest),
+        files: Vec::new(),
+    })
+}
+
+/// Make `path` absolute against the current directory.
+///
+/// This deliberately avoids `fs::canonicalize`, whose Windows `\\?\` verbatim
+/// prefix `include_bytes!` does not accept.
+pub(crate) fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+/// The `noctis.toml` a development game folder carries: a project that runs the
+/// project it was built from, in place, via `[project] root`.
+fn dev_project_toml(name: &str, root: &Path, scene: &str, environment: Option<&str>) -> String {
+    // Forward slashes keep the manifest readable and are valid TOML and Windows
+    // paths alike.
+    let root = root.to_string_lossy().replace('\\', "/");
+    let mut toml = format!(
+        "[project]\nname = {name:?}\nroot = {root:?}\n\n[project.settings]\ndefault_scene = {scene:?}\n"
+    );
+    if let Some(environment) = environment {
+        toml.push_str(&format!("\n[render]\nenvironment = {environment:?}\n"));
+    }
+    toml
+}
+
 /// The `noctis.toml` an exported folder carries: a project that runs its bundled
 /// scene and imports its bundled assets.
 fn bundled_project_toml(name: &str, environment: Option<&str>) -> String {

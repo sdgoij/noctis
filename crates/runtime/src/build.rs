@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use ecs::scene::SceneDesc;
 use project::{AssetKind, AssetPath, BuildTarget, Profile, Project, detect};
 
-use crate::export::{ExportFile, ExportReport, export_game, game_client};
+use crate::export::{ExportFile, ExportReport, export_dev_game, export_game, game_client};
 
 /// Overrides applied on top of a project's build target (or its default scene).
 #[derive(Clone, Debug, Default)]
@@ -88,8 +88,6 @@ pub fn build_project(
         .profile
         .or_else(|| target.map(|target| target.profile))
         .unwrap_or_default();
-    let embed_scripts = profile == Profile::Release;
-
     let destination = match options.destination.clone() {
         // An explicit `--out` is used verbatim.
         Some(destination) => destination,
@@ -117,7 +115,28 @@ pub fn build_project(
         },
     };
 
-    let bundle = bundle_files(&project, &scene_json, embed_scripts)?;
+    // A development build runs the project in place: the client plus a manifest
+    // that points at the project, so its scripts (which the runtime watches) are
+    // edited where they live, not in a copy. Nothing is copied.
+    if profile == Profile::Dev {
+        let client = match &options.runtime {
+            Some(runtime) => runtime.clone(),
+            None => game_client(Profile::Dev, None)?,
+        };
+        let environment = project.manifest().render.environment.clone();
+        return export_dev_game(
+            &destination,
+            &name,
+            project.root(),
+            &scene,
+            environment.as_deref(),
+            Some(&client),
+        )
+        .map_err(|error| error.to_string());
+    }
+
+    // A release build embeds the scripts in the client and copies the rest.
+    let bundle = bundle_files(&project, &scene_json, true)?;
     let pack = if bundle.scripts.is_empty() {
         None
     } else {
@@ -151,7 +170,7 @@ fn profile_directory(profile: Profile) -> &'static str {
 /// It lives under the project's `.noctis/` cache (gitignored); the list changes
 /// each build, so it is not a stable artifact.
 fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBuf, String> {
-    let directory = absolute(project.dir(project::CACHE_DIR));
+    let directory = crate::export::absolute(&project.dir(project::CACHE_DIR));
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("failed to create {}: {error}", directory.display()))?;
     let entries: Vec<serde_json::Value> = scripts
@@ -159,7 +178,7 @@ fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBu
         .map(|file| {
             // `include_bytes!` resolves a relative path against the generated
             // file, so the source must be absolute.
-            let source = absolute(file.source.clone());
+            let source = crate::export::absolute(&file.source);
             serde_json::json!({ "path": file.relative, "source": source.to_string_lossy() })
         })
         .collect();
@@ -176,20 +195,8 @@ fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBu
     Ok(path)
 }
 
-/// Make `path` absolute against the current directory.
-///
-/// This deliberately avoids `fs::canonicalize`, whose Windows `\\?\` verbatim
-/// prefix `include_bytes!` does not accept.
-fn absolute(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        return path;
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => cwd.join(&path),
-        Err(_) => path,
-    }
-}
-
+/// A `(relative, source)` pair for one project asset, erroring when the file is
+/// missing on disk.
 /// The project files a scene references, plus the project's `[render]`
 /// environment, ready to bundle. A file that is referenced but absent from disk
 /// is an error (the build would ship a broken game).
@@ -306,14 +313,33 @@ mod tests {
 
     const MANIFEST: &str = "[project]\nname = \"Game\"\n\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n";
 
+    /// A minimal valid 16-bit mono PCM WAV (a short tone).
+    fn tiny_wav() -> Vec<u8> {
+        let samples: [i16; 8] = [0, 1000, 2000, 1000, 0, -1000, -2000, -1000];
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut wav = Vec::with_capacity(44 + data.len());
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&((36 + data.len()) as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // channels
+        wav.extend_from_slice(&8000u32.to_le_bytes()); // sample rate
+        wav.extend_from_slice(&16000u32.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data);
+        wav
+    }
+
     #[test]
-    fn build_bundles_the_referenced_script() {
-        let project = temp_dir("project");
+    fn a_release_build_copies_referenced_assets() {
+        let project = temp_dir("assets-project");
         write(&project.join("noctis.toml"), MANIFEST);
-        write(
-            &project.join("scripts/hello.js"),
-            "function on_update() {}\n",
-        );
+        std::fs::create_dir_all(project.join("assets/audio")).expect("audio dir");
+        std::fs::write(project.join("assets/audio/beep.wav"), tiny_wav()).expect("write wav");
         write(
             &project.join("scenes/main.scene.json"),
             r#"{
@@ -322,24 +348,31 @@ mod tests {
                     "id": 0, "name": "Box",
                     "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
                     "components": [
-                        { "type": "script", "source": null, "path": "scripts/hello.js", "enabled": true }
+                        { "type": "audio_source", "clip": "assets/audio/beep.wav",
+                          "volume": 1.0, "pitch": 1.0, "looped": false, "playing": true,
+                          "spatial": true, "max_distance": 20.0, "rolloff": 1.0 }
                     ]
                 }]
             }"#,
         );
-        let out = temp_dir("out");
-        // A development build ships scripts as loose files.
-        let options = BuildOptions {
-            destination: Some(out.clone()),
-            runtime: Some(test_runtime()),
-            profile: Some(Profile::Dev),
-            ..BuildOptions::default()
-        };
+        let out = temp_dir("assets-out");
+        // A release build copies the referenced (non-script) assets.
+        let report = build_project(
+            &project,
+            None,
+            &BuildOptions {
+                destination: Some(out.clone()),
+                runtime: Some(test_runtime()),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("build");
 
-        let report = build_project(&project, None, &options).expect("build");
-        assert_eq!(report.files, vec!["scripts/hello.js".to_string()]);
-        assert!(out.join("scene.json").is_file());
-        assert!(out.join("scripts/hello.js").is_file());
+        assert_eq!(report.files, vec!["assets/audio/beep.wav".to_string()]);
+        assert_eq!(
+            std::fs::read(out.join("assets/audio/beep.wav")).expect("bundled"),
+            tiny_wav()
+        );
         assert!(out.join("noctis.toml").is_file());
 
         std::fs::remove_dir_all(&project).ok();
@@ -585,6 +618,59 @@ mod tests {
         assert_eq!(report.directory, project.join("dist/release/level-one"));
 
         std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_dev_build_runs_the_project_in_place() {
+        let project = temp_dir("dev-in-place").join("game");
+        write(&project.join("noctis.toml"), MANIFEST);
+        write(
+            &project.join("scripts/hello.js"),
+            "function on_update() {}\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            r#"{
+                "name": "Main",
+                "entities": [{
+                    "id": 0, "name": "Box",
+                    "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "script", "source": null, "path": "scripts/hello.js", "enabled": true }
+                    ]
+                }]
+            }"#,
+        );
+        let out = temp_dir("dev-in-place-out");
+        let report = build_project(
+            &project,
+            None,
+            &BuildOptions {
+                destination: Some(out.clone()),
+                runtime: Some(test_runtime()),
+                profile: Some(Profile::Dev),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("dev build");
+
+        // Nothing is copied: the folder holds the client and a manifest that
+        // points back at the project, so its scripts are the live ones.
+        assert!(report.files.is_empty(), "{:?}", report.files);
+        assert!(!out.join("scripts/hello.js").exists());
+        let root = project.to_string_lossy().replace('\\', "/");
+        let manifest = std::fs::read_to_string(out.join("noctis.toml")).expect("manifest");
+        assert!(manifest.contains(&format!("root = {root:?}")), "{manifest}");
+
+        let opened = Project::open(&out).expect("open the dev folder");
+        assert_eq!(opened.root(), Path::new(&root));
+        assert_eq!(
+            opened.default_scene_file(),
+            Some(Path::new(&root).join("scenes/main.scene.json"))
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&out).ok();
     }
 
     #[test]

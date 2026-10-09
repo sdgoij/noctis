@@ -309,9 +309,10 @@ reference — a live `PrefabInstance` reference is future work.
 
 **Shipping** (see [`docs/scripts.md`](scripts.md)): the `[build] profile` decides
 how scripts travel. A `release` build embeds the scene's scripts in the client and
-omits them from the game folder; a `dev` build copies them in, and the client
-watches and hot-reloads them. Embedded scripts are seeded into the registry at
-startup, so a scene's script paths resolve with no file on disk.
+omits them from the game folder; a `dev` build copies nothing — it writes a
+manifest whose `[project] root` points at the project, so the client runs it in
+place and hot-reloads edited scripts. Embedded scripts are seeded into the registry
+at startup, so a scene's script paths resolve with no file on disk.
 
 ## Fonts
 

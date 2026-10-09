@@ -141,6 +141,15 @@ pub struct ProjectInfo {
     /// Project-wide settings (`[project.settings]`).
     #[serde(default)]
     pub settings: Settings,
+    /// The directory the project's files live in, when the manifest itself is
+    /// elsewhere.
+    ///
+    /// A development build writes a manifest beside its client that points at the
+    /// project it was built from, so the game runs that project in place — its
+    /// scenes, assets, and (watched) scripts are the live project files. Absent
+    /// means the manifest's own directory.
+    #[serde(default)]
+    pub root: Option<String>,
 }
 
 /// The `[project.settings]` table.

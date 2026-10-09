@@ -233,13 +233,14 @@ The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts
 # client, so dist carries no scripts/ directory.
 cargo run -- build --project mygame
 
-# dev: scripts are copied into dist and loaded from disk, watched for edits.
+# dev: the client runs the project in place, reloading edited scripts.
 cargo run -- build --project mygame --profile dev
 ```
 
-A **release** client embeds its scripts; a **dev** client reads them from disk and
-hot-reloads a `.js`/`.mjs`/`.wasm` file when it changes, so iterating does not
-require rebuilding the executable. `noctis run` always uses the dev shape.
+A **release** client embeds its scripts (self-contained, no `scripts/`); a **dev**
+client copies nothing and runs the project in place, so its scenes and scripts are
+the live project files and a saved `.js`/`.mjs`/`.wasm` is hot-reloaded. `noctis run`
+always uses the dev shape.
 
 An artifact's name is `--name`, else the target's `name`, else the project
 directory name. A project at `showcase/` builds a `showcase` artifact; a display
