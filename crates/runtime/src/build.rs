@@ -64,11 +64,23 @@ pub fn build_project(
     let scene_json = std::fs::read_to_string(&scene_path)
         .map_err(|error| format!("failed to read scene '{}': {error}", scene_path.display()))?;
 
+    // The artifact name: `--name`, else the target's `name`, else the project
+    // directory (a project at `examples/showcase` builds a `showcase` artifact).
+    // `[project].name` is a display name (window title, editor) and is never used
+    // as a file name.
     let name = options
         .name
         .clone()
         .or_else(|| target.map(|t| t.name.clone()))
-        .unwrap_or_else(|| project.name().to_string());
+        .unwrap_or_else(|| {
+            project
+                .root()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| crate::export::valid_name(name))
+                .unwrap_or("game")
+                .to_string()
+        });
 
     // The profile decides how scripts ship (release embeds them, dev ships them as
     // loose files) and where a dev build lands, so it is resolved first.
@@ -81,26 +93,22 @@ pub fn build_project(
     let destination = match options.destination.clone() {
         // An explicit `--out` is used verbatim.
         Some(destination) => destination,
-        None => {
-            // A target's `output` is project-relative (an absolute path is used as
-            // given); with no target it is `dist/<name>`.
-            let directory = target
-                .and_then(|t| t.output.as_deref())
-                .map(|output| {
-                    if Path::new(output).is_absolute() {
-                        PathBuf::from(output)
-                    } else {
-                        project.dir(output)
-                    }
-                })
-                .unwrap_or_else(|| project.dir("dist").join(&name));
-            // A dev build gets its own folder so it cannot clobber a release one.
-            if profile == Profile::Dev {
-                dev_directory(directory)
-            } else {
-                directory
+        // A target's `output` is used verbatim too (an absolute path as given).
+        None => match target.and_then(|t| t.output.as_deref()) {
+            Some(output) => {
+                if Path::new(output).is_absolute() {
+                    PathBuf::from(output)
+                } else {
+                    project.dir(output)
+                }
             }
-        }
+            // Otherwise the default is organised by profile — `dist/release/<name>`
+            // and `dist/dev/<name>` — so the two never overwrite each other.
+            None => project
+                .dir("dist")
+                .join(profile_directory(profile))
+                .join(&name),
+        },
     };
 
     let bundle = bundle_files(&project, &scene_json, embed_scripts)?;
@@ -124,13 +132,11 @@ pub fn build_project(
     .map_err(|error| error.to_string())
 }
 
-/// A development build's directory: the resolved directory with a `-dev` suffix,
-/// so a dev build cannot clobber a release build of the same target. An explicit
-/// `--out` bypasses this.
-fn dev_directory(directory: PathBuf) -> PathBuf {
-    match directory.file_name() {
-        Some(name) => directory.with_file_name(format!("{}-dev", name.to_string_lossy())),
-        None => directory,
+/// The `dist/` subdirectory a build profile writes to: `dev` or `release`.
+fn profile_directory(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Dev => "dev",
+        Profile::Release => "release",
     }
 }
 
@@ -155,8 +161,12 @@ fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBu
     let text = serde_json::to_string_pretty(&document)
         .map_err(|error| format!("failed to serialise the embed pack: {error}"))?;
     let path = directory.join("scripts.pack.json");
-    std::fs::write(&path, text)
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    // Rewrite only on change: the client's build script reruns when the pack
+    // changes, so a stable file keeps the client from recompiling every build.
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        std::fs::write(&path, &text)
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    }
     Ok(path)
 }
 
@@ -507,8 +517,9 @@ mod tests {
     }
 
     #[test]
-    fn a_dev_build_gets_its_own_directory() {
-        let project = temp_dir("dev-dir");
+    fn output_is_organised_by_profile() {
+        // The project directory names the artifact, so put it in `.../game`.
+        let project = temp_dir("profile-dirs").join("game");
         write(&project.join("noctis.toml"), MANIFEST);
         write(
             &project.join("scenes/main.scene.json"),
@@ -516,7 +527,7 @@ mod tests {
         );
         let runtime = test_runtime();
 
-        // Release (the default) lands in `dist/<name>`.
+        // Release (the default) lands in `dist/release/<name>`.
         let release = build_project(
             &project,
             None,
@@ -526,9 +537,9 @@ mod tests {
             },
         )
         .expect("release build");
-        assert_eq!(release.directory, project.join("dist/Game"));
+        assert_eq!(release.directory, project.join("dist/release/game"));
 
-        // Dev lands beside it, so it cannot clobber the release build.
+        // Dev lands in `dist/dev/<name>`, so it cannot clobber the release build.
         let dev = build_project(
             &project,
             None,
@@ -539,7 +550,40 @@ mod tests {
             },
         )
         .expect("dev build");
-        assert_eq!(dev.directory, project.join("dist/Game-dev"));
+        assert_eq!(dev.directory, project.join("dist/dev/game"));
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_build_names_the_artifact_after_the_project_directory() {
+        // A display name with a space, in a directory called `showcase`.
+        let project = temp_dir("artifact-name").join("showcase");
+        write(
+            &project.join("noctis.toml"),
+            "[project]\nname = \"Noctis Showcase\"\n\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            "{ \"name\": \"Main\", \"entities\": [] }",
+        );
+
+        let report = build_project(
+            &project,
+            None,
+            &BuildOptions {
+                runtime: Some(test_runtime()),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("build");
+
+        // The artifact is the directory name, never the display name.
+        assert_eq!(report.directory, project.join("dist/release/showcase"));
+        assert_eq!(
+            report.executable.file_name().and_then(|n| n.to_str()),
+            Some(crate::export::executable_name("showcase").as_str())
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }

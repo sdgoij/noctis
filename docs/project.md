@@ -367,7 +367,12 @@ one.
 3. applies render/window/input settings from the manifest and the target.
 
 The exported game loads its bundled default scene when run with no arguments
-(already true today).
+(already true today). An artifact's name is `--name`, else the target's `name`,
+else the project directory name: a project at `examples/showcase` builds a
+`showcase` artifact. `[project].name` is a display name (the window title) and is
+never used as a file name. Without an explicit `--out` (or a target's `output`),
+the default destination is `dist/<profile>/<name>`, so a dev build cannot
+overwrite a release build.
 
 *Implemented*: `noctis build --project <dir> [--target <name>]` (and
 `noctis run --project <dir> --export <dir> [--target <name>]`) resolves the

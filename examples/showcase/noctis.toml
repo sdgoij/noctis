@@ -46,13 +46,11 @@ name = "Physics Playground"
 path = "scenes/menu.scene.json"
 name = "2D Menu"
 
-# Build targets: each produces a self-contained folder under dist/.
+# Build targets: each produces a self-contained folder under dist/<profile>/.
 [[build]]
 name = "showcase"
 scene = "scenes/showcase.scene.json"
-output = "dist/showcase"
 
 [[build]]
 name = "showcase-physics"
 scene = "scenes/physics.scene.json"
-output = "dist/showcase-physics"

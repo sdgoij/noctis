@@ -195,10 +195,10 @@ In a scene document it is:
 ### Building and exporting (`noctis build`)
 
 ```sh
-# Export the project's default scene (or --scene) to <project>/dist/<name>.
+# Export the project's default scene (or --scene) to dist/release/<name>.
 cargo run -- build --project mygame
 
-# Build a named [[build]] target (its scene, name, and output are used).
+# Build a named [[build]] target (its scene and name are used).
 cargo run -- build --project mygame --target release
 
 # Override the output or name.
@@ -216,10 +216,14 @@ like:
 [[build]]
 name = "mygame"
 scene = "scenes/main.scene.json"  # defaults to project.settings.default_scene
-output = "dist/mygame"            # project-relative; defaults to dist/<name>
+output = "dist/mygame"            # optional; default is dist/<profile>/<name>
 platform = "host"                 # "host" | "windows" | "macos" | "linux"
 profile = "release"               # "dev" | "release"
 ```
+
+The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md))
+and organises the output: `dist/release/<name>` and `dist/dev/<name>`, so the two
+never overwrite each other.
 
 The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md)):
 
@@ -234,9 +238,12 @@ cargo run -- build --project mygame --profile dev
 
 A **release** client embeds its scripts; a **dev** client reads them from disk and
 hot-reloads a `.js`/`.mjs`/`.wasm` file when it changes, so iterating does not
-require rebuilding the executable. A dev build writes to its own folder (`<name>-dev`,
-or `--out` verbatim) so it does not overwrite a release build. `noctis run` always
-uses the dev shape.
+require rebuilding the executable. `noctis run` always uses the dev shape.
+
+An artifact's name is `--name`, else the target's `name`, else the project
+directory name. A project at `showcase/` builds a `showcase` artifact; a display
+name such as `Noctis Showcase` is used for the window title only and never becomes
+a file name.
 
 ### Renaming assets (`noctis rename`)
 
