@@ -37,7 +37,11 @@ struct Args {
     target: Option<String>,
     demo: bool,
     frames: u32,
+    /// Whether `--frames` was given, so a windowed run can say it ignores it.
+    frames_given: bool,
     dt: f32,
+    /// Whether `--dt` was given, so a windowed run can say it ignores it.
+    dt_given: bool,
     render: bool,
     headless: bool,
     audio: bool,
@@ -56,7 +60,9 @@ impl Default for Args {
             target: None,
             demo: false,
             frames: 300,
+            frames_given: false,
             dt: 1.0 / 60.0,
+            dt_given: false,
             render: false,
             headless: false,
             audio: true,
@@ -121,6 +127,7 @@ impl Args {
                     args.frames = value
                         .parse()
                         .map_err(|_| format!("invalid --frames value '{value}'"))?;
+                    args.frames_given = true;
                 }
                 "--dt" => {
                     let value = it.next().ok_or("--dt requires a number")?;
@@ -131,6 +138,7 @@ impl Args {
                         return Err(format!("--dt must be a positive number, got '{value}'"));
                     }
                     args.dt = dt;
+                    args.dt_given = true;
                 }
                 other => return Err(format!("unknown argument '{other}'")),
             }
@@ -485,6 +493,11 @@ fn run(args: &Args) -> Result<RunSummary, String> {
 
 /// Run the scene in a window until it is closed.
 fn run_windowed(args: &Args) -> Result<(), String> {
+    // `--frames`/`--dt` only shape a headless run: a window runs on wall-clock
+    // time until it is closed, so say so rather than silently ignoring them.
+    if args.frames_given || args.dt_given {
+        log::warn!("--frames/--dt only apply to a headless run and are ignored in a window");
+    }
     let project = open_project(args)?;
     let runtime = build_runtime(args, project.as_ref())?;
     let config = window_config(args, project.as_ref());
@@ -566,5 +579,18 @@ mod tests {
     fn the_removed_window_flag_is_rejected_with_a_hint() {
         let error = parse(&["--window"]).unwrap_err();
         assert!(error.contains("--headless"), "{error}");
+    }
+
+    #[test]
+    fn frames_and_dt_are_recorded_as_given() {
+        let plain = parse(&["--project", "game"]).unwrap().unwrap();
+        assert!(!plain.frames_given && !plain.dt_given, "unset by default");
+
+        let given = parse(&["--headless", "--frames", "10", "--dt", "0.02"])
+            .unwrap()
+            .unwrap();
+        assert!(given.frames_given && given.dt_given);
+        assert_eq!(given.frames, 10);
+        assert!((given.dt - 0.02).abs() < 1e-9);
     }
 }
