@@ -9,7 +9,6 @@ use std::path::PathBuf;
 
 use project::{AssetPath, Project};
 use runtime::build::{BuildOptions, build_project};
-use runtime::export::{RUNTIME_BIN, default_runtime_executable};
 
 /// A top-level CLI failure, distinguished so usage problems can exit `2`.
 #[derive(Debug)]
@@ -100,18 +99,15 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
 
     let project =
         project.ok_or_else(|| CliError::Usage("build requires --project <DIR>".into()))?;
+    // Fail fast on a bad project before spending time building the client.
+    Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
 
-    // Ship the stripped game runtime, not this tool. It must sit beside `noctis`.
-    let runtime = default_runtime_executable()
-        .map_err(|error| CliError::Message(format!("cannot locate the game runtime: {error}")))?;
-    if runtime.file_stem().and_then(|stem| stem.to_str()) != Some(RUNTIME_BIN) {
-        return Err(CliError::Message(
-            "the game runtime was not found next to noctis; build it first \
-             (`cargo build --workspace`, which builds the noctis-game client)"
-                .to_string(),
-        ));
-    }
-    options.runtime = Some(runtime);
+    // Ship the stripped game client, not this tool. `game_client` builds it from
+    // the workspace when it is missing, so `noctis build` is one command.
+    options.runtime =
+        Some(runtime::export::game_client().map_err(|error| {
+            CliError::Message(format!("cannot build the game client: {error}"))
+        })?);
 
     let report = build_project(&PathBuf::from(&project), target.as_deref(), &options)
         .map_err(CliError::Message)?;

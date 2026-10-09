@@ -373,13 +373,16 @@ fn bundled_next_to_exe() -> Option<PathBuf> {
 
 /// Export a self-contained game folder for `destination`.
 fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
+    // Always ship the stripped game client, never this tool.
+    let client = crate::export::game_client()?;
+
     // A project build bundles the referenced assets; a loose scene does not.
     if let Some(dir) = export_project_dir(args) {
         let options = BuildOptions {
             destination: Some(PathBuf::from(destination)),
             name: args.name.clone(),
             scene: args.scene.clone(),
-            ..BuildOptions::default()
+            runtime: Some(client),
         };
         return build_project(Path::new(&dir), args.target.as_deref(), &options);
     }
@@ -394,8 +397,15 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
         .name
         .clone()
         .unwrap_or_else(|| default_game_name(&scene));
-    export_game(Path::new(destination), &name, &scene_json, &[], None, None)
-        .map_err(|err| err.to_string())
+    export_game(
+        Path::new(destination),
+        &name,
+        &scene_json,
+        &[],
+        None,
+        Some(&client),
+    )
+    .map_err(|err| err.to_string())
 }
 
 /// The directory of the project to export from: `--project`, else a bundled one

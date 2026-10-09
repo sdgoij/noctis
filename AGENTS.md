@@ -44,6 +44,10 @@ cargo run   -- editor                   # `noctis` is the default binary (defaul
 cargo run   -- run --project <dir>      # run a project (windowed; --headless to exit)
 ```
 
+`noctis build` and `noctis run --export` build the `noctis-game` client
+themselves (a cargo no-op when it is already fresh), so no separate build step is
+needed.
+
 ## Non-negotiable standards
 
 - **Edition 2024, Rust 1.98.** Toolchain pinned in `rust-toolchain.toml`.

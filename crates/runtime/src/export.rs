@@ -14,6 +14,7 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// The scene file name inside an exported folder.
 pub const BUNDLED_SCENE: &str = "scene.json";
@@ -156,6 +157,66 @@ pub fn default_runtime_executable() -> std::io::Result<PathBuf> {
 pub fn bundled_project(directory: &Path) -> Option<PathBuf> {
     let candidate = directory.join(BUNDLED_PROJECT);
     candidate.is_file().then_some(candidate)
+}
+
+/// The game client an export should ship, building it first if needed.
+///
+/// An export ships [`RUNTIME_BIN`] (`noctis-game`), which lives in `crates/client`.
+/// Rather than require a separate `cargo build`, this builds it from the
+/// workspace — a no-op when it is already up to date — and returns its path. It
+/// needs `cargo` and the workspace; when neither is available it falls back to a
+/// client that already sits beside the running executable, and fails with the
+/// manual command otherwise.
+pub fn game_client() -> Result<PathBuf, String> {
+    if let Some(root) = workspace_root() {
+        let manifest = root.join("crates/client/Cargo.toml");
+        if manifest.is_file() {
+            log::info!("building the game client (cargo build --bin {RUNTIME_BIN})");
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+            let mut command = Command::new(cargo);
+            command
+                .arg("build")
+                .arg("--manifest-path")
+                .arg(&manifest)
+                .arg("--bin")
+                .arg(RUNTIME_BIN);
+            // Match the profile this tool was built with, so the client lands in
+            // the same directory and is found below.
+            if !cfg!(debug_assertions) {
+                command.arg("--release");
+            }
+            match command.status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => return Err(format!("building the game client failed ({status})")),
+                Err(error) => {
+                    log::warn!("could not run cargo to build the game client: {error}");
+                }
+            }
+        }
+    }
+
+    let client = default_runtime_executable().map_err(|error| error.to_string())?;
+    if client.file_stem().and_then(|stem| stem.to_str()) != Some(RUNTIME_BIN) {
+        return Err(format!(
+            "could not find or build the game client ({RUNTIME_BIN}); \
+             build it with `cargo build --workspace`"
+        ));
+    }
+    Ok(client)
+}
+
+/// The workspace root, derived from this crate's manifest directory.
+fn workspace_root() -> Option<PathBuf> {
+    workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+/// The workspace root for a crate at `manifest_dir` (its parent's parent), when
+/// that directory carries a `Cargo.toml`.
+fn workspace_root_from(manifest_dir: &Path) -> Option<PathBuf> {
+    let root = manifest_dir.parent()?.parent()?;
+    root.join("Cargo.toml")
+        .is_file()
+        .then(|| root.to_path_buf())
 }
 
 /// Export a self-contained game folder.
@@ -438,5 +499,21 @@ mod tests {
         fs::create_dir_all(&dir).expect("mkdir");
         assert_eq!(bundled_scene(&dir), None);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn workspace_root_walks_up_two_directories_to_a_manifest() {
+        let root = temp_dir("workspace");
+        fs::create_dir_all(root.join("crates/runtime")).expect("mkdir");
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write");
+
+        assert_eq!(
+            workspace_root_from(&root.join("crates/runtime")),
+            Some(root.clone())
+        );
+        // Two levels up from here is `crates`, with no Cargo.toml of its own.
+        assert_eq!(workspace_root_from(&root.join("crates/runtime/deep")), None);
+
+        fs::remove_dir_all(&root).ok();
     }
 }

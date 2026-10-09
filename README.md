@@ -205,11 +205,12 @@ cargo run -- build --project mygame --target release
 cargo run -- build --project mygame --out dist/demo --name demo
 ```
 
-A build writes a self-contained folder: the runtime executable, `scene.json`,
-every asset the scene references (resolved transitively through the import index),
-a generated `noctis.toml` so the exported game imports its own assets, and
-`noctis-game.json`. Running the exported executable with no arguments loads its
-bundled scene. A `[[build]]` target looks like:
+A build writes a self-contained folder: the `noctis-game` client (built on
+demand when missing), `scene.json`, every asset the scene references (resolved
+transitively through the import index), a generated `noctis.toml` so the exported
+game imports its own assets, and `noctis-game.json`. Running the exported
+executable with no arguments loads its bundled scene. A `[[build]]` target looks
+like:
 
 ```toml
 [[build]]
