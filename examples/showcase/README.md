@@ -153,7 +153,8 @@ executable in its folder with no arguments to play the bundled scene.
 The default `release` profile bakes the default scene's scripts into the client,
 so the game folder carries no `scripts/` directory; `--profile dev` copies them in
 instead and the client hot-reloads them as you edit (see
-[`docs/scripts.md`](../../docs/scripts.md)).
+[`docs/scripts.md`](../../docs/scripts.md)). A dev build writes to its own folder
+(`dist/Noctis Showcase-dev`), so it does not overwrite the release build.
 
 ```sh
 cargo run -- build --project examples/showcase --profile dev

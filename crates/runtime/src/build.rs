@@ -69,29 +69,39 @@ pub fn build_project(
         .clone()
         .or_else(|| target.map(|t| t.name.clone()))
         .unwrap_or_else(|| project.name().to_string());
-    let destination = options
-        .destination
-        .clone()
-        .or_else(|| {
-            // A target's `output` is project-relative (an absolute path is used
-            // as given).
-            target.and_then(|t| t.output.as_deref()).map(|output| {
-                if Path::new(output).is_absolute() {
-                    PathBuf::from(output)
-                } else {
-                    project.dir(output)
-                }
-            })
-        })
-        .unwrap_or_else(|| project.dir("dist").join(&name));
 
-    // A release build bakes the scripts into the client and leaves them out of
-    // the folder; a development build ships them as loose files to watch.
+    // The profile decides how scripts ship (release embeds them, dev ships them as
+    // loose files) and where a dev build lands, so it is resolved first.
     let profile = options
         .profile
         .or_else(|| target.map(|target| target.profile))
         .unwrap_or_default();
     let embed_scripts = profile == Profile::Release;
+
+    let destination = match options.destination.clone() {
+        // An explicit `--out` is used verbatim.
+        Some(destination) => destination,
+        None => {
+            // A target's `output` is project-relative (an absolute path is used as
+            // given); with no target it is `dist/<name>`.
+            let directory = target
+                .and_then(|t| t.output.as_deref())
+                .map(|output| {
+                    if Path::new(output).is_absolute() {
+                        PathBuf::from(output)
+                    } else {
+                        project.dir(output)
+                    }
+                })
+                .unwrap_or_else(|| project.dir("dist").join(&name));
+            // A dev build gets its own folder so it cannot clobber a release one.
+            if profile == Profile::Dev {
+                dev_directory(directory)
+            } else {
+                directory
+            }
+        }
+    };
 
     let bundle = bundle_files(&project, &scene_json, embed_scripts)?;
     let pack = if bundle.scripts.is_empty() {
@@ -112,6 +122,16 @@ pub fn build_project(
         Some(&client),
     )
     .map_err(|error| error.to_string())
+}
+
+/// A development build's directory: the resolved directory with a `-dev` suffix,
+/// so a dev build cannot clobber a release build of the same target. An explicit
+/// `--out` bypasses this.
+fn dev_directory(directory: PathBuf) -> PathBuf {
+    match directory.file_name() {
+        Some(name) => directory.with_file_name(format!("{}-dev", name.to_string_lossy())),
+        None => directory,
+    }
 }
 
 /// Write the embed pack `noctis build` hands to the client build: the scripts to
@@ -484,5 +504,43 @@ mod tests {
 
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn a_dev_build_gets_its_own_directory() {
+        let project = temp_dir("dev-dir");
+        write(&project.join("noctis.toml"), MANIFEST);
+        write(
+            &project.join("scenes/main.scene.json"),
+            "{ \"name\": \"Main\", \"entities\": [] }",
+        );
+        let runtime = test_runtime();
+
+        // Release (the default) lands in `dist/<name>`.
+        let release = build_project(
+            &project,
+            None,
+            &BuildOptions {
+                runtime: Some(runtime.clone()),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("release build");
+        assert_eq!(release.directory, project.join("dist/Game"));
+
+        // Dev lands beside it, so it cannot clobber the release build.
+        let dev = build_project(
+            &project,
+            None,
+            &BuildOptions {
+                runtime: Some(runtime),
+                profile: Some(Profile::Dev),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("dev build");
+        assert_eq!(dev.directory, project.join("dist/Game-dev"));
+
+        std::fs::remove_dir_all(&project).ok();
     }
 }

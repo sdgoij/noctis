@@ -234,7 +234,9 @@ cargo run -- build --project mygame --profile dev
 
 A **release** client embeds its scripts; a **dev** client reads them from disk and
 hot-reloads a `.js`/`.mjs`/`.wasm` file when it changes, so iterating does not
-require rebuilding the executable. `noctis run` always uses the dev shape.
+require rebuilding the executable. A dev build writes to its own folder (`<name>-dev`,
+or `--out` verbatim) so it does not overwrite a release build. `noctis run` always
+uses the dev shape.
 
 ### Renaming assets (`noctis rename`)
 

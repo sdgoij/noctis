@@ -49,10 +49,15 @@ Scripts are therefore loose files under `dist/<game>/scripts/`. This is the
 `[build] profile` in the manifest (`dev` | `release`, default `release`) selects
 the shape, and `noctis build --profile` overrides it. The mapping:
 
-| profile | client | scripts in `dist` | script source |
-|---|---|---|---|
-| `release` | `--release` | no | embedded (`NOCTIS_EMBED_PACK`) |
-| `dev` | debug | yes | disk, watched |
+| profile | client | scripts in `dist` | script source | directory |
+|---|---|---|---|---|
+| `release` | `--release` | no | embedded (`NOCTIS_EMBED_PACK`) | as resolved |
+| `dev` | debug | yes | disk, watched | `…-dev` |
+
+A dev build never shares a folder with a release build: unless the destination is
+given explicitly with `--out`, the profile appends `-dev` to the resolved
+directory (the default `dist/<name>`, or a target's `output`), so building dev
+cannot overwrite the release build. `--out` is used verbatim.
 
 `noctis run` is always the development shape, regardless of any manifest.
 
