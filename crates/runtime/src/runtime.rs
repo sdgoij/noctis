@@ -614,6 +614,55 @@ mod tests {
     }
 
     #[test]
+    fn the_watcher_reloads_a_saved_script() {
+        use std::time::{Duration, Instant};
+
+        let root = std::env::temp_dir().join(format!("noctis-watch-{}", std::process::id()));
+        let scripts = root.join("scripts");
+        std::fs::create_dir_all(&scripts).expect("scripts dir");
+        let file = scripts.join("spin.js");
+        std::fs::write(&file, "first();").expect("write script");
+
+        let mut host = RecordingHost::new();
+        host.on("on_start", |_api: &mut ScriptApi<'_, '_>| {});
+
+        let mut scene = Scene::new("Watch");
+        let entity = scene.world.spawn();
+        scene.world.insert(entity, LocalTransform::default());
+        scene
+            .world
+            .insert(entity, Script::from_path("scripts/spin.js"));
+
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::from_parts(scene, AssetRegistry::new(), config, host);
+        runtime.watch_scripts(&root).expect("watch the project");
+        assert!(runtime.reload_script("scripts/spin.js"));
+        runtime.run_headless(1, 1.0 / 60.0);
+        assert_eq!(runtime.script().host().count_calls("on_start"), 1);
+
+        // Saving the file reaches the watcher, which reloads it without any
+        // manual call; the next frame re-runs `on_start`.
+        std::fs::write(&file, "second();").expect("rewrite script");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut reloaded = false;
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            runtime.run_headless(1, 1.0 / 60.0);
+            let started = runtime.script().host().count_calls("on_start");
+            if started >= 2 {
+                reloaded = true;
+                break;
+            }
+        }
+        assert!(reloaded, "the watcher did not reload the saved script");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn renderer_enable_degrades_without_an_adapter() {
         // The demo scene has an active camera and renderable geometry, so a
         // successful renderer should produce a frame.
