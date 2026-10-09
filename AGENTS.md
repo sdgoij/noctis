@@ -71,6 +71,10 @@ needed.
 3. GPU tests must **skip gracefully** when no adapter is present
    (`RenderError::NoAdapter`); never fail CI because a machine lacks a GPU.
 4. Audio tests must run **without a device** (`AudioEngine::silent()`).
+5. The **`examples/showcase` project is the end-to-end spine**: its scenes are
+   not only loaded but *run* through the runtime with the real Slag engine
+   (`crates/runtime/tests/showcase_scenes.rs`), so a component or script that
+   stops moving an entity fails the suite. Update it when a scene changes.
 
 ## Adding a component (checklist)
 

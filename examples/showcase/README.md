@@ -303,3 +303,7 @@ cargo test --workspace
   `NOCTIS_PREVIEWS=target/previews` to also write the frames out as PNGs.
 - `crates/script/tests/showcase_scripts.rs` — runs all five scripts in the real
   engine (`cargo test -p script --test showcase_scripts`).
+- `crates/runtime/tests/showcase_scenes.rs` — runs each scene through the runtime
+  with the real Slag engine and requires its scripts to move their entities (the
+  spinners turn, the bobbers leave their authored height) without errors
+  (`cargo test --manifest-path crates/runtime/Cargo.toml --test showcase_scenes`).
