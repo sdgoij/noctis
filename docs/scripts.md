@@ -51,12 +51,12 @@ the shape, and `noctis build --profile` overrides it. The mapping:
 
 | profile | client | scripts in `dist` | script source | output |
 |---|---|---|---|---|
-| `release` | `--release` | no | embedded (`NOCTIS_EMBED_PACK`) | `dist/release/<name>` |
-| `dev` | debug | yes | disk, watched | `dist/dev/<name>` |
+| `release` | `--release` | no | embedded (`NOCTIS_EMBED_PACK`) | `dist/release/` |
+| `dev` | debug | yes | disk, watched | `dist/dev/` |
 
 A dev build never shares a folder with a release build: the default destination is
-organised by profile (`dist/<profile>/<name>`). An explicit `--out`, or a target's
-`output`, is used verbatim instead.
+organised by profile. A named `[[build]]` target writes to `dist/<profile>/<target>`;
+an explicit `--out`, or a target's `output`, is used verbatim instead.
 
 `noctis run` is always the development shape, regardless of any manifest.
 

@@ -83,7 +83,7 @@ pub fn build_project(
         });
 
     // The profile decides how scripts ship (release embeds them, dev ships them as
-    // loose files) and where a dev build lands, so it is resolved first.
+    // loose files) and names the output folder, so it is resolved first.
     let profile = options
         .profile
         .or_else(|| target.map(|target| target.profile))
@@ -102,12 +102,18 @@ pub fn build_project(
                     project.dir(output)
                 }
             }
-            // Otherwise the default is organised by profile — `dist/release/<name>`
-            // and `dist/dev/<name>` — so the two never overwrite each other.
-            None => project
-                .dir("dist")
-                .join(profile_directory(profile))
-                .join(&name),
+            // Otherwise output is organised by profile: `dist/release/` and
+            // `dist/dev/`. A named artifact (a `[[build]]` target, or `--name`)
+            // gets its own folder under the profile; the project's own build is
+            // the profile folder itself, since the project already names the game.
+            None => {
+                let directory = project.dir("dist").join(profile_directory(profile));
+                if target.is_some() || options.name.is_some() {
+                    directory.join(&name)
+                } else {
+                    directory
+                }
+            }
         },
     };
 
@@ -527,7 +533,7 @@ mod tests {
         );
         let runtime = test_runtime();
 
-        // Release (the default) lands in `dist/release/<name>`.
+        // Release (the default) lands in `dist/release`.
         let release = build_project(
             &project,
             None,
@@ -537,9 +543,9 @@ mod tests {
             },
         )
         .expect("release build");
-        assert_eq!(release.directory, project.join("dist/release/game"));
+        assert_eq!(release.directory, project.join("dist/release"));
 
-        // Dev lands in `dist/dev/<name>`, so it cannot clobber the release build.
+        // Dev lands in `dist/dev`, so it cannot clobber the release build.
         let dev = build_project(
             &project,
             None,
@@ -550,7 +556,33 @@ mod tests {
             },
         )
         .expect("dev build");
-        assert_eq!(dev.directory, project.join("dist/dev/game"));
+        assert_eq!(dev.directory, project.join("dist/dev"));
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn a_named_target_gets_its_own_folder_under_the_profile() {
+        let project = temp_dir("profile-targets");
+        write(
+            &project.join("noctis.toml"),
+            "[project]\nname = \"Game\"\n\n[[build]]\nname = \"level-one\"\nscene = \"scenes/main.scene.json\"\n",
+        );
+        write(
+            &project.join("scenes/main.scene.json"),
+            "{ \"name\": \"Main\", \"entities\": [] }",
+        );
+
+        let report = build_project(
+            &project,
+            Some("level-one"),
+            &BuildOptions {
+                runtime: Some(test_runtime()),
+                ..BuildOptions::default()
+            },
+        )
+        .expect("build");
+        assert_eq!(report.directory, project.join("dist/release/level-one"));
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -578,8 +610,9 @@ mod tests {
         )
         .expect("build");
 
-        // The artifact is the directory name, never the display name.
-        assert_eq!(report.directory, project.join("dist/release/showcase"));
+        // The artifact is the directory name, never the display name; the
+        // project's own build is the profile folder itself.
+        assert_eq!(report.directory, project.join("dist/release"));
         assert_eq!(
             report.executable.file_name().and_then(|n| n.to_str()),
             Some(crate::export::executable_name("showcase").as_str())

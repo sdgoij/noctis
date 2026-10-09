@@ -138,11 +138,10 @@ cargo run -- run --project examples/showcase --scene scenes/board.scene.json
 ## Build it
 
 ```sh
-# Bundle the default scene. With no --target the artifact takes the project
-# directory's name, so this writes showcase/dist/release/showcase/.
+# Bundle the default scene to dist/release/.
 cargo run -- build --project examples/showcase
 
-# A named [[build]] target supplies its own name, e.g. dist/release/showcase-physics/.
+# A named [[build]] target gets its own folder, e.g. dist/release/showcase-physics/.
 cargo run -- build --project examples/showcase --target showcase-physics
 ```
 
@@ -154,8 +153,8 @@ The default `release` profile bakes the default scene's scripts into the client,
 so the game folder carries no `scripts/` directory; `--profile dev` copies them in
 instead and the client hot-reloads them as you edit (see
 [`docs/scripts.md`](../../docs/scripts.md)). Builds are organised by profile
-(`dist/release/showcase`, `dist/dev/showcase`), so a dev build does not overwrite
-the release build.
+(`dist/release/`, `dist/dev/`), so a dev build does not overwrite the release
+build.
 
 ```sh
 cargo run -- build --project examples/showcase --profile dev

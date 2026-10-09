@@ -195,7 +195,7 @@ In a scene document it is:
 ### Building and exporting (`noctis build`)
 
 ```sh
-# Export the project's default scene (or --scene) to dist/release/<name>.
+# Export the project's default scene (or --scene) to dist/release/.
 cargo run -- build --project mygame
 
 # Build a named [[build]] target (its scene and name are used).
@@ -216,14 +216,15 @@ like:
 [[build]]
 name = "mygame"
 scene = "scenes/main.scene.json"  # defaults to project.settings.default_scene
-output = "dist/mygame"            # optional; default is dist/<profile>/<name>
+output = "dist/mygame"            # optional; default is dist/<profile>/
 platform = "host"                 # "host" | "windows" | "macos" | "linux"
 profile = "release"               # "dev" | "release"
 ```
 
 The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md))
-and organises the output: `dist/release/<name>` and `dist/dev/<name>`, so the two
-never overwrite each other.
+and organises the output: `dist/release/` and `dist/dev/`, so the two never
+overwrite each other. A named `[[build]]` target gets its own folder under the
+profile (`dist/release/<target>`).
 
 The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md)):
 
