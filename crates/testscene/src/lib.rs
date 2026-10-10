@@ -90,6 +90,12 @@ export function on_update(api) {
   }
   api.destroy_by_name("obsolete");
   api.instantiate_prefab("{}", self);
+  if (api.has_component(self, "Health")) {
+    const health = JSON.parse(api.get_component(self, "Health"));
+    health.current = health.current + 1;
+    api.set_component(self, "Health", JSON.stringify(health));
+    api.remove_component(self, "Health");
+  }
   if (api.is_alive(self)) {
     api.log("tick " + dt);
   }

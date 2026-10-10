@@ -112,7 +112,11 @@ impl<H: ScriptHost + 'static> Runtime<H> {
 
         let physics = Arc::new(Mutex::new(PhysicsWorld::new(config.physics_config())));
         let audio = Arc::new(Mutex::new(audio_engine));
-        let script = Arc::new(Mutex::new(ScriptRuntime::with_host(host)));
+        // The scene carries the registry of registered (plugin) components, which
+        // scripts read and write by name through reflection.
+        let mut script_runtime = ScriptRuntime::with_host(host);
+        script_runtime.set_components(scene.components.clone());
+        let script = Arc::new(Mutex::new(script_runtime));
 
         let mut app = App::new(scene.name.clone());
         app.context.scene = scene;
@@ -423,6 +427,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use ecs::components::{GlobalTransform, LocalTransform, Name, Script};
+    use ecs::reflect::ComponentRegistry;
     use math::vec3_approx_eq;
     use script::{RecordingHost, ScriptApi};
 
@@ -485,6 +490,62 @@ mod tests {
             .expect("entity has a global transform")
             .position()
             .y
+    }
+
+    #[test]
+    fn a_script_reflects_a_custom_component_through_the_runtime() {
+        // A scene that carries the registry, with an inline script whose behaviour
+        // reads and writes the custom component the plugin would register.
+        #[derive(
+            Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component,
+        )]
+        struct Health {
+            current: f32,
+            max: f32,
+        }
+
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Health>();
+        let assets = AssetRegistry::with_defaults();
+        let json = r#"{
+            "name": "Reflect",
+            "entities": [{
+                "id": 0, "name": "Hero",
+                "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                "components": [
+                    { "type": "script", "source": "function on_update(entity, dt) {}", "path": null, "enabled": true },
+                    { "type": "custom", "name": "Health", "data": { "current": 1.0, "max": 10.0 } }
+                ]
+            }]
+        }"#;
+        let scene = Scene::from_json_with(json, &assets, &registry).expect("scene loads");
+
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            let entity = api.current_entity().unwrap();
+            let json = api
+                .get_component(entity, "Health")
+                .expect("Health is present");
+            assert!(json.contains("\"max\":10.0"), "{json}");
+            api.set_component(entity, "Health", r#"{"current":5.0,"max":10.0}"#)
+                .expect("set");
+        });
+
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(scene, config, host);
+        runtime.run_headless(2, 1.0 / 60.0);
+
+        let hero = entity_named(&runtime, "Hero").expect("Hero exists");
+        assert_eq!(
+            runtime.scene().world.get::<Health>(hero),
+            Some(&Health {
+                current: 5.0,
+                max: 10.0
+            })
+        );
     }
 
     #[test]

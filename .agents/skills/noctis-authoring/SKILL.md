@@ -86,7 +86,23 @@ The API (see `crates/script/src/slag.rs` for the exact surface):
 | `mouse_down("left"\|"right"\|"middle")` | |
 | `add_script(handle, source)` | attaches inline source; starts next frame |
 | `instantiate_prefab(json, parentHandle) -> handle` | parent is `undefined`/omitted for none; the prefab travels as **JSON text** |
+| `has_component(h, name) -> bool` | a **registered** component (a plugin's custom one; see below) |
+| `get_component(h, name) -> string` | the component as **JSON text**, or `""` when absent |
+| `set_component(h, name, json)` | from JSON text; a type/field mismatch is a logged error, not a crash |
+| `remove_component(h, name)` | |
 | `log(message)` | |
+
+The component reflection calls work for any component the project's **plugin**
+registers (a `[rust]` project's custom components); built-in components have their
+dedicated calls (`get_position`, …). Round-trip through JSON:
+
+```js
+if (has_component(entity, "Health")) {
+  const health = JSON.parse(get_component(entity, "Health")); // {"current":10,"max":20}
+  health.current -= damage;
+  set_component(entity, "Health", JSON.stringify(health));
+}
+```
 
 Because the vector getters return strings, parse them:
 

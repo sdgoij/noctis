@@ -357,6 +357,67 @@ impl SlagHost {
             }),
         )?;
 
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "has_component",
+            2,
+            Box::new(move |call| {
+                let has = match (arg_entity(&h.borrow(), call, 0), arg_string(call, 1)) {
+                    (Some(id), Some(name)) => b.borrow().has_component(id, &name),
+                    _ => false,
+                };
+                Ok(slag::JsValue::boolean(has))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "get_component",
+            2,
+            Box::new(move |call| {
+                // A JSON string, or `""` when the entity or component is absent.
+                let json = match (arg_entity(&h.borrow(), call, 0), arg_string(call, 1)) {
+                    (Some(id), Some(name)) => b.borrow().component_json(id, &name),
+                    _ => None,
+                };
+                Ok(slag::JsValue::string(json.unwrap_or_default()))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "set_component",
+            3,
+            Box::new(move |call| {
+                if let (Some(id), Some(name), Some(json)) = (
+                    arg_entity(&h.borrow(), call, 0),
+                    arg_string(call, 1),
+                    arg_string(call, 2),
+                ) {
+                    b.borrow_mut().set_component(id, &name, json);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "remove_component",
+            2,
+            Box::new(move |call| {
+                if let (Some(id), Some(name)) =
+                    (arg_entity(&h.borrow(), call, 0), arg_string(call, 1))
+                {
+                    b.borrow_mut().remove_component(id, &name);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
         Ok(())
     }
 
@@ -542,6 +603,90 @@ mod tests {
                 .command_log()
                 .iter()
                 .any(|c| matches!(c, ScriptCommand::Log { .. }))
+        );
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    fn health_runtime() -> ScriptRuntime<SlagHost> {
+        let host = SlagHost::new().expect("slag engine starts");
+        let mut runtime = ScriptRuntime::with_host(host);
+        let mut registry = ecs::reflect::ComponentRegistry::new();
+        registry.register::<Health>();
+        runtime.set_components(registry);
+        runtime
+    }
+
+    const REFLECT_SOURCE: &str = "
+        function on_update(entity, dt) {
+            var health = JSON.parse(get_component(entity, 'Health'));
+            health.current = health.current + 5;
+            set_component(entity, 'Health', JSON.stringify(health));
+        }
+    ";
+
+    #[test]
+    fn a_script_reads_and_writes_a_registered_component() {
+        let mut runtime = health_runtime();
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Health {
+                current: 10.0,
+                max: 20.0,
+            },
+        );
+        world.insert(entity, Script::from_source(REFLECT_SOURCE));
+
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        assert_eq!(
+            world.get::<Health>(entity),
+            Some(&Health {
+                current: 15.0,
+                max: 20.0
+            })
+        );
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
+        );
+    }
+
+    #[test]
+    fn a_script_removes_a_registered_component() {
+        let mut runtime = health_runtime();
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Health {
+                current: 1.0,
+                max: 2.0,
+            },
+        );
+        world.insert(
+            entity,
+            Script::from_source(
+                "function on_update(entity, dt) { if (has_component(entity, 'Health')) { remove_component(entity, 'Health'); } }",
+            ),
+        );
+
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        assert!(world.get::<Health>(entity).is_none());
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
         );
     }
 }

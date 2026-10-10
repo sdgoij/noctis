@@ -3209,6 +3209,7 @@ dependencies = [
  "ecs",
  "log",
  "math",
+ "serde",
  "serde_json",
  "slag",
 ]

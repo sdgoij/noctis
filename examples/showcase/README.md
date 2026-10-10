@@ -204,8 +204,10 @@ getters (`get_position`, `get_rotation_euler`, `get_scale`) return a
 The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 `set_position`/`translate`, `set_rotation_euler`, `set_scale`, `time_delta`,
 `time_elapsed`, `key_down` (winit key names such as `KeyW`, `Space`,
-`ArrowUp`), `mouse_down` (`left`/`right`/`middle`), `add_script`, `log`, and
-`instantiate_prefab`.
+`ArrowUp`), `mouse_down` (`left`/`right`/`middle`), `add_script`, `log`,
+`instantiate_prefab`, and the component reflection calls `has_component`,
+`get_component`, `set_component`, `remove_component` (for a `[rust]` project's
+registered custom components; JSON text, see `docs/embedding.md`).
 
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.

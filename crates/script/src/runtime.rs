@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use ecs::assets::AssetRegistry;
 use ecs::components::Script;
+use ecs::reflect::ComponentRegistry;
 use ecs::resources::InputState;
 use ecs::world::{Entity, World};
 
@@ -69,6 +70,9 @@ pub struct ScriptRuntime<H: ScriptHost = NoopHost> {
     instances: HashMap<Entity, ScriptInstance>,
     modules: HashMap<String, ModuleId>,
     input: InputState,
+    /// The registered components scripts read and write by name (reflection).
+    /// Empty until the caller sets them (`set_components`).
+    components: ComponentRegistry,
     elapsed: f32,
     last_delta: f32,
     report: RunReport,
@@ -95,11 +99,24 @@ impl<H: ScriptHost> ScriptRuntime<H> {
             instances: HashMap::new(),
             modules: HashMap::new(),
             input: InputState::new(),
+            components: ComponentRegistry::new(),
             elapsed: 0.0,
             last_delta: 0.0,
             report: RunReport::default(),
             command_log: Vec::new(),
         }
+    }
+
+    /// Set the registered components scripts read and write by name.
+    ///
+    /// The runtime reloads a scene's registry on load (it travels on the scene).
+    pub fn set_components(&mut self, components: ComponentRegistry) {
+        self.components = components;
+    }
+
+    /// The registered components scripts read and write by name.
+    pub fn components(&self) -> &ComponentRegistry {
+        &self.components
     }
 
     /// The host.
@@ -312,6 +329,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         let Self {
             host,
             instances,
+            components,
             input,
             elapsed,
             command_log,
@@ -331,6 +349,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         let mut ctx = ScriptContext {
             world,
             assets,
+            components: &*components,
             input: &*input,
             elapsed: *elapsed,
             delta: dt,

@@ -218,9 +218,16 @@ mod tests {
     use super::*;
     use crate::api::ScriptContext;
     use ecs::assets::AssetRegistry;
+    use ecs::reflect::ComponentRegistry;
     use ecs::resources::InputState;
     use ecs::world::World;
     use math::vec3;
+
+    /// An empty registry, for the tests that do not exercise reflection.
+    fn empty_components() -> &'static ComponentRegistry {
+        static EMPTY: std::sync::OnceLock<ComponentRegistry> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(ComponentRegistry::new)
+    }
 
     #[test]
     fn eval_script_deduplicates_sources() {
@@ -241,7 +248,7 @@ mod tests {
         let mut world = World::new();
         let assets = AssetRegistry::new();
         let input = InputState::new();
-        let mut ctx = ScriptContext::new(&mut world, &assets, &input);
+        let mut ctx = ScriptContext::new(&mut world, &assets, empty_components(), &input);
         host.set_pending_api(PendingApi::default());
         host.call_lifecycle(0, "on_update", &mut ctx);
         assert!(ctx.commands.is_empty());
@@ -254,7 +261,7 @@ mod tests {
         let mut world = World::new();
         let assets = AssetRegistry::new();
         let input = InputState::new();
-        let mut ctx = ScriptContext::new(&mut world, &assets, &input);
+        let mut ctx = ScriptContext::new(&mut world, &assets, empty_components(), &input);
         ctx.entity = Some(42);
         host.set_pending_api(PendingApi {
             entity: Some(42),
@@ -283,7 +290,7 @@ mod tests {
         let entity = world.spawn();
         let assets = AssetRegistry::new();
         let input = InputState::new();
-        let mut ctx = ScriptContext::new(&mut world, &assets, &input);
+        let mut ctx = ScriptContext::new(&mut world, &assets, empty_components(), &input);
         ctx.entity = Some(crate::api::entity_id(entity));
 
         host.call_lifecycle(module, "on_update", &mut ctx);

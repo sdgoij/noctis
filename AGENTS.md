@@ -133,6 +133,11 @@ needed.
   **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.
+  **Component reflection**: JavaScript reads and writes a project's registered
+  (custom) components by name through `has_component`/`get_component` (JSON text)/
+  `set_component`/`remove_component`, backed by the `ComponentRegistry` on the
+  scene (`ScriptCommand::SetComponent`/`RemoveComponent`). Built-in components use
+  their dedicated calls; native-WebAssembly reflection is a follow-up.
 - `noctis build` ships scripts by **profile** (see [`docs/scripts.md`](docs/scripts.md)):
   a `release` build bakes the scene's `.js`/`.wasm` into the `noctis-game` client
   (via `NOCTIS_EMBED_PACK` → `crates/client/build.rs` → `include_bytes!`) and

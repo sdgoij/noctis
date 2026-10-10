@@ -84,6 +84,9 @@ pub(crate) struct Bridge {
     pub(crate) scales: HashMap<EntityId, Vec3>,
     /// Names in the snapshot, for `find`.
     pub(crate) names: HashMap<String, EntityId>,
+    /// Registered components in the snapshot, keyed by entity then component
+    /// name, as JSON strings (the reflection registry's serialization).
+    pub(crate) components: HashMap<EntityId, HashMap<String, String>>,
     /// The number of placeholders handed out so far this call.
     pub(crate) next_placeholder: u64,
     /// Commands queued during the call, replayed afterwards.
@@ -101,9 +104,14 @@ impl Bridge {
         self.rotations.clear();
         self.scales.clear();
         self.names.clear();
+        self.components.clear();
         self.next_placeholder = 0;
         self.commands.clear();
 
+        // The registered components a script can read reflectively. Serializing
+        // them once per call is the cost of the generic path; a per-component
+        // cache is a later optimization (see docs/embedding.md).
+        let component_names = ctx.components.names();
         for entity in ctx.world.entities().iter() {
             let id = entity_id(entity);
             if let Some(name) = ctx.world.get::<Name>(entity) {
@@ -113,6 +121,19 @@ impl Bridge {
                 self.positions.insert(id, t.translation);
                 self.rotations.insert(id, euler(t.rotation));
                 self.scales.insert(id, t.scale);
+            }
+            if !component_names.is_empty() {
+                let mut map = HashMap::new();
+                for name in &component_names {
+                    if let Some(value) = ctx.components.serialize(&*ctx.world, entity, name)
+                        && let Ok(text) = serde_json::to_string(&value)
+                    {
+                        map.insert((*name).to_string(), text);
+                    }
+                }
+                if !map.is_empty() {
+                    self.components.insert(id, map);
+                }
             }
         }
     }
@@ -210,6 +231,46 @@ impl Bridge {
     pub(crate) fn find(&self, name: &str) -> Option<EntityId> {
         self.names.get(name).copied()
     }
+
+    /// Whether the snapshot has the component `name` on `id`.
+    pub(crate) fn has_component(&self, id: EntityId, name: &str) -> bool {
+        self.components
+            .get(&id)
+            .is_some_and(|map| map.contains_key(name))
+    }
+
+    /// The snapshot's JSON for the component `name` on `id`.
+    pub(crate) fn component_json(&self, id: EntityId, name: &str) -> Option<String> {
+        self.components
+            .get(&id)
+            .and_then(|map| map.get(name))
+            .cloned()
+    }
+
+    /// Queue a component write, updating the snapshot so a later read in the same
+    /// call sees it.
+    pub(crate) fn set_component(&mut self, id: EntityId, name: &str, json: String) {
+        self.components
+            .entry(id)
+            .or_default()
+            .insert(name.to_string(), json.clone());
+        self.commands.push(ScriptCommand::SetComponent {
+            entity: id,
+            name: name.to_string(),
+            json,
+        });
+    }
+
+    /// Queue a component removal.
+    pub(crate) fn remove_component(&mut self, id: EntityId, name: &str) {
+        if let Some(map) = self.components.get_mut(&id) {
+            map.remove(name);
+        }
+        self.commands.push(ScriptCommand::RemoveComponent {
+            entity: id,
+            name: name.to_string(),
+        });
+    }
 }
 
 /// Replay a call's queued commands against the real world, translating
@@ -255,6 +316,16 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
                 if let (Some(placeholder), Some(first)) = (root, created.first()) {
                     map.insert(placeholder, *first);
                 }
+            }
+            ScriptCommand::SetComponent { entity, name, json } => {
+                // A bad JSON body or type mismatch is a logged script error, not a
+                // panic; the script keeps running.
+                if let Err(error) = api.set_component(resolve(&map, entity), &name, &json) {
+                    log::warn!("script set_component failed: {error}");
+                }
+            }
+            ScriptCommand::RemoveComponent { entity, name } => {
+                api.remove_component(resolve(&map, entity), &name);
             }
         }
     }

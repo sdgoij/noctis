@@ -13,6 +13,7 @@
 
 use ecs::assets::AssetRegistry;
 use ecs::components::{LocalTransform, Name, Script};
+use ecs::reflect::ComponentRegistry;
 use ecs::resources::{InputState, Key, MouseButton};
 use ecs::scene::Prefab;
 use ecs::world::{Entity, World};
@@ -104,6 +105,22 @@ pub enum ScriptCommand {
         /// The new source.
         source: String,
     },
+    /// A registered component was set from JSON.
+    SetComponent {
+        /// The entity.
+        entity: EntityId,
+        /// The component's registered name.
+        name: String,
+        /// The JSON the component was (or was to be) set from.
+        json: String,
+    },
+    /// A registered component was removed.
+    RemoveComponent {
+        /// The entity.
+        entity: EntityId,
+        /// The component's registered name.
+        name: String,
+    },
     /// A prefab was instantiated.
     InstantiatePrefab {
         /// The prefab JSON that was parsed.
@@ -130,6 +147,9 @@ pub struct ScriptContext<'a> {
     pub world: &'a mut World,
     /// The asset registry, used to resolve script paths and prefab assets.
     pub assets: &'a AssetRegistry,
+    /// The registered components (`World` stores any type; this is the
+    /// reflection registry) scripts read and write by name.
+    pub components: &'a ComponentRegistry,
     /// Input state for the current frame.
     pub input: &'a InputState,
     /// Total elapsed scaled time, seconds.
@@ -144,10 +164,19 @@ pub struct ScriptContext<'a> {
 
 impl<'a> ScriptContext<'a> {
     /// A context with no current entity and an empty command log.
-    pub fn new(world: &'a mut World, assets: &'a AssetRegistry, input: &'a InputState) -> Self {
+    ///
+    /// `components` is the reflection registry scripts read and write by name;
+    /// pass an empty one when there are no registered components.
+    pub fn new(
+        world: &'a mut World,
+        assets: &'a AssetRegistry,
+        components: &'a ComponentRegistry,
+        input: &'a InputState,
+    ) -> Self {
         Self {
             world,
             assets,
+            components,
             input,
             elapsed: 0.0,
             delta: 0.0,
@@ -248,6 +277,69 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
     /// `true` if the entity handle is still alive.
     pub fn is_alive(&self, id: EntityId) -> bool {
         entity_from_id(self.ctx.world, id).is_some()
+    }
+
+    // -- registered components (reflection) --------------------------------
+
+    /// `true` if `entity` carries the component registered as `name`.
+    pub fn has_component(&self, id: EntityId, name: &str) -> bool {
+        entity_from_id(self.ctx.world, id)
+            .is_some_and(|entity| self.ctx.components.has_on(&*self.ctx.world, entity, name))
+    }
+
+    /// The component registered as `name` on `entity`, serialized to a JSON
+    /// string, or `None` when the entity or component is absent.
+    pub fn get_component(&self, id: EntityId, name: &str) -> Option<String> {
+        let entity = entity_from_id(self.ctx.world, id)?;
+        let value = self
+            .ctx
+            .components
+            .serialize(&*self.ctx.world, entity, name)?;
+        serde_json::to_string(&value).ok()
+    }
+
+    /// Set the component registered as `name` on `entity` from a JSON string.
+    ///
+    /// A parse failure, an unknown name, or a type/field mismatch is a `String`
+    /// error (logged by the host), never a panic. Recorded as
+    /// [`ScriptCommand::SetComponent`].
+    pub fn set_component(&mut self, id: EntityId, name: &str, json: &str) -> Result<(), String> {
+        let entity = entity_from_id(self.ctx.world, id)
+            .ok_or_else(|| format!("set_component: no entity for handle {id}"))?;
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|error| format!("set_component {name:?}: {error}"))?;
+        self.ctx
+            .components
+            .deserialize(&mut *self.ctx.world, entity, name, &value)?;
+        self.ctx.commands.push(ScriptCommand::SetComponent {
+            entity: id,
+            name: name.to_string(),
+            json: json.to_string(),
+        });
+        Ok(())
+    }
+
+    /// Remove the component registered as `name` from `entity`.
+    ///
+    /// Returns whether one was removed. Recorded as
+    /// [`ScriptCommand::RemoveComponent`].
+    pub fn remove_component(&mut self, id: EntityId, name: &str) -> bool {
+        let Some(entity) = entity_from_id(self.ctx.world, id) else {
+            return false;
+        };
+        if self
+            .ctx
+            .components
+            .remove(&mut *self.ctx.world, entity, name)
+        {
+            self.ctx.commands.push(ScriptCommand::RemoveComponent {
+                entity: id,
+                name: name.to_string(),
+            });
+            true
+        } else {
+            false
+        }
     }
 
     // -- transform ----------------------------------------------------------
@@ -424,7 +516,14 @@ mod tests {
         assets: &'a AssetRegistry,
         input: &'a InputState,
     ) -> ScriptContext<'a> {
-        ScriptContext::new(world, assets, input)
+        ScriptContext::new(world, assets, empty_registry(), input)
+    }
+
+    /// A process-wide empty registry, so the transform/entity tests need no owned
+    /// one (only the reflection tests do).
+    fn empty_registry() -> &'static ComponentRegistry {
+        static EMPTY: std::sync::OnceLock<ComponentRegistry> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(ComponentRegistry::new)
     }
 
     #[test]
@@ -674,5 +773,94 @@ mod tests {
             ctx.commands.last(),
             Some(ScriptCommand::Log { .. })
         ));
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    fn health_registry() -> ComponentRegistry {
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Health>();
+        registry
+    }
+
+    #[test]
+    fn reflection_reads_writes_and_removes_a_component() {
+        let mut world = World::new();
+        let assets = AssetRegistry::new();
+        let input = InputState::new();
+        let registry = health_registry();
+        let mut ctx = ScriptContext::new(&mut world, &assets, &registry, &input);
+        let id = ctx.api().spawn(Some("Hero".into()));
+
+        assert!(!ctx.api().has_component(id, "Health"));
+        assert_eq!(ctx.api().get_component(id, "Health"), None);
+
+        {
+            let mut api = ctx.api();
+            api.set_component(id, "Health", r#"{"current":3.0,"max":10.0}"#)
+                .expect("set");
+            assert!(api.has_component(id, "Health"));
+            assert_eq!(
+                api.get_component(id, "Health").as_deref(),
+                Some(r#"{"current":3.0,"max":10.0}"#)
+            );
+            assert!(api.remove_component(id, "Health"));
+            assert!(!api.has_component(id, "Health"));
+            assert!(
+                !api.remove_component(id, "Health"),
+                "removing again is false"
+            );
+        }
+
+        assert!(matches!(
+            ctx.commands.first(),
+            Some(ScriptCommand::Spawn { .. })
+        ));
+        assert!(ctx.commands.iter().any(|c| matches!(
+            c,
+            ScriptCommand::SetComponent { name, .. } if name == "Health"
+        )));
+        assert!(ctx.commands.iter().any(|c| matches!(
+            c,
+            ScriptCommand::RemoveComponent { name, .. } if name == "Health"
+        )));
+
+        drop(ctx);
+        let entity = Entity::from_raw(id as u32, (id >> 32) as u32);
+        assert!(
+            world.get::<Health>(entity).is_none(),
+            "the component was removed"
+        );
+    }
+
+    #[test]
+    fn a_bad_set_component_is_an_error_not_a_panic() {
+        let mut world = World::new();
+        let assets = AssetRegistry::new();
+        let input = InputState::new();
+        let registry = health_registry();
+        let mut ctx = ScriptContext::new(&mut world, &assets, &registry, &input);
+        let id = ctx.api().spawn(None);
+        let mut api = ctx.api();
+
+        // Unparseable JSON.
+        let err = api.set_component(id, "Health", "not json").unwrap_err();
+        assert!(err.contains("Health"), "{err}");
+        // Withheld field.
+        let err = api
+            .set_component(id, "Health", r#"{"current":3.0}"#)
+            .unwrap_err();
+        assert!(!err.is_empty());
+        // Unregistered name.
+        let err = api.set_component(id, "Nope", "{}").unwrap_err();
+        assert!(err.contains("Nope"), "{err}");
+        // A dead handle.
+        assert!(api.set_component(999_999, "Health", "{}").is_err());
+        // None of that recorded a command or mutated the world.
+        assert!(!api.has_component(id, "Health"));
     }
 }

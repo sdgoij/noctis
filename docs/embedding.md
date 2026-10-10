@@ -265,11 +265,16 @@ if (has_component(entity, "Health")) {
   mismatch is a logged script error, not a panic
 - `remove_component(entity, name)`
 
-These go through the same `ComponentRegistry`, so they work for **any** registered
-component, built-in included (a uniform reflection path). On the engine side, reads
-come from the existing snapshot/bridge (`crates/script/src/bridge.rs`) and writes
-become a new `ScriptCommand::SetComponent { entity, name, json }` the runtime
-applies after the callback, exactly like `translate`/`set_scale`.
+These go through the same `ComponentRegistry`, so they work for **any registered
+component** — a plugin's custom components today. (Built-in components have their
+dedicated bindings, `get_position` and friends; generic built-in reflection would
+need reflection impls for them and is a follow-up.) On the engine side, reads come
+from the snapshot/bridge (`crates/script/src/bridge.rs`, which snapshots each
+registered component's JSON per entity at the start of a call) and writes become
+`ScriptCommand::SetComponent`/`RemoveComponent` the runtime applies after the
+callback, exactly like `translate`/`set_scale`. A bad JSON body or type mismatch is
+a logged script error, never a panic. Reflection is **shipped** for JavaScript;
+WebAssembly is a follow-up (see the phasing).
 
 Native WebAssembly scripts use a fixed import ABI (`wasm_host::Abi`). Generic
 reflection there needs a JSON-over-linear-memory call; it is a follow-up, not part
@@ -315,8 +320,10 @@ of the first cut, and is called out in the ABI documentation when added.
    and the per-project **client** under `.noctis/client/` for `noctis build` (a
    plugin-linked game with no editor; scripts baked in for a release build).
    `project::referenced_files_with` bundles a custom component's asset references.
-3. **Script reflection.** `has/get/set/remove_component` plus
-   `ScriptCommand::SetComponent`, for JavaScript.
+3. **Script reflection.** *(Shipped for JavaScript.)* `has/get/set/remove_component`
+   plus `ScriptCommand::SetComponent`/`RemoveComponent`, over the scene's
+   `ComponentRegistry` (a project's custom components). Native WebAssembly
+   reflection over the memory ABI is the follow-up.
 4. **WebAssembly reflection** over the memory ABI.
 
 ## Open questions
@@ -330,6 +337,7 @@ of the first cut, and is called out in the ABI documentation when added.
 - **Schema stability.** A registered component's `NAME` becomes part of the scene
   format; renaming it is a scene migration. A `[rust] version` and a documented
   policy are probably warranted.
-- **Reflection cost.** `get_component` serializes on demand; whether the bridge
-  caches JSON for the frame or serializes per call is an implementation detail to
-  measure.
+- **Reflection cost.** *Resolved for phase 3:* the bridge snapshots every
+  registered component's JSON per entity once per call (`Bridge::begin`). Simple
+  and correct; a per-component cache (only serializing the components a script
+  actually reads) is a later optimization to measure.
