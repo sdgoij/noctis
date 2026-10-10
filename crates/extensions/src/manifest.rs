@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::source::Source;
+use vfs::{Store, StoreError};
+
 use crate::{EXTENSION_API, MAX_ASSET_BYTES, MAX_ENTRY_BYTES, MAX_MANIFEST_BYTES};
 
 /// The manifest file name every extension directory holds.
@@ -103,10 +104,11 @@ struct RawWasm {
     module: String,
 }
 
-/// Read and validate the extension in `source`, loading its entry, module and
-/// assets.
-pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
-    let text = source.read(MANIFEST, MAX_MANIFEST_BYTES, MANIFEST)?;
+/// Read and validate the extension from `store`, loading its entry, module and
+/// assets. `origin` is the directory (or archive) the store is rooted at, kept
+/// for error messages.
+pub(crate) fn load(store: &dyn Store, origin: PathBuf) -> Result<Manifest, String> {
+    let text = read_file(store, MANIFEST, MAX_MANIFEST_BYTES, MANIFEST)?;
     let text = String::from_utf8(text).map_err(|e| format!("{MANIFEST} is not UTF-8: {e}"))?;
     let raw: RawManifest = serde_json::from_str(&text).map_err(|e| format!("{MANIFEST}: {e}"))?;
 
@@ -131,7 +133,7 @@ pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
 
     let entry_source = match &raw.entry {
         Some(relative) => {
-            let bytes = source.read(relative, MAX_ENTRY_BYTES, "entry")?;
+            let bytes = read_file(store, relative, MAX_ENTRY_BYTES, "entry")?;
             Some(
                 String::from_utf8(bytes)
                     .map_err(|e| format!("entry {relative:?} is not UTF-8: {e}"))?,
@@ -142,7 +144,7 @@ pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
 
     let wasm = match &raw.wasm {
         Some(wasm) => {
-            let bytes = source.read(&wasm.module, MAX_ENTRY_BYTES, "wasm module")?;
+            let bytes = read_file(store, &wasm.module, MAX_ENTRY_BYTES, "wasm module")?;
             if !bytes.starts_with(b"\0asm") {
                 return Err(format!("{:?} is not a WebAssembly module", wasm.module));
             }
@@ -159,7 +161,7 @@ pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
         if slot.trim().is_empty() {
             return Err("an asset slot name is empty".into());
         }
-        let bytes = source.read(file, MAX_ASSET_BYTES, "asset")?;
+        let bytes = read_file(store, file, MAX_ASSET_BYTES, "asset")?;
         assets.push(Asset {
             slot: slot.clone(),
             name: format!("ext:{}:{}", raw.id, slot),
@@ -179,8 +181,21 @@ pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
         entry_source,
         wasm,
         assets,
-        dir: source.origin().to_path_buf(),
+        dir: origin,
     })
+}
+
+/// Read `relative` from `store`, capped, mapping a failure to a message.
+fn read_file(store: &dyn Store, relative: &str, max: u64, what: &str) -> Result<Vec<u8>, String> {
+    store
+        .read_capped(relative, max)
+        .map_err(|error| match error {
+            StoreError::NotFound(_) => format!("{what} {relative:?} is missing"),
+            StoreError::TooLarge { .. } => {
+                format!("{what} {relative:?} is over the {max} byte cap")
+            }
+            other => format!("{what} {relative:?}: {other}"),
+        })
 }
 
 /// A valid id: non-empty, at most 128 bytes, letters/digits/`.`/`-`/`_`, and not
@@ -213,10 +228,10 @@ mod tests {
         std::fs::write(path, text).expect("write");
     }
 
-    /// Load a directory as a [`Source`] and parse its manifest. Shadows the
-    /// imported `load` so the tests below read a directory by path.
+    /// Load a directory as a store and parse its manifest. Shadows the imported
+    /// `load` so the tests below read a directory by path.
     fn load(dir: &Path) -> Result<Manifest, String> {
-        super::load(&Source::dir(dir.to_path_buf()))
+        super::load(&vfs::DirStore::new(dir.to_path_buf()), dir.to_path_buf())
     }
 
     #[test]

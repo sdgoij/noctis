@@ -18,6 +18,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
 | `project` | `crates/project` | The project model: `noctis.toml`, canonical asset paths, type detection, discovery. |
 | `extensions` | `crates/extensions` | Loader for editor extensions: discovery, `extension.json`, ordering, config. |
+| `vfs` | `crates/vfs` | Filesystem-store abstraction: `Store` over a native dir, an in-memory zip, or memory. |
 | `editor` | `crates/editor` | Scene editor library + AI-controllable command API; its CLI is `noctis editor`. |
 | `runtime` | `crates/runtime` | Game runtime/export loop (library); the tool and the client drive it in-process. |
 | `platform` | `crates/platform` | Window + winit event loop + egui overlay; drives any `AppDriver` into a surface-backed viewport. |

@@ -18,13 +18,12 @@
 
 pub mod config;
 mod manifest;
-mod source;
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use source::Source;
+use vfs::{DirStore, Store, StoreError, ZipStore, is_zip};
 
 pub use config::{ExtensionConfig, config_dir, default_config_path};
 pub use manifest::{Asset, Manifest, WasmModule};
@@ -41,10 +40,6 @@ pub const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 pub const MAX_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
 /// A single declared asset.
 pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
-/// The most files one extension archive may hold.
-pub const MAX_FILES_PER_EXTENSION: usize = 1024;
-/// The total decompressed size of one extension archive.
-pub const MAX_EXTENSION_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Why an extension directory was refused or skipped. Collected rather than
 /// fatal: one bad extension must never stop the others.
@@ -88,9 +83,10 @@ impl Loader {
         let mut first_dir: HashMap<String, PathBuf> = HashMap::new();
 
         'dirs: for dir in dirs {
-            let entries = match std::fs::read_dir(dir) {
+            let parent = DirStore::new(dir.clone());
+            let entries = match parent.list("") {
                 Ok(entries) => entries,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(StoreError::NotFound(_)) => continue,
                 Err(error) => {
                     errors.push(LoadError {
                         path: dir.clone(),
@@ -100,19 +96,38 @@ impl Loader {
                 }
             };
 
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let source = if path.is_dir() {
-                    if !path.join(manifest::MANIFEST).is_file() {
+            for entry in entries {
+                let origin = dir.join(&entry.name);
+                let zip;
+                let directory;
+                let store: &dyn Store = if entry.is_dir {
+                    if !parent.exists(&format!("{}/{}", entry.name, manifest::MANIFEST)) {
                         continue;
                     }
-                    Source::dir(path)
-                } else if is_zip(&path) {
-                    match Source::zip(path.clone()) {
-                        Ok(source) if source.has(manifest::MANIFEST) => source,
+                    directory = DirStore::new(origin.clone());
+                    &directory
+                } else if is_zip(&entry.name) {
+                    let bytes = match parent.read(&entry.name) {
+                        Ok(bytes) => bytes,
+                        Err(error) => {
+                            errors.push(LoadError {
+                                path: origin,
+                                message: error.to_string(),
+                            });
+                            continue;
+                        }
+                    };
+                    match ZipStore::new(&bytes) {
+                        Ok(parsed) if parsed.exists(manifest::MANIFEST) => {
+                            zip = parsed;
+                            &zip
+                        }
                         Ok(_) => continue,
-                        Err(message) => {
-                            errors.push(LoadError { path, message });
+                        Err(error) => {
+                            errors.push(LoadError {
+                                path: origin,
+                                message: error.to_string(),
+                            });
                             continue;
                         }
                     }
@@ -122,12 +137,12 @@ impl Loader {
 
                 if extensions.len() >= MAX_EXTENSIONS {
                     errors.push(LoadError {
-                        path: source.origin().to_path_buf(),
+                        path: origin,
                         message: format!("over the {MAX_EXTENSIONS} extension limit"),
                     });
                     break 'dirs;
                 }
-                match manifest::load(&source) {
+                match manifest::load(store, origin.clone()) {
                     Ok(extension) => {
                         if seen.contains(&extension.id) {
                             let first = first_dir
@@ -135,7 +150,7 @@ impl Loader {
                                 .map(|p| p.display().to_string())
                                 .unwrap_or_default();
                             errors.push(LoadError {
-                                path: source.origin().to_path_buf(),
+                                path: origin,
                                 message: format!(
                                     "duplicate id {:?}; keeping the one in {first}",
                                     extension.id
@@ -143,12 +158,12 @@ impl Loader {
                             });
                         } else {
                             seen.insert(extension.id.clone());
-                            first_dir.insert(extension.id.clone(), source.origin().to_path_buf());
+                            first_dir.insert(extension.id.clone(), origin);
                             extensions.push(extension);
                         }
                     }
                     Err(message) => errors.push(LoadError {
-                        path: source.origin().to_path_buf(),
+                        path: origin,
                         message,
                     }),
                 }
@@ -207,12 +222,6 @@ impl Loader {
         dirs.retain(|dir| seen.insert(dir.clone()));
         dirs
     }
-}
-
-/// Whether `path` looks like a `.zip` archive (by extension, case-insensitively).
-fn is_zip(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
 }
 
 /// Order extensions: by `id`, then topologically by `loadAfter` (id as the

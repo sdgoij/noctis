@@ -15,6 +15,7 @@ members = [
     "crates/testscene",
     "crates/project",
     "crates/extensions",
+    "crates/vfs",
     "crates/editor",
     "crates/runtime",
     "crates/platform",
@@ -46,6 +47,7 @@ script = { path = "crates/script" }
 testscene = { path = "crates/testscene" }
 project = { path = "crates/project" }
 extensions = { path = "crates/extensions" }
+vfs = { path = "crates/vfs" }
 editor = { path = "crates/editor" }
 runtime = { path = "crates/runtime" }
 platform = { path = "crates/platform" }

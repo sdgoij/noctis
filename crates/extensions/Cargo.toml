@@ -11,4 +11,8 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+vfs.workspace = true
+
+[dev-dependencies]
+# The tests build `.zip` archives to check archive discovery.
 zip.workspace = true

@@ -4,6 +4,10 @@
 > yet.** This document records the decisions, the seams to introduce, and the
 > phasing; update it deliberately when the design changes, as with
 > [`docs/project.md`](project.md) and [`docs/extensions.md`](extensions.md).
+>
+> **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
+> `MemoryStore` and `ZipStore` — and the extension loader reads through it
+> (phase 1, partial). `project`/`runtime`/`editor` still call `std::fs`.
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document

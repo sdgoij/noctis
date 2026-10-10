@@ -371,9 +371,11 @@ an **Extensions** screen listing the table with toggles that write the config.
 
 ## What already exists
 
+- `crates/vfs` — the `Store` abstraction (`DirStore`, `MemoryStore`, `ZipStore`)
+the loader reads through; relative-path validation and the archive caps live here.
 - `crates/extensions` — discovery (directories and `.zip` archives),
   `extension.json`, ordering, caps, assets, and the enablement config, purely
-  (no Slag, no editor) and unit-tested.
+  (no Slag, no editor) and unit-tested. It reads through `vfs`.
 - `noctis.toml` — the `[extensions]` table (`dirs`, `disabled`).
 - `editor::extension` — the JS host: the `noctis` global
   (`on`/`command`/`edit`/`editor`/`ui`/`log`/`freeze`), loading, `"ready"`, verb
