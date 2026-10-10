@@ -168,12 +168,14 @@ needed.
   [`docs/extensions.md`](docs/extensions.md)): a project or user directory of
   `extension.js`/`extension.wasm` extensions is discovered by `noctis editor`, and
   each is evaluated against a versioned `noctis` global (`on`/`command`/`edit`/
-  `editor`) in the Slag engine. The pure loader is `crates/extensions`; the host is
-  `editor::extension`. The **headless** slice works (`--extensions`, `--run`,
-  `noctis.command`, `noctis.edit`), and enablement is remembered in a config file.
-  A worked example is `examples/extensions`. **Not yet:** the windowed UI
-  (`noctis.ui` panels/menus), native-WASM extension execution (modules are read and
-  validated but not run), `.zip` extensions, and hot reload.
+  `editor`/`ui`) in the Slag engine. The pure loader is `crates/extensions`; the
+  host is `editor::extension` and the windowed UI is `editor::window`.
+  `--extensions`/`--no-extensions` scope discovery and `--run` dispatches a verb;
+  the windowed editor draws extension panels, a console with a scrollback, and an
+  Extensions screen whose toggles persist to a config file. A worked example is
+  `examples/extensions`. **Not yet:** `checkbox`/`slider` panel widgets,
+  native-WASM extension execution (modules are read and validated but not run),
+  `.zip` extensions, and hot reload.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

@@ -35,3 +35,16 @@ noctis.command("scatter", function (parts) {
 
   return "ok scatter: " + noctis.edit(batch) + " edit(s) queued";
 });
+
+// A panel in the windowed editor. `ui` records widgets; the host renders them,
+// and `ui.button` returns true the frame after it is clicked. `noctis.run`
+// dispatches the same verb the console uses.
+noctis.ui.panel("Scatter", function (ui) {
+  ui.heading("Scatter");
+  var selection = JSON.parse(noctis.editor.selection());
+  ui.label("selected: " + selection.length);
+  ui.separator();
+  if (ui.button("Scatter x3")) {
+    noctis.run("scatter 3");
+  }
+});

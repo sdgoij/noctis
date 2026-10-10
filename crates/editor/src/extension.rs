@@ -121,11 +121,97 @@ const BOOTSTRAP: &str = r#"
         }
       }
     }
-    if (reply === undefined || reply === null) { __host_reply(0, ""); }
-    else { __host_reply(1, String(reply)); }
+    return (reply === undefined || reply === null) ? null : String(reply);
+  };
+
+  // The host calls this to dispatch a line; `null` means no verb matched.
+  globalThis.__noctis_dispatch_line = function (line) {
+    var reply = __noctis_dispatch(line);
+    if (reply === null) { __host_reply(0, ""); }
+    else { __host_reply(1, reply); }
+  };
+
+  // Editor panels. `panel(title, draw)` registers a floating panel; `draw`
+  // receives a recording `ui` and the host renders the ops it records. A
+  // recorded button is live: `ui.button(label)` returns true on the frame after
+  // it is clicked. `menu(menu, label, run)` is a one-button panel.
+  var panels = [];
+  noctis.ui = {
+    panel: function (title, draw) {
+      if (frozen) { throw new Error("registration is closed"); }
+      panels.push({ title: String(title), draw: draw });
+    },
+    menu: function (menu, label, run) {
+      if (frozen) { throw new Error("registration is closed"); }
+      panels.push({ title: String(menu), draw: function (ui) { if (ui.button(label)) { run(); } } });
+    }
+  };
+
+  // Run a verb line from a panel (the same vocabulary as the console).
+  noctis.run = function (line) { return __noctis_dispatch(String(line)); };
+
+  globalThis.__noctis_draw_panels = function () {
+    for (var p = 0; p < panels.length; p++) {
+      var ops = [];
+      var n = 0;
+      var ui = {
+        text: function (s) { ops.push({ kind: "label", text: String(s) }); },
+        label: function (s) { ops.push({ kind: "label", text: String(s) }); },
+        heading: function (s) { ops.push({ kind: "heading", text: String(s) }); },
+        separator: function () { ops.push({ kind: "separator" }); },
+        button: function (label) {
+          var id = n++;
+          var hit = __host_activated(p, id) !== 0;
+          ops.push({ kind: "button", id: id, label: String(label) });
+          return hit;
+        }
+      };
+      try { panels[p].draw(ui); } catch (e) { __host_log("panel '" + panels[p].title + "' threw: " + e); }
+      __host_panel(String(panels[p].title), JSON.stringify(ops));
+    }
   };
 })();
 "#;
+
+/// One widget a panel recorded this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Widget {
+    /// A section heading.
+    Heading(String),
+    /// A line of text.
+    Label(String),
+    /// A horizontal rule.
+    Separator,
+    /// A clickable button; `index` is the widget's position within the panel.
+    Button {
+        /// The button's index (its activation id).
+        index: usize,
+        /// The button's label.
+        label: String,
+    },
+}
+
+/// A panel an extension drew this frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Panel {
+    /// The panel title (and its egui window id).
+    pub title: String,
+    /// The widgets, in draw order.
+    pub widgets: Vec<Widget>,
+}
+
+/// A discovered extension, for the Extensions screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExtensionEntry {
+    /// The extension id.
+    pub id: String,
+    /// Its human name.
+    pub name: String,
+    /// Its version.
+    pub version: String,
+    /// Whether it loaded (not disabled).
+    pub enabled: bool,
+}
 
 /// The shared state the JS primitives read and write.
 ///
@@ -144,6 +230,10 @@ struct Bridge {
     logs: Vec<String>,
     /// The reply from the last dispatch (`None` means "no verb matched").
     reply: Option<String>,
+    /// The panels drawn this frame.
+    panels: Vec<Panel>,
+    /// The (panel, widget) activations from the previous frame.
+    activations: Vec<(usize, usize)>,
 }
 
 /// The JavaScript host for editor extensions.
@@ -151,6 +241,7 @@ pub struct ExtensionHost {
     context: slag::Context,
     bridge: Rc<RefCell<Bridge>>,
     ids: Vec<String>,
+    entries: Vec<ExtensionEntry>,
     errors: Vec<String>,
 }
 
@@ -172,6 +263,7 @@ impl ExtensionHost {
             context,
             bridge: Rc::new(RefCell::new(Bridge::default())),
             ids: Vec::new(),
+            entries: Vec::new(),
             errors: Vec::new(),
         };
         host.install()?;
@@ -182,6 +274,11 @@ impl ExtensionHost {
     /// The ids of the extensions that were loaded.
     pub fn ids(&self) -> &[String] {
         &self.ids
+    }
+
+    /// Every discovered extension, with its enablement — for the Extensions screen.
+    pub fn entries(&self) -> &[ExtensionEntry] {
+        &self.entries
     }
 
     /// Failures from loading or running extensions.
@@ -197,6 +294,16 @@ impl ExtensionHost {
     /// Load every extension in `loader` for which `enabled` is true, evaluating
     /// its entry inside a private wrapper, then close registration.
     pub fn load(&mut self, loader: &Loader, enabled: impl Fn(&str) -> bool) {
+        self.entries = loader
+            .extensions()
+            .iter()
+            .map(|manifest| ExtensionEntry {
+                id: manifest.id.clone(),
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                enabled: enabled(&manifest.id),
+            })
+            .collect();
         let manifests: Vec<&Manifest> = loader
             .extensions()
             .iter()
@@ -264,13 +371,42 @@ impl ExtensionHost {
     pub fn dispatch(&mut self, editor: &mut Editor, line: &str) -> Result<String, String> {
         self.snapshot(editor);
         self.bridge.borrow_mut().reply = None;
-        let program = format!("__noctis_dispatch({});", json_literal(line));
+        let program = format!("__noctis_dispatch_line({});", json_literal(line));
         self.eval(&program)?;
         self.apply_edits(editor);
         match self.bridge.borrow_mut().reply.take() {
             Some(reply) => Ok(reply),
             None => Err(format!("no extension verb matched {line:?}")),
         }
+    }
+
+    /// Fire the `"update"` hook for this frame and apply any edits it queued.
+    pub fn update(&mut self, editor: &mut Editor, dt: f32) -> Vec<String> {
+        self.snapshot(editor);
+        let program = format!("__noctis_fire(\"update\", {dt});");
+        if let Err(error) = self.eval(&program) {
+            self.errors.push(format!("update: {error}"));
+        }
+        self.apply_edits(editor)
+    }
+
+    /// Draw the registered panels, using the clicks from the previous frame.
+    pub fn draw_panels(&mut self, editor: &Editor, activations: &[(usize, usize)]) -> Vec<Panel> {
+        self.snapshot(editor);
+        {
+            let mut bridge = self.bridge.borrow_mut();
+            bridge.panels.clear();
+            bridge.activations = activations.to_vec();
+        }
+        if let Err(error) = self.eval("__noctis_draw_panels();") {
+            self.errors.push(format!("panels: {error}"));
+        }
+        std::mem::take(&mut self.bridge.borrow_mut().panels)
+    }
+
+    /// Apply any edits a panel draw (or `noctis.run`) queued.
+    pub fn apply_pending(&mut self, editor: &mut Editor) -> Vec<String> {
+        self.apply_edits(editor)
     }
 
     /// Copy the editor reads the API exposes into the bridge.
@@ -369,6 +505,33 @@ impl ExtensionHost {
             }),
         )?;
 
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_panel",
+            2,
+            Box::new(move |call| {
+                let title = arg_string(call, 0).unwrap_or_default();
+                let ops = arg_string(call, 1).unwrap_or_default();
+                b.borrow_mut().panels.push(Panel {
+                    title,
+                    widgets: parse_ops(&ops),
+                });
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_activated",
+            2,
+            Box::new(move |call| {
+                let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
+                let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
+                let hit = b.borrow().activations.contains(&(panel, widget));
+                Ok(slag::JsValue::number(if hit { 1.0 } else { 0.0 }))
+            }),
+        )?;
+
         Ok(())
     }
 
@@ -390,6 +553,25 @@ impl ExtensionHost {
 /// A JSON string literal (a valid JS string literal).
 fn json_literal(text: &str) -> String {
     serde_json::to_string(text).expect("a string serializes")
+}
+
+/// Parse the ops a panel's draw recorded into [`Widget`]s.
+fn parse_ops(json: &str) -> Vec<Widget> {
+    let Ok(serde_json::Value::Array(ops)) = serde_json::from_str(json) else {
+        return Vec::new();
+    };
+    ops.iter()
+        .filter_map(|op| match op.get("kind")?.as_str()? {
+            "heading" => Some(Widget::Heading(op.get("text")?.as_str()?.to_string())),
+            "label" => Some(Widget::Label(op.get("text")?.as_str()?.to_string())),
+            "separator" => Some(Widget::Separator),
+            "button" => Some(Widget::Button {
+                index: op.get("id")?.as_u64()? as usize,
+                label: op.get("label")?.as_str()?.to_string(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn arg_string(call: &slag::FunctionCall<'_>, index: usize) -> Option<String> {
@@ -564,6 +746,103 @@ mod tests {
         let mut editor = Editor::new();
         let reply = host.dispatch(&mut editor, "help").unwrap();
         assert!(!reply.contains("hijacked"), "{reply}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_panel_records_widgets_and_its_button_activates() {
+        let root = temp_dir("panel");
+        write_extension(
+            &root,
+            "panel",
+            "com.example.panel",
+            r#"
+            var clicks = 0;
+            noctis.ui.panel("Tools", function (ui) {
+              ui.heading("Tools");
+              ui.label("clicks: " + clicks);
+              ui.separator();
+              if (ui.button("Bump")) { clicks++; noctis.edit({ op: "spawn", name: "Bumped" }); }
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+
+        // The first draw records the widgets; nothing is activated yet.
+        let panels = host.draw_panels(&editor, &[]);
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].title, "Tools");
+        assert!(matches!(panels[0].widgets[0], Widget::Heading(_)));
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Separator))
+        );
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Button { index: 0, .. }))
+        );
+        assert!(editor.find_by_name("Bumped").is_none());
+
+        // Clicking widget 0 activates the button on the next draw.
+        host.draw_panels(&editor, &[(0, 0)]);
+        host.apply_pending(&mut editor);
+        assert!(editor.find_by_name("Bumped").is_some());
+
+        // The label is drawn before the button, so it reflects the click on the
+        // draw after the activation.
+        let panels = host.draw_panels(&editor, &[]);
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Label(text) if text.contains("clicks: 1")))
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_update_hook_runs_and_edits() {
+        let root = temp_dir("update");
+        write_extension(
+            &root,
+            "tick",
+            "com.example.tick",
+            r#"
+            var t = 0;
+            noctis.on("update", function (dt) {
+              t += dt;
+              if (t >= 0.5) { t = 0; noctis.edit({ op: "spawn", name: "Tick" }); }
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+
+        host.update(&mut editor, 0.6);
+        assert_eq!(editor.list_entities().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_entries_table_carries_enablement() {
+        let root = temp_dir("entries");
+        write_extension(&root, "a", "com.example.a", "");
+        write_extension(&root, "b", "com.example.b", "");
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |id| id != "com.example.b");
+        assert_eq!(host.entries().len(), 2);
+        assert!(host.entries()[0].enabled);
+        assert!(!host.entries()[1].enabled);
         std::fs::remove_dir_all(&root).ok();
     }
 }

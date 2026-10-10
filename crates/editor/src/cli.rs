@@ -160,7 +160,14 @@ fn run(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to render schema: {e}")));
     }
 
-    let editor = build_editor(&options, open_project(&options)?.as_ref(), plugin)?;
+    let project = open_project(&options)?;
+    let mut editor = build_editor(&options, project.as_ref(), plugin)?;
+
+    // Extensions run after the scene and any command batch, and before `--out`,
+    // so an extension's edits (`--run`, a `"ready"` hook) are saved too.
+    let _ = attach_extensions(&mut editor, &options, project.as_ref())?;
+    finalize(&mut editor, &options, project.as_ref())?;
+
     let entities = editor.list_entities();
     serde_json::to_string_pretty(&entities)
         .map_err(|e| CliError::Message(format!("failed to serialize entities: {e}")))
@@ -242,17 +249,21 @@ fn build_editor(
         }
     }
 
-    // Editor extensions run after the scene and any command batch, and before
-    // `--out`, so an extension's edits are saved too.
-    run_extensions(&mut editor, options, project)?;
+    Ok(editor)
+}
 
+/// Apply `--out` and `--save-prefabs`, after extensions have run.
+fn finalize(
+    editor: &mut Editor,
+    options: &Options,
+    project: Option<&Project>,
+) -> Result<(), CliError> {
     if let Some(out) = &options.out {
         editor
             .save(out)
             .map_err(|e| CliError::Message(format!("failed to save scene {out:?}: {e}")))?;
     }
 
-    // Persist the prefab library to the project when asked.
     if options.save_prefabs {
         let project = project.ok_or_else(|| {
             CliError::Usage(
@@ -266,27 +277,22 @@ fn build_editor(
         }
     }
 
-    Ok(editor)
+    Ok(())
 }
 
-/// Load editor extensions and dispatch any `--run` verb lines.
+/// Discover and load the enabled extensions, fire their `"ready"` hook and any
+/// `--run` lines, and hand back the live host (for a windowed run) with the
+/// config the Extensions screen writes.
 ///
-/// Extension output (replies, logs, load warnings) goes to stderr, so stdout
-/// stays the scene JSON.
-fn run_extensions(
+/// `None` when there is nothing to load or run. Extension output (replies, logs,
+/// load warnings) goes to stderr, so stdout stays the scene JSON.
+fn attach_extensions(
     editor: &mut Editor,
     options: &Options,
     project: Option<&Project>,
-) -> Result<(), CliError> {
+) -> Result<Option<(ExtensionHost, extensions::ExtensionConfig, PathBuf)>, CliError> {
     if options.no_extensions {
-        return Ok(());
-    }
-    // Extensions are headless for now: their UI hooks (`noctis.ui`) are
-    // docs/extensions.md phase 3, so a plain windowed editor has nothing to do
-    // with them yet and should not start the engine. `--run` and `--headless`
-    // still exercise the verb surface.
-    if !options.headless && options.run.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     // `--extensions` replaces the default search set; otherwise the environment,
@@ -306,7 +312,8 @@ fn run_extensions(
         );
     }
 
-    let config = match extensions::ExtensionConfig::load(extensions::default_config_path()) {
+    let config_path = extensions::default_config_path();
+    let config = match extensions::ExtensionConfig::load(&config_path) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{PROGRAM}: warning: extension config: {error}");
@@ -323,7 +330,7 @@ fn run_extensions(
         .iter()
         .any(|manifest| enabled(&manifest.id));
     if !any_enabled && options.run.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let mut host = ExtensionHost::new().map_err(|error| {
@@ -333,8 +340,8 @@ fn run_extensions(
     for line in host.ready(editor) {
         eprintln!("{PROGRAM}: {line}");
     }
-    for line in host.take_logs() {
-        eprintln!("{PROGRAM}: log: {line}");
+    for log in host.take_logs() {
+        eprintln!("{PROGRAM}: log: {log}");
     }
 
     for line in &options.run {
@@ -350,7 +357,8 @@ fn run_extensions(
     for error in host.errors() {
         eprintln!("{PROGRAM}: warning: extension {error}");
     }
-    Ok(())
+
+    Ok(Some((host, config, config_path)))
 }
 
 fn parse_args(args: &[String]) -> Result<Options, CliError> {
@@ -544,8 +552,19 @@ fn project_controls_path(project: Option<&Project>) -> Option<String> {
 /// Build the scene from the options, then run it in a window until closed.
 fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> {
     let project = open_project(options)?;
-    let editor = build_editor(options, project.as_ref(), plugin)?;
+    let mut editor = build_editor(options, project.as_ref(), plugin)?;
+    let extensions = attach_extensions(&mut editor, options, project.as_ref())?;
+    finalize(&mut editor, options, project.as_ref())?;
     let config = window_config(project.as_ref());
+
+    let attached =
+        extensions.map(
+            |(host, config, config_path)| crate::window::AttachedExtensions {
+                host,
+                config,
+                config_path,
+            },
+        );
 
     // `--controls` wins over the project's `[input].controls`.
     let controls = options
@@ -557,10 +576,10 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
         Some(path) => {
             let controls = crate::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
-            crate::window::run_with_controls(editor, config, controls, project)
+            crate::window::run_with_controls(editor, config, controls, project, attached)
                 .map_err(|e| CliError::Message(e.to_string()))
         }
-        None => crate::window::run(editor, config, project)
+        None => crate::window::run(editor, config, project, attached)
             .map_err(|e| CliError::Message(e.to_string())),
     }
 }
@@ -825,7 +844,8 @@ mod tests {
             run: vec!["box Made".to_string()],
             ..Options::default()
         };
-        let editor = build_editor(&options, None, &NullPlugin).expect("build");
+        let mut editor = build_editor(&options, None, &NullPlugin).expect("build");
+        attach_extensions(&mut editor, &options, None).expect("attach");
         assert!(editor.find_by_name("Made").is_some());
         std::fs::remove_dir_all(&dir).ok();
     }

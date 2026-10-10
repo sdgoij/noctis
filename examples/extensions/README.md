@@ -14,7 +14,8 @@ extensions/
 ```
 
 `scatter` duplicates the current selection `n` times through the editor's own
-command API (`noctis.edit`), applied as a single undo step.
+command API (`noctis.edit`), applied as a single undo step. It also adds a
+**Scatter** panel with a button, and logs to the console when it loads.
 
 ## Try it
 

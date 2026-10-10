@@ -1,12 +1,13 @@
 //! The windowed editor: an [`AppDriver`] that draws egui panels over the
 //! scene's live viewport.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ecs::assets::AssetRegistry;
 use ecs::components::{Camera, GlobalTransform, LocalTransform, Parent};
 use ecs::resources::InputState;
 use ecs::world::{Entity, World};
+use extensions::ExtensionConfig;
 use math::{Mat4, Quat, Vec3, vec3};
 use platform::{AppDriver, PlatformError, WindowConfig, egui};
 use project::{AssetKind, Project, detect};
@@ -14,6 +15,7 @@ use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
+use crate::extension::{ExtensionHost, Widget};
 use crate::gizmo;
 use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
@@ -98,6 +100,18 @@ pub struct EditorDriver {
     inspector: InspectorState,
     /// The open project, if any: a dropped file is imported into it.
     project: Option<Project>,
+    /// The extension host, when extensions are enabled.
+    extensions: Option<ExtensionHost>,
+    /// The enablement config and the file it is written to.
+    extension_config: Option<(ExtensionConfig, PathBuf)>,
+    /// Button clicks from the last frame, fed to panels on the next draw.
+    pending_activations: Vec<(usize, usize)>,
+    /// The console's input line and scrollback.
+    console_line: String,
+    console_log: Vec<String>,
+    /// Whether the console and Extensions windows are shown.
+    show_console: bool,
+    show_extensions: bool,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -138,6 +152,13 @@ impl EditorDriver {
             orbit_pivot: None,
             inspector: InspectorState::default(),
             project: None,
+            extensions: None,
+            extension_config: None,
+            pending_activations: Vec::new(),
+            console_line: String::new(),
+            console_log: Vec::new(),
+            show_console: false,
+            show_extensions: false,
         }
     }
 
@@ -145,6 +166,222 @@ impl EditorDriver {
     pub fn with_project(mut self, project: Option<Project>) -> Self {
         self.project = project;
         self
+    }
+
+    /// Attach an extension host, its enablement config, and the file the
+    /// Extensions screen writes it to.
+    pub fn with_extensions(
+        mut self,
+        host: ExtensionHost,
+        config: ExtensionConfig,
+        config_path: PathBuf,
+    ) -> Self {
+        self.extension_config = Some((config, config_path));
+        self.extensions = Some(host);
+        self
+    }
+
+    /// The extension host, if any.
+    pub fn extensions(&self) -> Option<&ExtensionHost> {
+        self.extensions.as_ref()
+    }
+
+    /// Fire the extensions' `"update"` hook and apply any edits it queued.
+    fn run_extension_update(&mut self, dt: f32) {
+        if let Some(host) = self.extensions.as_mut() {
+            let lines = host.update(&mut self.editor, dt);
+            self.console_log.extend(lines);
+            let logs = host.take_logs();
+            self.console_log
+                .extend(logs.into_iter().map(|log| format!("log: {log}")));
+        }
+    }
+
+    /// Draw the extension UI: their panels, the console, and the Extensions screen.
+    fn extension_ui(&mut self, ui: &mut egui::Ui) {
+        if self.extensions.is_none() {
+            return;
+        }
+
+        let activations = std::mem::take(&mut self.pending_activations);
+        let panels = {
+            let host = self.extensions.as_mut().expect("checked above");
+            host.draw_panels(&self.editor, &activations)
+        };
+        // A panel button may have run a verb, queueing edits.
+        if let Some(host) = self.extensions.as_mut() {
+            let applied = host.apply_pending(&mut self.editor);
+            self.console_log.extend(applied);
+            let logs = host.take_logs();
+            self.console_log
+                .extend(logs.into_iter().map(|log| format!("log: {log}")));
+        }
+
+        for (panel_index, panel) in panels.iter().enumerate() {
+            let mut clicks: Vec<(usize, usize)> = Vec::new();
+            egui::Window::new(&panel.title)
+                .id(egui::Id::new(("noctis_ext_panel", panel_index)))
+                .default_width(220.0)
+                .show(ui.ctx(), |ui| {
+                    for widget in &panel.widgets {
+                        match widget {
+                            Widget::Heading(text) => {
+                                ui.heading(text);
+                            }
+                            Widget::Label(text) => {
+                                ui.label(text);
+                            }
+                            Widget::Separator => {
+                                ui.separator();
+                            }
+                            Widget::Button { index, label } => {
+                                if ui.button(label).clicked() {
+                                    clicks.push((panel_index, *index));
+                                }
+                            }
+                        }
+                    }
+                });
+            self.pending_activations.extend(clicks);
+        }
+
+        self.console_window(ui);
+        self.extensions_window(ui);
+    }
+
+    /// The console: a scrollback and a line that dispatches the verb vocabulary.
+    fn console_window(&mut self, ui: &mut egui::Ui) {
+        if !self.show_console {
+            return;
+        }
+        let mut open = true;
+        let mut submitted: Option<String> = None;
+        let log = &self.console_log;
+        let line = &mut self.console_line;
+        egui::Window::new("Console")
+            .id(egui::Id::new("noctis_console"))
+            .open(&mut open)
+            .default_width(360.0)
+            .show(ui.ctx(), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(160.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for entry in log.iter() {
+                            ui.label(entry);
+                        }
+                    });
+                let response = ui.text_edit_singleline(line);
+                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    submitted = Some(std::mem::take(line));
+                    response.request_focus();
+                }
+            });
+        if let Some(line) = submitted {
+            self.run_console(&line);
+        }
+        if !open {
+            self.show_console = false;
+        }
+    }
+
+    /// Dispatch a console line and record the reply.
+    fn run_console(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        self.console_log.push(format!("> {line}"));
+        match self.extensions.as_mut() {
+            Some(host) => match host.dispatch(&mut self.editor, line) {
+                Ok(reply) => {
+                    if !reply.is_empty() {
+                        self.console_log.push(reply);
+                    }
+                }
+                Err(error) => self.console_log.push(format!("error: {error}")),
+            },
+            None => self.console_log.push("no extension host".to_string()),
+        }
+        if let Some(host) = self.extensions.as_mut() {
+            let logs = host.take_logs();
+            self.console_log
+                .extend(logs.into_iter().map(|log| format!("log: {log}")));
+        }
+    }
+
+    /// The Extensions screen: a list with enable/disable toggles that persist.
+    fn extensions_window(&mut self, ui: &mut egui::Ui) {
+        if !self.show_extensions {
+            return;
+        }
+        let mut open = true;
+        let mut toggled: Option<(String, bool)> = None;
+        let entries: Vec<(String, String, String, bool)> = self
+            .extensions
+            .as_ref()
+            .map(|host| {
+                host.entries()
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.id.clone(),
+                            entry.name.clone(),
+                            entry.version.clone(),
+                            entry.enabled,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let disabled: Vec<String> = self
+            .extension_config
+            .as_ref()
+            .map(|(config, _)| config.disabled.clone())
+            .unwrap_or_default();
+        egui::Window::new("Extensions")
+            .id(egui::Id::new("noctis_extensions"))
+            .open(&mut open)
+            .default_width(320.0)
+            .show(ui.ctx(), |ui| {
+                if entries.is_empty() {
+                    ui.label("No extensions discovered.");
+                }
+                for (id, name, version, _enabled) in &entries {
+                    let mut on = !disabled.iter().any(|entry| entry == id);
+                    if ui
+                        .checkbox(&mut on, format!("{name} {version}  ({id})"))
+                        .changed()
+                    {
+                        toggled = Some((id.clone(), on));
+                    }
+                }
+                ui.separator();
+                ui.label("Enablement is saved and applies on restart.");
+            });
+        if let Some((id, enabled)) = toggled {
+            self.set_extension_enabled(&id, enabled);
+        }
+        if !open {
+            self.show_extensions = false;
+        }
+    }
+
+    /// Persist an extension's enablement to the config file.
+    fn set_extension_enabled(&mut self, id: &str, enabled: bool) {
+        let Some((config, path)) = self.extension_config.as_mut() else {
+            return;
+        };
+        config.set_enabled(id, enabled);
+        match config.save(&*path) {
+            Ok(()) => self.console_log.push(format!(
+                "{} {id} (restart to apply)",
+                if enabled { "enabled" } else { "disabled" }
+            )),
+            Err(error) => self
+                .console_log
+                .push(format!("failed to save extension config: {error}")),
+        }
     }
 
     /// The wrapped editor.
@@ -776,6 +1013,8 @@ impl AppDriver for EditorDriver {
     }
 
     fn update(&mut self, dt: f32) {
+        self.run_extension_update(dt);
+
         let forward_axis = self.controls.forward_axis(&self.input);
         let right_axis = self.controls.right_axis(&self.input);
         let up_axis = self.controls.up_axis(&self.input);
@@ -848,6 +1087,8 @@ impl AppDriver for EditorDriver {
                 ui.separator();
                 ui.toggle_value(&mut self.show_outliner, "Outliner");
                 ui.toggle_value(&mut self.show_inspector, "Inspector");
+                ui.toggle_value(&mut self.show_console, "Console");
+                ui.toggle_value(&mut self.show_extensions, "Extensions");
                 ui.separator();
                 ui.label("Tool:");
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
@@ -946,6 +1187,8 @@ impl AppDriver for EditorDriver {
                 self.viewport_interaction(ui, rect, &response);
             });
 
+        self.extension_ui(ui);
+
         // Flush any transform edit made this frame (a gizmo drag, an inspector
         // field) into the derived world transforms the renderer draws from, so
         // the frame we are about to present is already up to date.
@@ -985,13 +1228,27 @@ impl AppDriver for EditorDriver {
     }
 }
 
+/// The extension host plus the config the Extensions screen writes, attached to
+/// a windowed run.
+#[derive(Debug)]
+pub struct AttachedExtensions {
+    /// The live host (loaded extensions; fired each frame).
+    pub host: ExtensionHost,
+    /// The enablement config the Extensions screen edits.
+    pub config: ExtensionConfig,
+    /// The file the config is saved to.
+    pub config_path: PathBuf,
+}
+
 /// Open `editor` in a window with egui panels. Blocks until the window closes.
 pub fn run(
     editor: Editor,
     config: WindowConfig,
     project: Option<Project>,
+    extensions: Option<AttachedExtensions>,
 ) -> Result<(), PlatformError> {
-    platform::run(EditorDriver::new(editor).with_project(project), config)
+    let driver = EditorDriver::new(editor).with_project(project);
+    platform::run(attach(driver, extensions), config)
 }
 
 /// Open `editor` in a window with explicit camera-navigation bindings.
@@ -1000,10 +1257,22 @@ pub fn run_with_controls(
     config: WindowConfig,
     controls: CameraControls,
     project: Option<Project>,
+    extensions: Option<AttachedExtensions>,
 ) -> Result<(), PlatformError> {
     let mut driver = EditorDriver::new(editor).with_project(project);
     *driver.camera_controls_mut() = controls;
-    platform::run(driver, config)
+    platform::run(attach(driver, extensions), config)
+}
+
+fn attach(driver: EditorDriver, extensions: Option<AttachedExtensions>) -> EditorDriver {
+    match extensions {
+        Some(AttachedExtensions {
+            host,
+            config,
+            config_path,
+        }) => driver.with_extensions(host, config, config_path),
+        None => driver,
+    }
 }
 
 #[cfg(test)]
