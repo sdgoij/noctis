@@ -32,6 +32,12 @@ paths and references, import, and build targets — is designed in
 [`docs/project.md`](docs/project.md). That document is the contract for the
 `project` crate; update it deliberately when the design changes.
 
+Embedding the engine in a Rust application, and carrying Rust in a project (the
+`Plugin` seam, scene-authorable custom components, and script reflection), is
+designed in [`docs/embedding.md`](docs/embedding.md). It is planned, not yet
+implemented; when built, it extends the `ecs` core contract (a component
+registry) and `docs/core-api.md` is updated with it.
+
 ## Commands
 
 ```sh

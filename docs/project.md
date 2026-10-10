@@ -314,6 +314,25 @@ manifest whose `[project] root` points at the project, so the client runs it in
 place and hot-reloads edited scripts. Embedded scripts are seeded into the registry
 at startup, so a scene's script paths resolve with no file on disk.
 
+## Rust (project plugins)
+
+A project may carry Rust alongside its scripts: a library crate (by convention
+`rust/`) that implements a [`Plugin`](embedding.md), defining **custom components**
+and **systems**. The manifest opts in with `[rust]`:
+
+```toml
+[rust]
+crate = "rust"
+plugin = "mygame::plugin"
+```
+
+The tool builds a per-project binary that links the plugin and registers it before
+loading the scene, so a project's Rust shapes the scene, the editor, and the
+exported game alike, and the component types are scene-authorable. The full design
+(component registry, scene serialization, editor, script reflection, and the
+build/export path) is in [`docs/embedding.md`](embedding.md). It is planned, not
+yet implemented.
+
 ## Fonts
 
 Fonts are a first-class asset type: `assets/fonts/*.ttf|*.otf`, registered in a
