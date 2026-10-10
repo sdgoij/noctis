@@ -141,6 +141,16 @@ needed.
   which works because the script runtime's module cache is keyed by source. Only
   scripts embed for now — scenes, models, textures, audio, fonts, and HDR
   environments stay loose files, so packaging larger assets is still to come.
+- **Project Rust (a `[rust]` plugin)** is partially shipped (see
+  [`docs/embedding.md`](docs/embedding.md)). A project that carries Rust declares a
+  plugin crate in `[rust]` (`crate`, `plugin`); `noctis run`/`editor` generate a
+  per-project binary under the project's gitignored `.noctis/tool/` that links it
+  and dispatches the same CLI, so a scene can use the plugin's custom components and
+  its systems run. The `Component` derive resolves its crate path for both `ecs`
+  consumers and `noctis`-only plugin crates. **Not yet:** a plugin-linked
+  `noctis build`/export (it needs a generated *client* crate, not the tool) —
+  `noctis build` errors for a `[rust]` project instead of shipping a plugin-less
+  game; and the bundler scan of a custom component's asset references.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

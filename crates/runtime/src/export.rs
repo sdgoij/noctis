@@ -229,7 +229,7 @@ fn target_dir(root: &Path) -> PathBuf {
 }
 
 /// The cargo profile subdirectory a build lands in.
-fn profile_dir(profile: Profile) -> &'static str {
+pub(crate) fn profile_dir(profile: Profile) -> &'static str {
     match profile {
         Profile::Dev => "debug",
         Profile::Release => "release",
@@ -237,7 +237,7 @@ fn profile_dir(profile: Profile) -> &'static str {
 }
 
 /// The workspace root, derived from this crate's manifest directory.
-fn workspace_root() -> Option<PathBuf> {
+pub(crate) fn workspace_root() -> Option<PathBuf> {
     workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 

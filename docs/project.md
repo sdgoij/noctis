@@ -76,6 +76,13 @@ environment = "assets/hdris/sky.hdr"  # IBL source; omit for a neutral environme
 [input]
 controls = "input/controls.json"
 
+# Optional: the project carries Rust (a plugin of custom components and systems).
+# `noctis run`/`editor` build and run a per-project binary that links it, so a
+# scene can use the plugin's components. See docs/embedding.md.
+[rust]
+crate = "rust"                    # the plugin library crate directory (default "rust")
+plugin = "mygame::plugin"         # the plugin function; defaults to `<package>::plugin`
+
 # Build/export targets. Each is a self-contained artifact.
 [[build]]
 name = "mygame"

@@ -59,6 +59,7 @@ mod watch;
 pub mod build;
 pub mod cli;
 pub mod demo;
+pub mod plugin;
 pub mod window;
 
 pub use build::{BuildOptions, build_project};

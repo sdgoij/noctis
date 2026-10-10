@@ -11,6 +11,22 @@ use crate::path::AssetPath;
 /// The manifest file name.
 pub const MANIFEST_FILE: &str = "noctis.toml";
 
+/// The `[package].name` of the crate whose manifest is at `path`.
+fn package_name(manifest: &Path) -> Result<String, ProjectError> {
+    let text = std::fs::read_to_string(manifest)
+        .map_err(|error| ProjectError::Io(format!("{}: {error}", manifest.display())))?;
+    let value: toml::Value =
+        toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
+    let name = value
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .ok_or_else(|| {
+            ProjectError::Manifest(format!("{}: missing [package].name", manifest.display()))
+        })?;
+    Ok(name.to_string())
+}
+
 /// A project scene: its document path and a display name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneInfo {
@@ -131,6 +147,40 @@ impl Project {
     /// An absolute path for a project-relative path.
     pub fn dir(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
+    }
+
+    /// The plugin library crate directory, when the project carries Rust.
+    pub fn rust_crate_dir(&self) -> Option<PathBuf> {
+        self.manifest
+            .rust
+            .as_ref()
+            .map(|rust| self.dir(&rust.crate_dir))
+    }
+
+    /// The plugin function's Rust path (e.g. `mygame::plugin`).
+    ///
+    /// When the manifest gives no `[rust].plugin`, the default is
+    /// `<package name>::plugin`, read from the plugin crate's `Cargo.toml` (with
+    /// `-` normalized to `_`). `None` when the project has no `[rust]` table.
+    pub fn plugin_path(&self) -> Result<Option<String>, ProjectError> {
+        let Some(rust) = &self.manifest.rust else {
+            return Ok(None);
+        };
+        if let Some(plugin) = &rust.plugin {
+            return Ok(Some(plugin.clone()));
+        }
+        let package = package_name(&self.dir(&rust.crate_dir).join("Cargo.toml"))?;
+        Ok(Some(format!("{}::plugin", package.replace('-', "_"))))
+    }
+
+    /// The plugin crate's `[package].name`, when the project carries Rust.
+    pub fn rust_package_name(&self) -> Result<Option<String>, ProjectError> {
+        let Some(rust) = &self.manifest.rust else {
+            return Ok(None);
+        };
+        Ok(Some(package_name(
+            &self.dir(&rust.crate_dir).join("Cargo.toml"),
+        )?))
     }
 
     /// The absolute assets directory.
@@ -405,6 +455,66 @@ mod tests {
             project.default_scene_file(),
             Some(Path::new(&root).join("scenes/main.scene.json"))
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rust_settings_resolve_the_crate_and_plugin_path() {
+        let dir = std::env::temp_dir().join(format!("noctis-rust-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("game")).expect("dirs");
+        std::fs::write(
+            dir.join("game/Cargo.toml"),
+            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("crate manifest");
+
+        // An explicit plugin path is used verbatim.
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"game\"\nplugin = \"my_game::game\"\n",
+        )
+        .expect("manifest");
+        let project = Project::open(&dir).expect("open");
+        assert_eq!(project.rust_crate_dir(), Some(dir.join("game")));
+        assert_eq!(
+            project.rust_package_name().unwrap().as_deref(),
+            Some("my-game")
+        );
+        assert_eq!(
+            project.plugin_path().unwrap().as_deref(),
+            Some("my_game::game")
+        );
+
+        // Absent, it defaults to `<package name>::plugin`, with `-` normalized.
+        std::fs::write(
+            dir.join("default.toml"),
+            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"game\"\n",
+        )
+        .expect("manifest");
+        let project = Project::from_manifest_file(dir.join("default.toml")).expect("open");
+        assert_eq!(
+            project.plugin_path().unwrap().as_deref(),
+            Some("my_game::plugin")
+        );
+
+        // No [rust] table at all.
+        let none = Project::from_manifest(
+            "/x",
+            ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap(),
+        );
+        assert_eq!(none.rust_crate_dir(), None);
+        assert_eq!(none.rust_package_name().unwrap(), None);
+        assert_eq!(none.plugin_path().unwrap(), None);
+
+        // A crate directory with no Cargo.toml is an error, not a silent default.
+        std::fs::write(
+            dir.join("missing.toml"),
+            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"absent\"\n",
+        )
+        .expect("manifest");
+        let missing = Project::from_manifest_file(dir.join("missing.toml")).expect("open");
+        assert!(matches!(missing.plugin_path(), Err(ProjectError::Io(_))));
 
         std::fs::remove_dir_all(&dir).ok();
     }

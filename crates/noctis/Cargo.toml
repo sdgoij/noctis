@@ -25,3 +25,4 @@ project.workspace = true
 render.workspace = true
 runtime.workspace = true
 script.workspace = true
+serde.workspace = true

@@ -30,6 +30,9 @@ pub struct ProjectManifest {
     /// Optional `[input]` settings.
     #[serde(default)]
     pub input: InputSettings,
+    /// Optional `[rust]` project-Rust settings.
+    #[serde(default)]
+    pub rust: Option<RustSettings>,
     /// `[[build]]` targets.
     #[serde(default, rename = "build")]
     pub build_targets: Vec<BuildTarget>,
@@ -73,6 +76,17 @@ impl ProjectManifest {
             AssetPath::parse(environment).map_err(|error| {
                 ProjectError::Manifest(format!("[render] environment is invalid: {error}"))
             })?;
+        }
+
+        if let Some(rust) = &self.rust {
+            AssetPath::parse(&rust.crate_dir).map_err(|error| {
+                ProjectError::Manifest(format!("[rust].crate is invalid: {error}"))
+            })?;
+            if let Some(plugin) = &rust.plugin {
+                validate_rust_path(plugin).map_err(|error| {
+                    ProjectError::Manifest(format!("[rust].plugin is invalid: {error}"))
+                })?;
+            }
         }
 
         let mut seen = std::collections::HashSet::new();
@@ -298,6 +312,53 @@ pub struct InputSettings {
     pub controls: Option<String>,
 }
 
+/// The `[rust]` table: a project that carries Rust (a [`Plugin`](ecs::app::Plugin)).
+///
+/// Presence of the table is what opts the project in; the defaults describe the
+/// conventional layout (`rust/`, plugin function `plugin`).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RustSettings {
+    /// The directory of the plugin library crate (a `Cargo.toml`), project-relative.
+    #[serde(rename = "crate", default = "default_rust_crate")]
+    pub crate_dir: String,
+    /// The Rust path of the plugin function, e.g. `mygame::plugin`. Absent means
+    /// `<package name>::plugin`, read from the crate's `Cargo.toml`.
+    #[serde(default)]
+    pub plugin: Option<String>,
+}
+
+impl Default for RustSettings {
+    fn default() -> Self {
+        Self {
+            crate_dir: default_rust_crate(),
+            plugin: None,
+        }
+    }
+}
+
+fn default_rust_crate() -> String {
+    "rust".to_string()
+}
+
+/// Check a Rust path (`a::b::c`): every segment a valid identifier.
+fn validate_rust_path(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    for segment in path.split("::") {
+        let mut chars = segment.chars();
+        let first = chars.next();
+        if !matches!(first, Some(c) if c == '_' || c.is_ascii_alphabetic()) {
+            return Err(format!("{segment:?} is not a Rust identifier"));
+        }
+        if !chars.all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+            return Err(format!("{segment:?} is not a Rust identifier"));
+        }
+    }
+    Ok(())
+}
+
 /// A `[[build]]` target.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -501,6 +562,50 @@ platform = "linux"
 
         let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
         assert_eq!(none.render.environment, None);
+    }
+
+    #[test]
+    fn parses_rust_settings() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"plugin\"\nplugin = \"mygame::plugin\"\n",
+        )
+        .unwrap();
+        let rust = manifest.rust.as_ref().expect("a [rust] table");
+        assert_eq!(rust.crate_dir, "plugin");
+        assert_eq!(rust.plugin.as_deref(), Some("mygame::plugin"));
+        manifest.validate().unwrap();
+
+        // No [rust] table: the project carries no Rust.
+        let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        assert_eq!(none.rust, None);
+
+        // An empty table keeps the conventional defaults.
+        let defaults = ProjectManifest::from_toml("[project]\nname = \"T\"\n\n[rust]\n").unwrap();
+        let rust = defaults.rust.as_ref().expect("a [rust] table");
+        assert_eq!(rust.crate_dir, "rust");
+        assert_eq!(rust.plugin, None);
+        defaults.validate().unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_a_bad_rust_setting() {
+        let escaping = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"../elsewhere\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            escaping.validate(),
+            Err(ProjectError::Manifest(_))
+        ));
+
+        let bad_plugin = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[rust]\nplugin = \"my game::plugin\"\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            bad_plugin.validate(),
+            Err(ProjectError::Manifest(_))
+        ));
     }
 
     #[test]

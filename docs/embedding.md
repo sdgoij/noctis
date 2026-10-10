@@ -80,15 +80,22 @@ crate = "rust"            # a directory with a Cargo.toml (default: "rust")
 plugin = "mygame::plugin" # the function returning the plugin (default: as above)
 ```
 
-**How the tool runs it.** For any subcommand with `--project` whose manifest has
-`[rust]`, the tool ensures a per-project binary is built — a small generated `main`
-(under the project's gitignored `.noctis/`) that depends on `noctis` and the
-plugin crate, calls `plugin()`, and dispatches the requested subcommand
-(`run`/`editor`/`build`) through the same CLIs the stock tool uses. The binary is
-cached and rebuilt only when the plugin crate or its dependencies change, the same
-way `game_client` builds the client on demand today. Everything runs statically
-linked: the editor, the runtime, and the exported game each include the plugin's
-component types, so a scene that uses them loads everywhere.
+**How the tool runs it.** For `run`/`editor` with `--project` whose manifest has
+`[rust]`, the stock `noctis` builds a per-project binary — a small generated `main`
+(under the project's gitignored `.noctis/tool/`) that depends on `noctis` and the
+plugin crate and calls `noctis::dispatch_with_plugin(<plugin>())` — then runs it as
+a subprocess with the same arguments, so `run`/`editor` behave exactly as the stock
+tool but with the plugin registered. The binary is cached and rebuilt only when the
+plugin crate or the engine changes, the same way `game_client` builds the client on
+demand today. The generated crate carries an empty `[workspace]` table and path
+dependencies on the plugin and on `crates/noctis`, so it compiles the plugin's
+component types in. A scene that uses them then loads everywhere the plugin is
+linked.
+
+`noctis build`/export for a `[rust]` project is **not supported yet** (tracked in the
+phasing below): it errors rather than ship a game silently missing the plugin's
+components. A plugin-linked export needs a generated *client* crate (like the tool,
+but without the editor).
 
 A project with no `[rust]` is unchanged: the stock `noctis` binary handles it.
 
@@ -284,15 +291,20 @@ of the first cut, and is called out in the ABI documentation when added.
    host-registered component (a hand-written impl and a derived one); no project Rust
    yet. Still to do: the bundler scan of `Custom` references (needs the registry at
    the bundler, which arrives with the plugin in phase 2).
-2. **The `Plugin` seam.** *(Seam shipped; `[rust]` build integration pending.)* The
-   `Plugin` trait and `NullPlugin` (`ecs::app`); `runtime::cli::run_cli_with_plugin`
-   and `build_runtime` register the plugin's components before the scene loads and
+2. **The `Plugin` seam.** *(Shipped: the seam, `[rust]` for `run`/`editor`, the
+   editor inspector. Pending: `[rust]` export, the bundler scan.)* The `Plugin` trait
+   and `NullPlugin` (`ecs::app`); `runtime::cli::run_cli_with_plugin` and
+   `build_runtime` register the plugin's components before the scene loads and
    schedule its systems after; the editor's `run_cli_with_plugin` gives `Editor` the
    registry so scenes that use custom components load, save, and instantiate from
    prefabs; the inspector draws the schema-driven form and lists custom names in the
-   Add menu. Still to do: the `[rust]` manifest and the generated per-project binary
-   the tool builds and runs for `run`/`editor`/`build`, and the bundler scan of
-   `Custom` references (which needs the registry at the bundler).
+   Add menu. The `[rust]` manifest table (`crate`, `plugin`) drives
+   `runtime::plugin`, which generates and builds the per-project tool binary under
+   `.noctis/tool/` and runs it for `noctis run`/`editor`. Still to do: a plugin-linked
+   `noctis build`/export (a generated *client* crate like the tool but without the
+   editor) and the bundler scan of `Custom` references (which needs the registry at
+   the bundler). `noctis build` errors for a `[rust]` project rather than ship a
+   plugin-less game.
 3. **Script reflection.** `has/get/set/remove_component` plus
    `ScriptCommand::SetComponent`, for JavaScript.
 4. **WebAssembly reflection** over the memory ABI.

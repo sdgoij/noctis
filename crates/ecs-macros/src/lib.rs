@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Lit, Type, parse_macro_input};
@@ -59,6 +60,7 @@ struct FieldSpec {
 fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let component_name = component_name(input)?;
+    let ecs = ecs_path();
 
     let fields: Vec<FieldSpec> = match &input.data {
         Data::Struct(data) => match &data.fields {
@@ -87,7 +89,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let entries = fields.iter().map(|field| {
         let FieldSpec { name, kind, .. } = field;
-        quote! { ::ecs::reflect::Field { name: #name, kind: #kind } }
+        quote! { #ecs::reflect::Field { name: #name, kind: #ecs::reflect::#kind } }
     });
 
     let references = fields
@@ -106,10 +108,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .collect::<Vec<_>>();
 
     Ok(quote! {
-        impl ::ecs::reflect::Component for #name {
+        impl #ecs::reflect::Component for #name {
             const NAME: &'static str = #component_name;
 
-            fn fields() -> ::std::vec::Vec<::ecs::reflect::Field> {
+            fn fields() -> ::std::vec::Vec<#ecs::reflect::Field> {
                 ::std::vec![ #(#entries),* ]
             }
 
@@ -120,6 +122,22 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
     })
+}
+
+/// The path to the `ecs` crate as seen by the deriving crate.
+///
+/// `ecs` for a direct consumer, `crate` inside `ecs` itself, and the re-exported
+/// `::noctis::ecs` for a crate that depends only on the `noctis` facade (a project
+/// plugin), so `#[derive(Component)]` works through `use noctis::prelude::*`.
+fn ecs_path() -> TokenStream2 {
+    match crate_name("ecs") {
+        Ok(FoundCrate::Itself) => quote!(crate),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        Err(_) => quote!(::noctis::ecs),
+    }
 }
 
 /// The component's `NAME`: `#[component(name = "...")]`, else the struct's ident.
@@ -172,14 +190,14 @@ fn field_spec(field: &syn::Field) -> syn::Result<Option<FieldSpec>> {
                 Some("skip") => skip = true,
                 Some("asset") => {
                     asset = true;
-                    kind = Some(quote!(::ecs::reflect::FieldKind::Asset));
+                    kind = Some(quote!(FieldKind::Asset));
                 }
-                Some("number") => kind = Some(quote!(::ecs::reflect::FieldKind::Number)),
-                Some("integer") => kind = Some(quote!(::ecs::reflect::FieldKind::Integer)),
-                Some("boolean") => kind = Some(quote!(::ecs::reflect::FieldKind::Boolean)),
-                Some("text") => kind = Some(quote!(::ecs::reflect::FieldKind::Text)),
-                Some("vec3") => kind = Some(quote!(::ecs::reflect::FieldKind::Vec3)),
-                Some("color") => kind = Some(quote!(::ecs::reflect::FieldKind::Color)),
+                Some("number") => kind = Some(quote!(FieldKind::Number)),
+                Some("integer") => kind = Some(quote!(FieldKind::Integer)),
+                Some("boolean") => kind = Some(quote!(FieldKind::Boolean)),
+                Some("text") => kind = Some(quote!(FieldKind::Text)),
+                Some("vec3") => kind = Some(quote!(FieldKind::Vec3)),
+                Some("color") => kind = Some(quote!(FieldKind::Color)),
                 Some("options") => {
                     let value = meta.value()?;
                     let literal: syn::LitStr = value.parse()?;
@@ -188,7 +206,7 @@ fn field_spec(field: &syn::Field) -> syn::Result<Option<FieldSpec>> {
                         .split(',')
                         .map(|option| syn::LitStr::new(option.trim(), literal.span()))
                         .collect::<Vec<_>>();
-                    kind = Some(quote!(::ecs::reflect::FieldKind::Enum(&[#(#options),*])));
+                    kind = Some(quote!(FieldKind::Enum(&[#(#options),*])));
                 }
                 _ => return Err(meta.error("unknown field attribute")),
             }
@@ -227,8 +245,8 @@ fn infer_kind(ty: &Type) -> (TokenStream2, bool, bool) {
         && let Ok(size) = len.base10_parse::<usize>()
     {
         match size {
-            3 => return (quote!(::ecs::reflect::FieldKind::Vec3), false, false),
-            4 => return (quote!(::ecs::reflect::FieldKind::Color), false, false),
+            3 => return (quote!(FieldKind::Vec3), false, false),
+            4 => return (quote!(FieldKind::Color), false, false),
             _ => {}
         }
     }
@@ -237,26 +255,26 @@ fn infer_kind(ty: &Type) -> (TokenStream2, bool, bool) {
         && let Some(segment) = path.path.segments.last()
     {
         match segment.ident.to_string().as_str() {
-            "f32" | "f64" => return (quote!(::ecs::reflect::FieldKind::Number), false, false),
+            "f32" | "f64" => return (quote!(FieldKind::Number), false, false),
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
             | "u128" | "usize" => {
-                return (quote!(::ecs::reflect::FieldKind::Integer), false, false);
+                return (quote!(FieldKind::Integer), false, false);
             }
-            "bool" => return (quote!(::ecs::reflect::FieldKind::Boolean), false, false),
-            "String" | "str" => return (quote!(::ecs::reflect::FieldKind::Text), true, false),
+            "bool" => return (quote!(FieldKind::Boolean), false, false),
+            "String" | "str" => return (quote!(FieldKind::Text), true, false),
             "Option" => {
                 if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments
                     && let Some(syn::GenericArgument::Type(inner)) = arguments.args.first()
                     && is_named(inner, "String")
                 {
-                    return (quote!(::ecs::reflect::FieldKind::Text), false, true);
+                    return (quote!(FieldKind::Text), false, true);
                 }
             }
             _ => {}
         }
     }
 
-    (quote!(::ecs::reflect::FieldKind::Text), false, false)
+    (quote!(FieldKind::Text), false, false)
 }
 
 /// Whether `ty` is a path whose last segment is `name`.

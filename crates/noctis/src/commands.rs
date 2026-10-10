@@ -115,7 +115,18 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
     let project =
         project.ok_or_else(|| CliError::Usage("build requires --project <DIR>".into()))?;
     // Fail fast on a bad project before spending time building the client.
-    Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
+    let opened = Project::open(PathBuf::from(&project))
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    // A project that carries Rust (custom components and systems) needs a
+    // plugin-linked game client, which the export pipeline does not build yet.
+    // Error rather than ship a game silently missing the plugin's components.
+    if opened.manifest().rust.is_some() {
+        return Err(CliError::Message(
+            "building a project with a [rust] plugin is not supported yet; run it with \
+             `noctis run --project <DIR>` (a plugin-linked build is planned)"
+                .into(),
+        ));
+    }
 
     // `build_project` acquires the stripped game client itself (embedding the
     // project's scripts for a release build), so `noctis build` is one command.
@@ -198,6 +209,25 @@ mod tests {
             build(&args(&["--project", "does-not-exist-xyz"])),
             Err(CliError::Message(_))
         ));
+    }
+
+    #[test]
+    fn build_refuses_a_project_with_rust() {
+        let dir = std::env::temp_dir().join(format!("noctis-build-rust-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            dir.join("noctis.toml"),
+            "[project]\nname = \"T\"\n\n[rust]\n",
+        )
+        .expect("manifest");
+
+        let err = build(&args(&["--project", dir.to_str().unwrap()])).unwrap_err();
+        match err {
+            CliError::Message(message) => assert!(message.contains("[rust]"), "{message}"),
+            other => panic!("expected a message error, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
