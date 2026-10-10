@@ -142,6 +142,19 @@ impl Project {
             .map_err(|error| ProjectError::Io(format!("{relative}: {error}")))
     }
 
+    /// Read a project-relative document (a scene or prefab) as UTF-8 text, or
+    /// `Ok(None)` when it does not exist.
+    ///
+    /// This is how a caller loads a scene through the project's store — a
+    /// directory, or a bundle's zip — rather than a native path.
+    pub fn read_document(&self, relative: &str) -> Result<Option<String>, ProjectError> {
+        match self.store().read_string(relative) {
+            Ok(text) => Ok(Some(text)),
+            Err(StoreError::NotFound(_)) => Ok(None),
+            Err(error) => Err(ProjectError::Io(format!("{relative}: {error}"))),
+        }
+    }
+
     /// Write a project-relative file, creating parent directories.
     fn write_file(&mut self, relative: &str, bytes: &[u8]) -> Result<(), ProjectError> {
         self.store_mut()

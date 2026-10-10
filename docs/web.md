@@ -17,7 +17,8 @@
 > them from the store's bytes, so a store-backed project decodes with no
 > directory (the path-based entry points remain for the native editor). A project
 > can be packaged into a `.zip` **bundle** with `noctis pack` (`Project::bundle`,
-> `vfs::zip_store`), which `Project::open_in(ZipStore, root)` reads back. The
+> `vfs::zip_store`); `Project::open_in(ZipStore, root)` reads it back, and
+> `noctis run --bundle <file.zip>` opens and runs one (its default scene). The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -155,7 +156,8 @@ the folder zipped. It reuses:
 The native tool has a small `noctis pack --project <dir> [--out <file.zip>]`
 (`Project::bundle`, over `vfs::zip_store`): it zips the project at the archive
 root, dropping generated directories (`.noctis`, `dist`, `target`, `.git`), into
-`dist/<name>.zip` by default. Nothing about the *runtime* is browser-specific —
+`dist/<name>.zip` by default, and `noctis run --bundle <file.zip>` opens one with
+`ZipStore` and runs its default scene. Nothing about the *runtime* is browser-specific —
 the bundle is a normal project.
 
 ## Loading and storing (URL / OPFS / IndexedDB)
@@ -164,7 +166,8 @@ Three `Store` backends cover the browser's needs:
 
 - **URL (read-only).** `start(canvas, "https://…/game.zip")` fetches the bundle and
   reads it through a `ZipStore` in memory. This is the "run a published game"
-  path: a static file, correct CORS, no storage.
+  path: a static file, correct CORS, no storage. The native `noctis run --bundle`
+  already exercises exactly this read (`std::fs::read` → `ZipStore` → `Project::open_in`).
 - **OPFS (read/write).** The Origin Private File System is a real, private
   directory tree — the closest match to `std::fs` — so a `DirStore`-shaped
   backend over OPFS lets the editor open, edit and **save** a project in the

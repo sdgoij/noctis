@@ -439,6 +439,7 @@ overrides are not yet applied.
 ```
 noctis editor --project <dir> [--scene <path>] [--mode 2d|3d] [--headless]
 noctis run    --project <dir> [--scene <path>] [--headless] [--export ...] [--target <name>]
+noctis run    --bundle <file.zip> [--scene <path>] [--headless]
 noctis build  --project <dir> [--target <name>] [--scene <path>] [--out <dir>]
 noctis pack   --project <dir> [--out <file.zip>]
 ```
@@ -482,7 +483,8 @@ New work this design implies (✔ = implemented):
 - ✔ A project `.zip` **bundle**: `Project::bundle` (`vfs::zip_store`) and the
   `noctis pack` command package a project at an archive root, generated
   directories excluded, for a `ZipStore` reader (a browser client, or
-  `Project::open_in`). Reads back through the byte-based importers.
+  `Project::open_in`). Reads back through the byte-based importers, and
+  `noctis run --bundle <file.zip>` opens and runs a bundle's default scene.
 - Drag & drop in the editor: ✔ `Project::import_file` (the import half,
   auto-detect + place + no-clobber) and the winit `DroppedFile` → `AppDriver::drop_file`
   → project-import path. Remaining: the viewport/outliner **drop-target**

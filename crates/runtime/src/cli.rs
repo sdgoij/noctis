@@ -19,9 +19,9 @@ use ecs::reflect::ComponentRegistry;
 use ecs::scene::Scene;
 use math::vec3;
 use platform::WindowConfig;
-use project::{Profile, Project};
+use project::{AssetPath, Profile, Project};
 use render::RendererConfig;
-use vfs::{DirStore, Store};
+use vfs::{DirStore, Store, ZipStore};
 
 use crate::window::run_in_window;
 use crate::{
@@ -37,6 +37,7 @@ const PROGRAM: &str = "noctis";
 struct Args {
     scene: Option<String>,
     project: Option<String>,
+    bundle: Option<String>,
     target: Option<String>,
     demo: bool,
     frames: u32,
@@ -60,6 +61,7 @@ impl Default for Args {
         Self {
             scene: None,
             project: None,
+            bundle: None,
             target: None,
             demo: false,
             frames: 300,
@@ -106,6 +108,10 @@ impl Args {
                     let value = it.next().ok_or("--project requires a directory")?;
                     args.project = Some(value);
                 }
+                "--bundle" => {
+                    let value = it.next().ok_or("--bundle requires a .zip path")?;
+                    args.bundle = Some(value);
+                }
                 "--target" => {
                     let value = it.next().ok_or("--target requires a name")?;
                     args.target = Some(value);
@@ -148,6 +154,12 @@ impl Args {
         }
         if args.demo && args.scene.is_some() {
             return Err("--demo and --scene are mutually exclusive".into());
+        }
+        if args.bundle.is_some() && args.project.is_some() {
+            return Err("--bundle and --project are mutually exclusive".into());
+        }
+        if args.bundle.is_some() && args.export.is_some() {
+            return Err("--bundle cannot be exported; pass --project to export".into());
         }
         // No scene is not an error: `load_scene` falls back to a scene bundled
         // next to the executable, then to the built-in demo.
@@ -245,6 +257,9 @@ OPTIONS:
     --project <dir>    Open a project (its noctis.toml); --scene is then a
                        project-relative path and the default scene is used when no
                        --scene is given.
+    --bundle <file.zip>
+                       Open a packaged project bundle (noctis pack); the default
+                       scene inside the archive is run.
     --target <name>    Export the named [[build]] target from the project (its
                        scene, name, and output directory are used).
     --demo             Run a small built-in scene.
@@ -377,9 +392,10 @@ fn register_wasm_modules(args: &Args, assets: &mut AssetRegistry) -> Result<(), 
     Ok(())
 }
 
-/// Load the scene to run: an explicit file (resolved against `--project` when
-/// given), the project's default scene, a `scene.json` bundled next to the
-/// executable (an exported game), or the built-in demo.
+/// Load the scene to run: `--scene`, or the project's default, read through the
+/// project's store (a directory, or a bundle's zip); else a loose file resolved
+/// against `--project`; else a `scene.json` bundled next to the executable (an
+/// exported game); else the built-in demo.
 fn load_scene(
     args: &Args,
     project: Option<&Project>,
@@ -390,6 +406,28 @@ fn load_scene(
         return Ok(demo::demo_scene(assets).with_component_registry(components.clone()));
     }
 
+    // A project owns its scenes: a project-relative path read through the
+    // project's store. Anything that is not a canonical asset path (an absolute
+    // path, say) falls through to the loose-file branch below.
+    if let Some(project) = project {
+        let requested = args.scene.as_deref().or_else(|| project.default_scene());
+        if let Some(scene) = requested
+            && let Ok(asset) = AssetPath::parse(scene)
+        {
+            return match project.read_document(asset.file_path()) {
+                Ok(Some(json)) => Scene::from_json_with(&json, assets, components)
+                    .map_err(|err| format!("failed to load scene {scene:?}: {err}")),
+                Ok(None) => {
+                    log::warn!("scene {scene:?} not found; using the built-in demo scene");
+                    Ok(demo::demo_scene(assets).with_component_registry(components.clone()))
+                }
+                Err(error) => Err(format!("failed to read scene {scene:?}: {error}")),
+            };
+        }
+    }
+
+    // A loose scene: an explicit file (resolved against `--project` when given),
+    // the project's default file, or a `scene.json` next to the executable.
     let path = args
         .scene
         .as_deref()
@@ -495,6 +533,15 @@ fn default_game_name(scene_path: &str) -> String {
 /// bundled project (a `noctis.toml` next to the executable, used when no
 /// `--scene` is given).
 fn open_project(args: &Args) -> Result<Option<Project>, String> {
+    if let Some(bundle) = &args.bundle {
+        let bytes = std::fs::read(bundle)
+            .map_err(|error| format!("failed to read bundle {bundle:?}: {error}"))?;
+        let store = ZipStore::new(&bytes)
+            .map_err(|error| format!("{bundle:?} is not a readable bundle: {error}"))?;
+        return Project::open_in(Box::new(store), bundle_root(bundle))
+            .map(Some)
+            .map_err(|error| format!("failed to open bundle {bundle:?}: {error}"));
+    }
     if let Some(dir) = &args.project {
         return Project::open(dir)
             .map(Some)
@@ -508,6 +555,16 @@ fn open_project(args: &Args) -> Result<Option<Project>, String> {
             .map_err(|error| format!("failed to open the bundled project: {error}"));
     }
     Ok(None)
+}
+
+/// A logical project root for a bundle. Only the generated cache is written under
+/// it, so keep it out of the user's tree.
+fn bundle_root(bundle: &str) -> PathBuf {
+    let stem = Path::new(bundle)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("bundle");
+    std::env::temp_dir().join(format!("noctis-bundle-{stem}"))
 }
 
 /// The directory of a project manifest bundled next to the running executable.
@@ -566,8 +623,10 @@ fn run_windowed(
     let project = open_project(args)?;
     let mut runtime = build_runtime(args, project.as_ref(), embedded, plugin)?;
     // A development run loads scripts from disk; watch them so an edit reloads
-    // on the next frame. An embedded build needs no watching.
+    // on the next frame. An embedded build needs no watching, and a bundle is
+    // read-only.
     if embedded.is_empty()
+        && args.bundle.is_none()
         && let Some(root) = script_root(project.as_ref())
         && let Err(error) = runtime.watch_scripts(root)
     {
@@ -742,6 +801,67 @@ mod tests {
 
         let error = build_runtime(&args, None, &[], &NullPlugin).unwrap_err();
         assert!(error.contains("Health"), "{error}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bundle_parses_and_excludes_project_and_export() {
+        let args = parse(&["--bundle", "game.zip", "--headless"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(args.bundle.as_deref(), Some("game.zip"));
+        assert!(parse(&["--bundle"]).is_err(), "a missing value is an error");
+        assert!(parse(&["--bundle", "g.zip", "--project", "p"]).is_err());
+        assert!(parse(&["--bundle", "g.zip", "--export", "out"]).is_err());
+    }
+
+    #[test]
+    fn a_bundle_runs_its_default_scene() {
+        let dir = std::env::temp_dir().join(format!(
+            "noctis-bundle-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let project_dir = dir.join("game");
+        std::fs::create_dir_all(project_dir.join("scenes")).expect("dirs");
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Bundled\"\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n",
+        )
+        .expect("manifest");
+        std::fs::write(
+            project_dir.join("scenes/main.scene.json"),
+            r#"{ "name": "Bundle", "entities": [{ "id": 0, "name": "Marker",
+                 "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                 "components": [] }] }"#,
+        )
+        .expect("scene");
+
+        let project = Project::open(&project_dir).expect("open");
+        let bytes = project.bundle().expect("bundle");
+        let zip = dir.join("game.zip");
+        std::fs::write(&zip, &bytes).expect("write bundle");
+
+        let argv = vec![
+            "--bundle".to_string(),
+            zip.to_string_lossy().into_owned(),
+            "--headless".to_string(),
+        ];
+        let args = Args::parse(argv.into_iter()).unwrap().unwrap();
+        let opened = open_project(&args).expect("open the bundle");
+        assert!(opened.is_some(), "the bundle opens as a project");
+
+        let runtime =
+            build_runtime(&args, opened.as_ref(), &[], &NullPlugin).expect("run the bundle");
+        assert_eq!(
+            runtime.scene().world.entities().len(),
+            1,
+            "the scene from inside the archive loaded"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
