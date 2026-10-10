@@ -15,7 +15,9 @@
 > `render::load_texture_bytes`/`load_hdr_bytes`/`load_gltf_bytes` and
 > `audio::load_clip_bytes` decode from bytes, and `project::import_assets` feeds
 > them from the store's bytes, so a store-backed project decodes with no
-> directory (the path-based entry points remain for the native editor). The
+> directory (the path-based entry points remain for the native editor). A project
+> can be packaged into a `.zip` **bundle** with `noctis pack` (`Project::bundle`,
+> `vfs::zip_store`), which `Project::open_in(ZipStore, root)` reads back. The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -150,8 +152,10 @@ the folder zipped. It reuses:
   (like the embedded pack), a `dev` bundle ships them loose and the client may
   reload them.
 
-The native tool gains a small `noctis pack` (or `noctis build --bundle`): zip the
-export folder into `name.zip`. Nothing about the *runtime* is browser-specific —
+The native tool has a small `noctis pack --project <dir> [--out <file.zip>]`
+(`Project::bundle`, over `vfs::zip_store`): it zips the project at the archive
+root, dropping generated directories (`.noctis`, `dist`, `target`, `.git`), into
+`dist/<name>.zip` by default. Nothing about the *runtime* is browser-specific —
 the bundle is a normal project.
 
 ## Loading and storing (URL / OPFS / IndexedDB)

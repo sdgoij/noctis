@@ -4,9 +4,9 @@
 //! facade.
 //!
 //! * The **binary** dispatches subcommands — `noctis editor`, `noctis run`,
-//!   `noctis build`, `noctis rename` — each implemented by the crate that owns
-//!   it. A project that carries Rust (a `[rust]` table) is run through a generated
-//!   plugin-aware binary (see [`runtime::plugin`]).
+//!   `noctis build`, `noctis pack`, `noctis rename` — each implemented by the
+//!   crate that owns it. A project that carries Rust (a `[rust]` table) is run
+//!   through a generated plugin-aware binary (see [`runtime::plugin`]).
 //! * The **library** exposes the whole engine through [`prelude`], so an
 //!   application can `use noctis::prelude::*` and drive the very crates the tool
 //!   does. Everything is re-exported from the engine crates, never reimplemented
@@ -61,6 +61,7 @@ COMMANDS:
     editor             Open the editor, or build scenes from JSON commands.
     run                Run a scene or game (a window by default; --headless exits).
     build              Build a project into a self-contained game folder.
+    pack               Package a project into a distributable .zip bundle.
     rename             Move an asset and rewrite every reference to it.
     help               Show this help.
 
@@ -78,6 +79,8 @@ enum Route {
     Run(Vec<String>),
     /// Hand the remaining arguments to the build command.
     Build(Vec<String>),
+    /// Hand the remaining arguments to the pack command.
+    Pack(Vec<String>),
     /// Hand the remaining arguments to the rename command.
     Rename(Vec<String>),
     /// Fail.
@@ -99,6 +102,7 @@ fn route(args: &[String]) -> Route {
         )),
         "run" => Route::Run(rest),
         "build" => Route::Build(rest),
+        "pack" => Route::Pack(rest),
         "rename" => Route::Rename(rest),
         other => Route::Fail(CliError::Usage(format!("unknown command {other:?}"))),
     }
@@ -145,6 +149,7 @@ pub fn dispatch(args: &[String], plugin: &dyn Plugin) -> ExitCode {
         Route::Editor(rest) => editor::cli::run_cli_with_plugin(rest, plugin),
         Route::Run(rest) => runtime::cli::run_cli_with_plugin(rest, &[], plugin),
         Route::Build(rest) => outcome(commands::build(&rest, plugin)),
+        Route::Pack(rest) => outcome(commands::pack(&rest)),
         Route::Rename(rest) => outcome(commands::rename(&rest)),
         Route::Fail(error) => report(error),
     }
@@ -200,6 +205,14 @@ mod tests {
         match route(&args(&["run", "--headless", "--frames", "3"])) {
             Route::Run(rest) => assert_eq!(rest, args(&["--headless", "--frames", "3"])),
             other => panic!("expected run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pack_hands_off_its_arguments() {
+        match route(&args(&["pack", "--project", "game"])) {
+            Route::Pack(rest) => assert_eq!(rest, args(&["--project", "game"])),
+            other => panic!("expected pack, got {other:?}"),
         }
     }
 

@@ -440,6 +440,7 @@ overrides are not yet applied.
 noctis editor --project <dir> [--scene <path>] [--mode 2d|3d] [--headless]
 noctis run    --project <dir> [--scene <path>] [--headless] [--export ...] [--target <name>]
 noctis build  --project <dir> [--target <name>] [--scene <path>] [--out <dir>]
+noctis pack   --project <dir> [--out <file.zip>]
 ```
 
 `--project` locates the manifest, loads the project registry, and makes
@@ -461,7 +462,7 @@ Built on (reuse, do not reinvent):
   (to be extended to bundle assets).
 - `RuntimeConfig` — `physics`, `audio`, `gravity`, `timestep`.
 - `editor::EditorCommand` + `--print-schema` — the agent-drivable edit API.
-- `render::load_gltf` / `load_gltf_bytes`, `render::load_texture`, `render::load_hdr` — importers.
+- Importers: `render::load_gltf` / `load_gltf_bytes`, `render::load_texture` / `load_texture_bytes`, `render::load_hdr` / `load_hdr_bytes`, `audio::load_clip` / `load_clip_bytes` — the path-based form for the editor, the byte-based form for a store (`import_assets`).
 - `render::Renderer::set_environment` / `render::IblData::generate` — the IBL precompute, driven by `[render] environment`.
 - `editor --controls <file>` — camera bindings (to move under the project).
 
@@ -478,6 +479,10 @@ New work this design implies (✔ = implemented):
   `noctis rename` command).
 - ✔ Prefabs as project assets: `Project::save_prefab` / `load_prefabs`, and the
   editor's `--save-prefabs` and prefab loading.
+- ✔ A project `.zip` **bundle**: `Project::bundle` (`vfs::zip_store`) and the
+  `noctis pack` command package a project at an archive root, generated
+  directories excluded, for a `ZipStore` reader (a browser client, or
+  `Project::open_in`). Reads back through the byte-based importers.
 - Drag & drop in the editor: ✔ `Project::import_file` (the import half,
   auto-detect + place + no-clobber) and the winit `DroppedFile` → `AppDriver::drop_file`
   → project-import path. Remaining: the viewport/outliner **drop-target**

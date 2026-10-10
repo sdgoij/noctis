@@ -15,7 +15,8 @@
 //! * [`Project`] — an open manifest, its directories (convention plus `[paths]`
 //!   overrides), scene/prefab discovery, asset import (with the `.noctis/` cache
 //!   and sidecar [`TextureImportSettings`]), [`Project::import_file`] (a loose
-//!   file → an asset), and [`Project::rename_asset`] with reference rewriting.
+//!   file → an asset), [`Project::rename_asset`] with reference rewriting, and
+//!   [`Project::bundle`] (a `.zip` project bundle).
 //! * [`referenced_files`] — a scene's asset references → the files to bundle.
 
 #![forbid(unsafe_code)]
@@ -26,6 +27,7 @@ mod cache;
 mod error;
 mod import;
 mod manifest;
+mod pack;
 mod path;
 mod project;
 mod rename;
@@ -40,6 +42,7 @@ pub use manifest::{
     BuildTarget, InputSettings, Paths, Platform, Profile, ProjectInfo, ProjectManifest,
     RenderSettings, SceneListEntry, Settings, WindowSettings,
 };
+pub use pack::PACK_EXCLUDE;
 pub use path::{AssetKind, AssetPath, detect};
 pub use project::{MANIFEST_FILE, Project, SceneInfo};
 pub use rename::{RenameReport, rewrite_references};

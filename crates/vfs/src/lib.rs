@@ -30,7 +30,7 @@ use std::path::{Component, Path};
 
 pub use dir::DirStore;
 pub use memory::MemoryStore;
-pub use zip::ZipStore;
+pub use zip::{ZipStore, zip_store};
 
 /// The largest single file a store will read out of an archive.
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
@@ -278,5 +278,25 @@ mod tests {
         assert!(!is_zip("packed.zip.bak"));
         assert!(!is_zip("extension.js"));
         assert!(!is_zip("noext"));
+    }
+
+    #[test]
+    fn zip_store_round_trips_and_excludes() {
+        let mut store = MemoryStore::new();
+        store
+            .write("noctis.toml", b"[project]\nname = \"P\"\n")
+            .unwrap();
+        store.write("scenes/a.scene.json", b"{}").unwrap();
+        store.write("assets/models/deep/x.glb", b"bytes").unwrap();
+        store.write(".noctis/textures/dead.bin", b"junk").unwrap();
+        store.write("dist/game.exe", b"junk").unwrap();
+
+        let bytes = zip_store(&store, &[".noctis", "dist"]).unwrap();
+        let read = ZipStore::new(&bytes).expect("the archive reads back");
+        assert!(read.exists("noctis.toml"));
+        assert!(read.exists("scenes/a.scene.json"));
+        assert_eq!(read.read("assets/models/deep/x.glb").unwrap(), b"bytes");
+        assert!(!read.exists(".noctis/textures/dead.bin"));
+        assert!(!read.exists("dist/game.exe"));
     }
 }

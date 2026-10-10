@@ -1,11 +1,11 @@
-//! `noctis build` and `noctis rename`.
+//! `noctis build`, `noctis pack`, and `noctis rename`.
 //!
-//! Both are filesystem operations on a project (build a game folder; move an
-//! asset and rewrite the documents that reference it). Parsing is hand-rolled;
-//! usage problems are distinguished from failures so the caller can exit `2` or
-//! `1`.
+//! Each is a filesystem operation on a project (build a game folder; package a
+//! `.zip` bundle; move an asset and rewrite the documents that reference it).
+//! Parsing is hand-rolled; usage problems are distinguished from failures so the
+//! caller can exit `2` or `1`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ecs::app::Plugin;
 use project::{AssetPath, Profile, Project};
@@ -36,6 +36,21 @@ OPTIONS:
     --profile <PROFILE>  'release' (default) embeds scripts in the client; 'dev'
                          ships them as loose files, watched at run time.
     -h, --help           Show this help.";
+
+const PACK_USAGE: &str = "\
+noctis pack — package a project into a distributable .zip bundle
+
+USAGE:
+    noctis pack --project <DIR> [OPTIONS]
+
+OPTIONS:
+    --project <DIR>      The project directory (a noctis.toml). Required.
+    --out <PATH>         The output .zip (default: <project>/dist/<name>.zip).
+    -h, --help           Show this help.
+
+A bundle is the project at the archive root, ready for a `ZipStore` reader — a
+browser client, or `Project::open_in`. Generated directories (.noctis, dist,
+target, .git) are excluded.";
 
 const RENAME_USAGE: &str = "\
 noctis rename — move an asset and rewrite every reference to it
@@ -133,6 +148,70 @@ pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliE
     Ok(report.to_string())
 }
 
+/// Parse `pack`'s options and write the bundle.
+pub(crate) fn pack(args: &[String]) -> Result<String, CliError> {
+    let mut project: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) => (flag, Some(value.to_string())),
+            None => (arg.as_str(), None),
+        };
+        let value_for = |flag: &str| -> Result<(String, usize), CliError> {
+            if let Some(value) = inline.clone() {
+                return Ok((value, index));
+            }
+            match args.get(index + 1) {
+                Some(value) => Ok((value.clone(), index + 1)),
+                None => Err(CliError::Usage(format!("{flag} requires a value"))),
+            }
+        };
+        match flag {
+            "-h" | "--help" => return Ok(PACK_USAGE.to_string()),
+            "--project" | "-p" => {
+                let (value, consumed) = value_for("--project")?;
+                project = Some(value);
+                index = consumed;
+            }
+            "--out" | "-o" => {
+                let (value, consumed) = value_for("--out")?;
+                out = Some(value);
+                index = consumed;
+            }
+            other => return Err(CliError::Usage(format!("unknown option {other:?}"))),
+        }
+        index += 1;
+    }
+
+    let dir = project.ok_or_else(|| CliError::Usage("pack requires --project <DIR>".into()))?;
+    let project = Project::open(&dir).map_err(|error| CliError::Message(error.to_string()))?;
+    let bytes = project
+        .bundle()
+        .map_err(|error| CliError::Message(format!("failed to pack {dir:?}: {error}")))?;
+
+    let destination = out.map_or_else(
+        || {
+            Path::new(&dir)
+                .join("dist")
+                .join(format!("{}.zip", project.name()))
+        },
+        PathBuf::from,
+    );
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| CliError::Message(error.to_string()))?;
+    }
+    std::fs::write(&destination, &bytes).map_err(|error| CliError::Message(error.to_string()))?;
+
+    Ok(format!(
+        "packed {} ({} bytes) to {}",
+        project.name(),
+        bytes.len(),
+        destination.display()
+    ))
+}
+
 /// Parse `rename`'s options and move the asset.
 pub(crate) fn rename(args: &[String]) -> Result<String, CliError> {
     let mut project: Option<String> = None;
@@ -215,6 +294,21 @@ mod tests {
         assert!(matches!(
             build(&args(&["--project", "p", "--nope"]), &NullPlugin),
             Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn pack_parses_and_reports_errors() {
+        assert!(pack(&args(&["--help"])).unwrap().contains("noctis pack"));
+        assert!(matches!(pack(&args(&[])), Err(CliError::Usage(_))));
+        assert!(matches!(
+            pack(&args(&["--project", "p", "--nope"])),
+            Err(CliError::Usage(_))
+        ));
+        // A missing project is a message error, not a usage one.
+        assert!(matches!(
+            pack(&args(&["--project", "does-not-exist-xyz"])),
+            Err(CliError::Message(_))
         ));
     }
 

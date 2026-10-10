@@ -1,7 +1,12 @@
-//! A `.zip` archive backend, read into memory (read-only).
+//! A `.zip` archive backend: read into memory ([`ZipStore`]), and a writer
+//! ([`zip_store`]).
+//!
+//! This module is named `zip`, but a bare `zip::` path inside it resolves to the
+//! `zip` crate (the module is not in scope inside itself), so `zip::ZipWriter`
+//! etc. reach the real crate.
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 
 use crate::{
     Entry, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_FILES, MAX_FILE_BYTES, Store, StoreError, children,
@@ -108,6 +113,66 @@ impl Store for ZipStore {
     fn duplicate(&self) -> Box<dyn Store> {
         Box::new(ZipStore::clone(self))
     }
+}
+
+/// Write every file in `store` (recursively) into a new `.zip` archive, returning
+/// its bytes.
+///
+/// The archive holds the store's tree at its root, so [`ZipStore::new`] over the
+/// result reads the same paths back. A top-level entry named in `exclude` (and
+/// everything under it) is skipped — how a project packer drops generated
+/// directories (`.noctis`, `dist`, `target`, `.git`).
+pub fn zip_store(store: &dyn Store, exclude: &[&str]) -> Result<Vec<u8>, StoreError> {
+    let mut files = Vec::new();
+    collect_files(store, "", exclude, &mut files)?;
+    files.sort();
+
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for path in &files {
+        let bytes = store.read(path)?;
+        writer
+            .start_file(path.as_str(), options)
+            .map_err(|error| StoreError::Archive(error.to_string()))?;
+        writer
+            .write_all(&bytes)
+            .map_err(|error| StoreError::Archive(error.to_string()))?;
+    }
+    let cursor = writer
+        .finish()
+        .map_err(|error| StoreError::Archive(error.to_string()))?;
+    Ok(cursor.into_inner())
+}
+
+/// Collect the file paths under `dir`, skipping `exclude` names at the root.
+fn collect_files(
+    store: &dyn Store,
+    dir: &str,
+    exclude: &[&str],
+    out: &mut Vec<String>,
+) -> Result<(), StoreError> {
+    let entries = match store.list(dir) {
+        Ok(entries) => entries,
+        Err(StoreError::NotFound(_)) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        if dir.is_empty() && exclude.contains(&entry.name.as_str()) {
+            continue;
+        }
+        let path = if dir.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{dir}/{}", entry.name)
+        };
+        if entry.is_dir {
+            collect_files(store, &path, exclude, out)?;
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
