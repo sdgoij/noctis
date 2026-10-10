@@ -12,11 +12,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ecs::assets::{AssetRegistry, FontAsset, ScriptAsset};
+use vfs::{DirStore, Store};
 
 use crate::cache::{ImportCache, texture_key};
 use crate::error::ProjectError;
 use crate::path::{AssetKind, AssetPath, detect};
-use crate::project::{Project, relative_asset_path, walk_files};
+use crate::project::Project;
 use crate::settings::TextureImportSettings;
 
 /// One importable file in the project.
@@ -110,16 +111,20 @@ impl Project {
     /// Discover every importable asset file in the project.
     pub fn asset_map(&self) -> Result<AssetMap, ProjectError> {
         let mut files = Vec::new();
-        walk_files(&self.assets_dir(), &mut files)?;
-        walk_files(&self.scripts_dir(), &mut files)?;
+        let manifest = self.manifest();
+        self.walk(&manifest.paths.assets, &mut files)?;
+        self.walk(&manifest.paths.scripts, &mut files)?;
 
         let mut entries: Vec<AssetMapEntry> = files
             .into_iter()
-            .filter_map(|file| {
-                let path = relative_asset_path(self.root(), &file)?;
+            .filter_map(|relative| {
+                let path = AssetPath::parse(&relative).ok()?;
                 let kind = detect(path.as_str());
-                kind.is_asset()
-                    .then_some(AssetMapEntry { path, kind, file })
+                kind.is_asset().then(|| AssetMapEntry {
+                    file: self.root().join(&relative),
+                    path,
+                    kind,
+                })
             })
             .collect();
         entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -136,12 +141,13 @@ impl Project {
         let map = self.asset_map()?;
         let mut registry = AssetRegistry::with_builtins();
         let cache = ImportCache::new(self.root());
+        let store = self.store();
         let mut errors = Vec::new();
         let mut lookup = BTreeMap::new();
         for entry in map.entries() {
             // The file is always bundleable, even if decoding it fails.
             lookup.insert(entry.path.as_str().to_string(), entry.path.clone());
-            if let Err(message) = import_entry(&mut registry, entry, &mut lookup, &cache) {
+            if let Err(message) = import_entry(&mut registry, entry, &mut lookup, &cache, &store) {
                 errors.push(AssetImportError {
                     path: entry.path.clone(),
                     message,
@@ -163,14 +169,15 @@ fn import_entry(
     entry: &AssetMapEntry,
     lookup: &mut BTreeMap<String, AssetPath>,
     cache: &ImportCache,
+    store: &DirStore,
 ) -> Result<(), String> {
     match entry.kind {
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
-        AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache),
+        AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache, store),
         AssetKind::Environment => import_environment(registry, &entry.path, &entry.file),
         AssetKind::Audio => import_audio(registry, &entry.path, &entry.file),
-        AssetKind::Script => import_script(registry, &entry.path, &entry.file),
-        AssetKind::Font => import_font(registry, &entry.path, &entry.file),
+        AssetKind::Script => import_script(registry, &entry.path, store),
+        AssetKind::Font => import_font(registry, &entry.path, store),
         // Scenes and prefabs are not assets, and an unknown file is not imported.
         _ => Ok(()),
     }
@@ -198,9 +205,12 @@ fn import_texture(
     path: &AssetPath,
     file: &Path,
     cache: &ImportCache,
+    store: &DirStore,
 ) -> Result<(), String> {
-    let settings = TextureImportSettings::load(file)?;
-    let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+    let settings = TextureImportSettings::load(store, path.file_path())?;
+    let bytes = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
     let key = texture_key(&bytes, settings.srgb);
 
     let texture = match cache.load_texture(&key) {
@@ -221,9 +231,11 @@ fn import_texture(
 fn import_script(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    file: &Path,
+    store: &DirStore,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+    let bytes = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
     let asset = ScriptAsset::from_file_bytes(path.as_str(), &bytes)?;
     registry.scripts.insert_named(path.as_str(), asset);
     Ok(())
@@ -241,8 +253,14 @@ fn import_audio(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> 
 ///
 /// Glyph rasterization (a glyph atlas) is the next step and is not yet built; a
 /// `fonts` asset is the versioned source an atlas is baked from.
-fn import_font(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> Result<(), String> {
-    let data = std::fs::read(file).map_err(|error| error.to_string())?;
+fn import_font(
+    registry: &mut AssetRegistry,
+    path: &AssetPath,
+    store: &DirStore,
+) -> Result<(), String> {
+    let data = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
     if !FontAsset::is_font_data(&data) {
         return Err("not a recognised font file (expected TrueType or OpenType)".to_string());
     }
@@ -310,13 +328,17 @@ mod tests {
     #[test]
     fn a_wasm_file_imports_as_a_descriptor() {
         let dir = std::env::temp_dir().join(format!("noctis-wasm-import-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let file = dir.join("brain.wasm");
-        std::fs::write(&file, [0x00, 0x61, 0x73, 0x6d, 0x01]).expect("write");
+        std::fs::create_dir_all(dir.join("scripts")).expect("temp dir");
+        std::fs::write(
+            dir.join("scripts/brain.wasm"),
+            [0x00, 0x61, 0x73, 0x6d, 0x01],
+        )
+        .expect("write");
 
         let path = AssetPath::parse("scripts/brain.wasm").expect("asset path");
+        let store = DirStore::new(&dir);
         let mut registry = AssetRegistry::new();
-        import_script(&mut registry, &path, &file).expect("import a wasm file");
+        import_script(&mut registry, &path, &store).expect("import a wasm file");
 
         let asset = registry
             .scripts

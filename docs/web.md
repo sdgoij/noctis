@@ -6,8 +6,12 @@
 > [`docs/project.md`](project.md) and [`docs/extensions.md`](extensions.md).
 >
 > **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
-> `MemoryStore` and `ZipStore` — and the extension loader reads through it
-> (phase 1, partial). `project`/`runtime`/`editor` still call `std::fs`.
+> `MemoryStore` and `ZipStore` — and both the extension loader and the `project`
+> crate read and write project files through it (phase 1, partial). `runtime` and
+> `editor` still call `std::fs` for project data; the decoders
+> (`render::load_texture/load_hdr/load_gltf`, `audio::load_clip`) still take a
+> path. `import.rs` reads its *source* file with `std::fs` deliberately (the
+> source is outside the project).
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document

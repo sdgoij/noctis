@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use ecs::scene::SceneMode;
+use vfs::{DirStore, Store, StoreError};
 
 use crate::error::ProjectError;
 use crate::manifest::{BuildTarget, ProjectManifest};
@@ -10,22 +11,6 @@ use crate::path::AssetPath;
 
 /// The manifest file name.
 pub const MANIFEST_FILE: &str = "noctis.toml";
-
-/// The `[package].name` of the crate whose manifest is at `path`.
-fn package_name(manifest: &Path) -> Result<String, ProjectError> {
-    let text = std::fs::read_to_string(manifest)
-        .map_err(|error| ProjectError::Io(format!("{}: {error}", manifest.display())))?;
-    let value: toml::Value =
-        toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
-    let name = value
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .ok_or_else(|| {
-            ProjectError::Manifest(format!("{}: missing [package].name", manifest.display()))
-        })?;
-    Ok(name.to_string())
-}
 
 /// A project scene: its document path and a display name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,13 +37,19 @@ impl Project {
     /// Open the project whose manifest is at `path`.
     pub fn from_manifest_file(path: impl AsRef<Path>) -> Result<Self, ProjectError> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|e| ProjectError::Io(e.to_string()))?;
-        let manifest = ProjectManifest::from_toml(&text)?;
-        manifest.validate()?;
         let manifest_dir = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ProjectError::Io(format!("{}: bad manifest path", path.display())))?;
+        let text = DirStore::new(manifest_dir)
+            .read_string(name)
+            .map_err(|error| ProjectError::Io(error.to_string()))?;
+        let manifest = ProjectManifest::from_toml(&text)?;
+        manifest.validate()?;
         // A `[project] root` relocates the project, so a development build's
         // manifest can sit beside its client while the files live in the project
         // it was built from.
@@ -82,6 +73,49 @@ impl Project {
             root: root.into(),
             manifest,
         }
+    }
+
+    /// A store rooted at the project directory.
+    ///
+    /// Every project file is read and written through this, so the crate does not
+    /// call `std::fs` itself (see `docs/web.md`) and a browser build can swap the
+    /// backend.
+    pub(crate) fn store(&self) -> DirStore {
+        DirStore::new(self.root.clone())
+    }
+
+    /// Read a project-relative file as UTF-8 text.
+    fn read_string(&self, relative: &str) -> Result<String, ProjectError> {
+        self.store()
+            .read_string(relative)
+            .map_err(|error| ProjectError::Io(format!("{relative}: {error}")))
+    }
+
+    /// Write a project-relative file, creating parent directories.
+    fn write_file(&self, relative: &str, bytes: &[u8]) -> Result<(), ProjectError> {
+        let mut store = self.store();
+        store
+            .write(relative, bytes)
+            .map_err(|error| ProjectError::Io(format!("{relative}: {error}")))
+    }
+
+    /// The files under a project-relative directory, as `/`-joined relative paths.
+    pub(crate) fn walk(&self, dir: &str, out: &mut Vec<String>) -> Result<(), ProjectError> {
+        walk_files(&self.store(), dir, out)
+    }
+
+    /// The `[package].name` of the crate at `<crate_dir>/Cargo.toml`.
+    fn crate_package_name(&self, crate_dir: &str) -> Result<String, ProjectError> {
+        let relative = format!("{crate_dir}/Cargo.toml");
+        let text = self.read_string(&relative)?;
+        let value: toml::Value =
+            toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
+        value
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(|name| name.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| ProjectError::Manifest(format!("{relative}: missing [package].name")))
     }
 
     /// The project root directory.
@@ -169,7 +203,7 @@ impl Project {
         if let Some(plugin) = &rust.plugin {
             return Ok(Some(plugin.clone()));
         }
-        let package = package_name(&self.dir(&rust.crate_dir).join("Cargo.toml"))?;
+        let package = self.crate_package_name(&rust.crate_dir)?;
         Ok(Some(format!("{}::plugin", package.replace('-', "_"))))
     }
 
@@ -178,9 +212,7 @@ impl Project {
         let Some(rust) = &self.manifest.rust else {
             return Ok(None);
         };
-        Ok(Some(package_name(
-            &self.dir(&rust.crate_dir).join("Cargo.toml"),
-        )?))
+        Ok(Some(self.crate_package_name(&rust.crate_dir)?))
     }
 
     /// The project's extension search directories, absolute (see `docs/extensions.md`).
@@ -280,11 +312,7 @@ impl Project {
     /// directory. Returns the asset path written.
     pub fn save_prefab(&self, prefab: &ecs::scene::Prefab) -> Result<AssetPath, ProjectError> {
         let path = self.prefab_path(&prefab.name)?;
-        let file = self.file_for(&path);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ProjectError::Io(e.to_string()))?;
-        }
-        std::fs::write(&file, prefab.to_json()).map_err(|e| ProjectError::Io(e.to_string()))?;
+        self.write_file(path.file_path(), prefab.to_json().as_bytes())?;
         Ok(path)
     }
 
@@ -295,9 +323,7 @@ impl Project {
     pub fn load_prefabs(&self) -> Result<Vec<ecs::scene::Prefab>, ProjectError> {
         let mut prefabs = Vec::new();
         for path in self.discover_prefabs()? {
-            let file = self.file_for(&path);
-            let text =
-                std::fs::read_to_string(&file).map_err(|e| ProjectError::Io(e.to_string()))?;
+            let text = self.read_string(path.file_path())?;
             let prefab = ecs::scene::Prefab::from_json(&text).map_err(|e| {
                 ProjectError::Manifest(format!("invalid prefab {}: {e}", path.as_str()))
             })?;
@@ -310,11 +336,11 @@ impl Project {
     /// as sorted project-relative asset paths. A missing directory yields none.
     fn discover(&self, dir: &str, suffix: &str) -> Result<Vec<AssetPath>, ProjectError> {
         let mut files = Vec::new();
-        walk_files(&self.dir(dir), &mut files)?;
+        self.walk(dir, &mut files)?;
         let mut paths: Vec<AssetPath> = files
             .into_iter()
-            .filter(|path| has_suffix(path, suffix))
-            .filter_map(|path| relative_asset_path(&self.root, &path))
+            .filter(|relative| relative.to_ascii_lowercase().ends_with(suffix))
+            .filter_map(|relative| AssetPath::parse(relative).ok())
             .collect();
         paths.sort();
         paths.dedup();
@@ -328,36 +354,28 @@ fn scene_name(path: &AssetPath) -> String {
     file.strip_suffix(".scene.json").unwrap_or(file).to_string()
 }
 
-/// Whether `path`'s file name ends with `suffix` (case-insensitive).
-fn has_suffix(path: &Path, suffix: &str) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(suffix))
-}
-
-/// A project-relative asset path for an absolute `path` under `root`.
-pub(crate) fn relative_asset_path(root: &Path, path: &Path) -> Option<AssetPath> {
-    let relative = path.strip_prefix(root).ok()?;
-    let text = relative.to_string_lossy().replace('\\', "/");
-    AssetPath::parse(text).ok()
-}
-
-/// Recursively collect files under `dir`. A missing directory is not an error.
-pub(crate) fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
-    let entries = match std::fs::read_dir(dir) {
+/// Recursively collect the files under `dir` (a store-relative directory) as
+/// `/`-joined store-relative paths. A missing directory yields none.
+pub(crate) fn walk_files(
+    store: &DirStore,
+    dir: &str,
+    out: &mut Vec<String>,
+) -> Result<(), ProjectError> {
+    let entries = match store.list(dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(StoreError::NotFound(_)) => return Ok(()),
         Err(error) => return Err(ProjectError::Io(error.to_string())),
     };
     for entry in entries {
-        let entry = entry.map_err(|e| ProjectError::Io(e.to_string()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|e| ProjectError::Io(e.to_string()))?;
-        if file_type.is_dir() {
-            walk_files(&entry.path(), out)?;
+        let path = if dir.is_empty() {
+            entry.name.clone()
         } else {
-            out.push(entry.path());
+            format!("{dir}/{}", entry.name)
+        };
+        if entry.is_dir {
+            walk_files(store, &path, out)?;
+        } else {
+            out.push(path);
         }
     }
     Ok(())

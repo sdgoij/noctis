@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use vfs::{DirStore, Store, StoreError};
 
 /// The sidecar file-name suffix (`<asset>.import.toml`).
 pub const SIDECAR_SUFFIX: &str = ".import.toml";
@@ -44,17 +45,16 @@ impl TextureImportSettings {
         PathBuf::from(name)
     }
 
-    /// Load the settings for `file`, or the defaults when there is no sidecar.
-    pub fn load(file: &Path) -> Result<Self, String> {
-        let sidecar = Self::sidecar_for(file);
-        let text = match std::fs::read_to_string(&sidecar) {
+    /// Load the settings for the store-relative asset `relative`, or the defaults
+    /// when there is no sidecar.
+    pub fn load(store: &DirStore, relative: &str) -> Result<Self, String> {
+        let sidecar = format!("{relative}{SIDECAR_SUFFIX}");
+        let text = match store.read_string(&sidecar) {
             Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(format!("failed to read {}: {error}", sidecar.display())),
+            Err(StoreError::NotFound(_)) => return Ok(Self::default()),
+            Err(error) => return Err(format!("failed to read {sidecar}: {error}")),
         };
-        toml::from_str(&text).map_err(|error| format!("invalid {}: {error}", sidecar.display()))
+        toml::from_str(&text).map_err(|error| format!("invalid {sidecar}: {error}"))
     }
 }
 
@@ -74,7 +74,8 @@ mod tests {
     #[test]
     fn defaults_are_srgb() {
         assert!(TextureImportSettings::default().srgb);
-        let loaded = TextureImportSettings::load(Path::new("does-not-exist.png")).unwrap();
+        let store = DirStore::new(std::env::temp_dir());
+        let loaded = TextureImportSettings::load(&store, "noctis-does-not-exist.png").unwrap();
         assert_eq!(loaded, TextureImportSettings::default());
     }
 
@@ -93,7 +94,8 @@ mod tests {
         std::fs::write(&asset, b"x").unwrap();
         std::fs::write(TextureImportSettings::sidecar_for(&asset), "srgb = false\n").unwrap();
 
-        let loaded = TextureImportSettings::load(&asset).unwrap();
+        let store = DirStore::new(&dir);
+        let loaded = TextureImportSettings::load(&store, "data.png").unwrap();
         assert!(!loaded.srgb);
 
         // An unknown key is an error (a typo in an import setting is a bug).
@@ -102,7 +104,7 @@ mod tests {
             "brightness = 2.0\n",
         )
         .unwrap();
-        assert!(TextureImportSettings::load(&asset).is_err());
+        assert!(TextureImportSettings::load(&store, "data.png").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
     }

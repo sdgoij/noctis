@@ -11,9 +11,11 @@
 
 use std::path::PathBuf;
 
+use vfs::Store;
+
 use crate::error::ProjectError;
 use crate::path::AssetPath;
-use crate::project::{Project, walk_files};
+use crate::project::Project;
 
 /// What [`Project::rename_asset`] did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,67 +66,60 @@ impl Project {
             ));
         }
 
-        let source = self.file_for(from);
-        let destination = self.file_for(to);
-        if !source.is_file() {
+        let mut store = self.store();
+        let source = from.file_path().to_string();
+        let destination = to.file_path().to_string();
+        if !store.exists(&source) {
             return Err(ProjectError::MissingAsset(from.as_str().to_string()));
         }
-        if destination.exists() {
+        if store.exists(&destination) {
             return Err(ProjectError::Rename(format!(
                 "{} already exists",
                 to.as_str()
             )));
         }
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ProjectError::Io(e.to_string()))?;
-        }
-        std::fs::rename(&source, &destination).map_err(|e| ProjectError::Io(e.to_string()))?;
+        store
+            .rename(&source, &destination)
+            .map_err(|e| ProjectError::Io(e.to_string()))?;
 
         // Rewrite references in every scene and prefab document.
         let mut documents = Vec::new();
+        let manifest = self.manifest();
         let mut files = Vec::new();
-        walk_files(&self.scenes_dir(), &mut files)?;
-        walk_files(&self.prefabs_dir(), &mut files)?;
+        self.walk(&manifest.paths.scenes, &mut files)?;
+        self.walk(&manifest.paths.prefabs, &mut files)?;
         for file in files {
             if !is_document(&file) {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&file) else {
+            let Ok(text) = store.read_string(&file) else {
                 continue;
             };
             let rewritten = rewrite_references(&text, from, to);
             if rewritten == text {
                 continue;
             }
-            std::fs::write(&file, rewritten).map_err(|e| ProjectError::Io(e.to_string()))?;
-            if let Some(relative) = relative(self.root(), &file) {
+            store
+                .write(&file, rewritten.as_bytes())
+                .map_err(|e| ProjectError::Io(e.to_string()))?;
+            if let Ok(relative) = AssetPath::parse(&file) {
                 documents.push(relative);
             }
         }
         documents.sort();
 
         Ok(RenameReport {
-            from: source,
-            to: destination,
+            from: self.file_for(from),
+            to: self.file_for(to),
             documents,
         })
     }
 }
 
-/// Whether `path` is a scene or prefab document.
-fn is_document(path: &std::path::Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
+/// Whether `path` (a store-relative path) is a scene or prefab document.
+fn is_document(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     name.ends_with(".scene.json") || name.ends_with(".prefab.json") || name == "scene.json"
-}
-
-/// `path` relative to `root`, as an asset path.
-fn relative(root: &std::path::Path, path: &std::path::Path) -> Option<AssetPath> {
-    let relative = path.strip_prefix(root).ok()?;
-    AssetPath::parse(relative.to_string_lossy().replace('\\', "/")).ok()
 }
 
 #[cfg(test)]

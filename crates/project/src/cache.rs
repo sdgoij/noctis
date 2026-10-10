@@ -13,6 +13,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use ecs::assets::{Texture, TextureFormat};
+use vfs::{DirStore, Store};
 
 /// The generated cache directory name (gitignored).
 pub const CACHE_DIR: &str = ".noctis";
@@ -43,14 +44,19 @@ impl ImportCache {
         &self.root
     }
 
-    fn texture_path(&self, key: &str) -> PathBuf {
-        self.root.join(TEXTURE_DIR).join(format!("{key}.bin"))
+    /// A store rooted at the cache directory.
+    fn store(&self) -> DirStore {
+        DirStore::new(self.root.clone())
+    }
+
+    fn texture_path(&self, key: &str) -> String {
+        format!("{TEXTURE_DIR}/{key}.bin")
     }
 
     /// A cached texture for `key`, if present and well-formed. A missing or
     /// corrupt entry is a miss (never an error).
     pub fn load_texture(&self, key: &str) -> Option<Texture> {
-        let bytes = std::fs::read(self.texture_path(key)).ok()?;
+        let bytes = self.store().read(&self.texture_path(key)).ok()?;
         decode_texture(&bytes)
     }
 
@@ -58,12 +64,11 @@ impl ImportCache {
     /// the caller already has the decoded value — so this only returns an error
     /// for the caller to log.
     pub fn store_texture(&self, key: &str, texture: &Texture) -> Result<(), String> {
-        let path = self.texture_path(key);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
         let bytes = encode_texture(texture);
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())
+        let mut store = self.store();
+        store
+            .write(&self.texture_path(key), &bytes)
+            .map_err(|error| error.to_string())
     }
 }
 
