@@ -265,6 +265,68 @@ fn a_corrupt_model_is_recorded_without_failing_the_import() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn imports_assets_from_a_non_directory_store() {
+    use vfs::{MemoryStore, Store};
+
+    // A store with no directory behind it: every byte is decoded from memory.
+    let mut store = MemoryStore::new();
+    store.write("noctis.toml", manifest().as_bytes()).unwrap();
+    store
+        .write("assets/textures/wood.png", &png_bytes(2, 3))
+        .unwrap();
+    store
+        .write(
+            "assets/audio/beep.wav",
+            &wav_bytes(8_000, &[0, 8_192, -8_192]),
+        )
+        .unwrap();
+    store
+        .write("assets/models/tri.glb", &triangle_glb())
+        .unwrap();
+    store
+        .write("scripts/player.js", b"function on_update() {}\n")
+        .unwrap();
+
+    // The logical root only backs the generated cache; it is not read.
+    let root = temp_project("store-root");
+    let project = Project::open_in(Box::new(store), root.clone()).expect("open from store");
+    let imported = project.import_assets().expect("import");
+    assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+
+    let texture = imported
+        .registry
+        .textures
+        .get_by_path("assets/textures/wood.png")
+        .expect("texture decoded from bytes");
+    assert_eq!((texture.width, texture.height), (2, 3));
+
+    let clip = imported
+        .registry
+        .audio
+        .get_by_path("assets/audio/beep.wav")
+        .expect("audio decoded from bytes");
+    assert_eq!(clip.sample_rate, 8_000);
+
+    assert!(
+        imported
+            .registry
+            .meshes
+            .handle("TriMesh_primitive0")
+            .is_some(),
+        "the model decoded from bytes"
+    );
+    assert!(
+        imported
+            .registry
+            .scripts
+            .handle("scripts/player.js")
+            .is_some()
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
 // -- fixtures ---------------------------------------------------------------
 
 /// A tiny RGBA PNG, via the `image` crate (a dev-dependency).

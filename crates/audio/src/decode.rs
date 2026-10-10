@@ -3,6 +3,8 @@
 //! [`load_clip`] reads an audio file (WAV, Ogg/Vorbis, or MP3 — whatever the
 //! `symphonia` backends behind rodio support) into an [`AudioClip`] of
 //! interleaved `f32` samples, so a project's `assets/audio/*` become playable.
+//! [`load_clip_bytes`] is the byte-based counterpart, for a caller that reads
+//! the file through a store rather than a path.
 
 use std::path::Path;
 
@@ -23,15 +25,33 @@ pub fn load_clip(path: impl AsRef<Path>) -> Result<AudioClip, AudioError> {
     let file = std::fs::File::open(path).map_err(|error| AudioError::Io(error.to_string()))?;
     let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
         .map_err(|error| AudioError::Decode(error.to_string()))?;
+    Ok(clip_from_decoder(name, decoder))
+}
+
+/// Decode in-memory audio `bytes` into an [`AudioClip`] named `name`.
+///
+/// The byte-based counterpart of [`load_clip`], for a caller that reads the file
+/// through a store (a project bundle, browser storage) rather than a path.
+pub fn load_clip_bytes(name: &str, bytes: &[u8]) -> Result<AudioClip, AudioError> {
+    let decoder = rodio::Decoder::new(std::io::Cursor::new(bytes.to_vec()))
+        .map_err(|error| AudioError::Decode(error.to_string()))?;
+    Ok(clip_from_decoder(name.to_string(), decoder))
+}
+
+/// Collect a rodio decoder into an [`AudioClip`].
+fn clip_from_decoder<R>(name: String, decoder: rodio::Decoder<R>) -> AudioClip
+where
+    R: std::io::Read + std::io::Seek,
+{
     let sample_rate = decoder.sample_rate().get();
     let channels = decoder.channels().get();
     let samples: Vec<f32> = decoder.collect();
-    Ok(AudioClip {
+    AudioClip {
         name,
         sample_rate,
         channels,
         samples,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +111,16 @@ mod tests {
         }
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn decodes_wav_from_bytes() {
+        let samples = [0i16, 16_384, -16_384, 32_767];
+        let clip = load_clip_bytes("beep", &wav_bytes(8_000, &samples)).expect("decode bytes");
+        assert_eq!(clip.sample_rate, 8_000);
+        assert_eq!(clip.channels, 1);
+        assert_eq!(clip.name, "beep", "the caller names the clip");
+        assert_eq!(clip.samples.len(), samples.len());
     }
 
     #[test]

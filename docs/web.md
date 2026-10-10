@@ -11,11 +11,14 @@
 > partial). `Project` now **owns** its `Store` and can be opened from one with
 > `Project::open_in(store, root)` (a `.zip` bundle or browser storage); `Editor`
 > gains `open_in`/`open_or_new_in`/`save_to`, and `DirStore::for_file` views a
-> single path-addressed document as a store. The native-only build/export/plugin
-> paths (`runtime::build`/`export`/`plugin`) and the decoders
-> (`render::load_texture/load_hdr/load_gltf`, `audio::load_clip`) still call
-> `std::fs` / take a path; `import.rs` reads its *source* file with `std::fs`
-> deliberately (the source is outside the project).
+> single path-addressed document as a store. The **decoders are byte-based**:
+> `render::load_texture_bytes`/`load_hdr_bytes`/`load_gltf_bytes` and
+> `audio::load_clip_bytes` decode from bytes, and `project::import_assets` feeds
+> them from the store's bytes, so a store-backed project decodes with no
+> directory (the path-based entry points remain for the native editor). The
+> native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
+> call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
+> (the source is outside the project).
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document
@@ -77,8 +80,8 @@ Nothing in this document is implemented; it is the plan and the contract.
 | GPU | `render` | wgpu has a WebGPU backend, but device init is **synchronous today** (`pollster::block_on(request_adapter/request_device)`) — it must become `await`-able. |
 | Window / input / UI | `platform` | winit has a wasm backend and `egui-wgpu` paints to a canvas, but this is the least-travelled path; a new web host implements the same `AppDriver` seam. |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
-| Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend and decoding from bytes, not `File`. |
-| Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated; the decoders still take a path). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
+| Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend; decoding from bytes is now in place (`audio::load_clip_bytes`), so only the output sink is missing. |
+| Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
 ## The seams to introduce

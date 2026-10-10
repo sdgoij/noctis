@@ -18,14 +18,31 @@ use crate::error::RenderError;
 pub fn load_texture(path: impl AsRef<Path>, srgb: bool) -> Result<Texture, RenderError> {
     let path = path.as_ref();
     let decoded = image::open(path).map_err(|e| RenderError::Image(e.to_string()))?;
+    Ok(texture_from_image(
+        file_stem(path, "texture"),
+        decoded,
+        srgb,
+    ))
+}
+
+/// Decode in-memory image `bytes` (format guessed from the content) into an RGBA8
+/// texture named `name`.
+///
+/// The byte-based counterpart of [`load_texture`], for a caller that reads the
+/// file through a store (a project bundle, browser storage) rather than a path.
+pub fn load_texture_bytes(name: &str, bytes: &[u8], srgb: bool) -> Result<Texture, RenderError> {
+    Ok(texture_from_image(
+        name.to_string(),
+        decode_image(bytes)?,
+        srgb,
+    ))
+}
+
+/// Build an RGBA8 [`Texture`] from a decoded image.
+fn texture_from_image(name: String, decoded: image::DynamicImage, srgb: bool) -> Texture {
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("texture")
-        .to_string();
-    Ok(Texture {
+    Texture {
         name,
         width,
         height,
@@ -35,7 +52,7 @@ pub fn load_texture(path: impl AsRef<Path>, srgb: bool) -> Result<Texture, Rende
             TextureFormat::Rgba8Unorm
         },
         data: rgba.into_raw(),
-    })
+    }
 }
 
 /// Load an equirectangular Radiance `.hdr` file into a floating-point
@@ -51,12 +68,21 @@ pub fn load_texture(path: impl AsRef<Path>, srgb: bool) -> Result<Texture, Rende
 /// the whole frame.
 pub fn load_hdr(path: impl AsRef<Path>) -> Result<HdrTexture, RenderError> {
     let path = path.as_ref();
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("environment")
-        .to_string();
+    let name = file_stem(path, "environment");
     let decoded = image::open(path).map_err(|e| RenderError::Image(e.to_string()))?;
+    hdr_from_image(name, decoded)
+}
+
+/// Decode in-memory Radiance `.hdr` `bytes` (format guessed from the content)
+/// into a floating-point [`HdrTexture`] named `name`.
+///
+/// The byte-based counterpart of [`load_hdr`].
+pub fn load_hdr_bytes(name: &str, bytes: &[u8]) -> Result<HdrTexture, RenderError> {
+    hdr_from_image(name.to_string(), decode_image(bytes)?)
+}
+
+/// Build a linear [`HdrTexture`] from a decoded image, clamping bad samples.
+fn hdr_from_image(name: String, decoded: image::DynamicImage) -> Result<HdrTexture, RenderError> {
     let (width, height) = (decoded.width(), decoded.height());
     if width == 0 || height == 0 {
         return Err(RenderError::Image(format!(
@@ -80,6 +106,23 @@ pub fn load_hdr(path: impl AsRef<Path>) -> Result<HdrTexture, RenderError> {
         height,
         data,
     })
+}
+
+/// Decode in-memory image bytes, guessing the format from the content.
+fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage, RenderError> {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| RenderError::Image(e.to_string()))?
+        .decode()
+        .map_err(|e| RenderError::Image(e.to_string()))
+}
+
+/// The display name for an image path: its file stem, or `fallback`.
+fn file_stem(path: &Path, fallback: &str) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -114,6 +157,23 @@ mod tests {
         let texture = load_texture(&path, false).expect("load");
         assert_eq!(texture.format, TextureFormat::Rgba8Unorm);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn decodes_png_bytes_with_an_explicit_name() {
+        let path = write_png("bytes.png");
+        let bytes = std::fs::read(&path).expect("read png");
+        let texture = load_texture_bytes("wood", &bytes, true).expect("load from bytes");
+        assert_eq!((texture.width, texture.height), (3, 2));
+        assert_eq!(texture.format, TextureFormat::Rgba8Srgb);
+        assert_eq!(texture.name, "wood", "the caller names the texture");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn decoding_garbage_bytes_is_an_image_error() {
+        let err = load_texture_bytes("junk", b"not an image", true).unwrap_err();
+        assert!(matches!(err, RenderError::Image(_)), "{err:?}");
     }
 
     #[test]
@@ -200,5 +260,27 @@ mod tests {
         let err = load_hdr(&path).unwrap_err();
         assert!(matches!(err, RenderError::Image(_)), "{err:?}");
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn decodes_hdr_bytes_with_an_explicit_name() {
+        let bytes = hdr_bytes(
+            4,
+            2,
+            &[
+                [128, 0, 0, 129],
+                [128, 0, 0, 129],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [64, 64, 64, 128],
+                [64, 64, 64, 128],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+            ],
+        );
+        let hdr = load_hdr_bytes("sky", &bytes).expect("load from bytes");
+        assert_eq!((hdr.width, hdr.height), (4, 2));
+        assert_eq!(hdr.name, "sky");
+        assert!((hdr.data[0] - 1.0).abs() < 1e-6, "red = {}", hdr.data[0]);
     }
 }

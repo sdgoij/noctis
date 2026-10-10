@@ -48,7 +48,7 @@ pub mod engine;
 pub mod spatial;
 
 pub use clip_source::ClipSource;
-pub use decode::load_clip;
+pub use decode::{load_clip, load_clip_bytes};
 pub use engine::{
     AudioEngine, AudioError, DEFAULT_MAX_DISTANCE, DEFAULT_ROLLOFF, Listener, PlaybackConfig,
     SoundHandle,

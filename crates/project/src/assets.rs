@@ -172,15 +172,25 @@ fn import_entry(
     store: &dyn Store,
 ) -> Result<(), String> {
     match entry.kind {
-        AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
-        AssetKind::Texture => import_texture(registry, &entry.path, &entry.file, cache, store),
-        AssetKind::Environment => import_environment(registry, &entry.path, &entry.file),
-        AssetKind::Audio => import_audio(registry, &entry.path, &entry.file),
+        AssetKind::Model => import_model(registry, &entry.path, lookup, store),
+        AssetKind::Texture => import_texture(registry, &entry.path, cache, store),
+        AssetKind::Environment => import_environment(registry, &entry.path, store),
+        AssetKind::Audio => import_audio(registry, &entry.path, store),
         AssetKind::Script => import_script(registry, &entry.path, store),
         AssetKind::Font => import_font(registry, &entry.path, store),
         // Scenes and prefabs are not assets, and an unknown file is not imported.
         _ => Ok(()),
     }
+}
+
+/// The texture/clip name for an asset path: its file's stem
+/// (`assets/hdris/sky.hdr` -> `sky`), matching the path-based decoders.
+fn asset_stem(path: &AssetPath) -> String {
+    Path::new(path.file_path())
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(path.as_str())
+        .to_string()
 }
 
 /// Import an equirectangular `.hdr` environment file, registered under its asset
@@ -189,9 +199,13 @@ fn import_entry(
 fn import_environment(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    file: &Path,
+    store: &dyn Store,
 ) -> Result<(), String> {
-    let hdr = render::load_hdr(file).map_err(|error| error.to_string())?;
+    let bytes = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
+    let hdr =
+        render::load_hdr_bytes(&asset_stem(path), &bytes).map_err(|error| error.to_string())?;
     registry.hdr.insert_named(path.as_str(), hdr);
     Ok(())
 }
@@ -203,7 +217,6 @@ fn import_environment(
 fn import_texture(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    file: &Path,
     cache: &ImportCache,
     store: &dyn Store,
 ) -> Result<(), String> {
@@ -216,7 +229,8 @@ fn import_texture(
     let texture = match cache.load_texture(&key) {
         Some(texture) => texture,
         None => {
-            let texture = render::load_texture(file, settings.srgb).map_err(|e| e.to_string())?;
+            let texture = render::load_texture_bytes(&asset_stem(path), &bytes, settings.srgb)
+                .map_err(|e| e.to_string())?;
             // A cache write failure is not fatal: we already have the texture.
             let _ = cache.store_texture(&key, &texture);
             texture
@@ -243,8 +257,16 @@ fn import_script(
 
 /// Import an audio file, registered under its asset path. Decoding is done by
 /// the `audio` crate (WAV/Ogg/MP3), giving interleaved `f32` samples.
-fn import_audio(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> Result<(), String> {
-    let clip = audio::load_clip(file).map_err(|error| error.to_string())?;
+fn import_audio(
+    registry: &mut AssetRegistry,
+    path: &AssetPath,
+    store: &dyn Store,
+) -> Result<(), String> {
+    let bytes = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
+    let clip =
+        audio::load_clip_bytes(&asset_stem(path), &bytes).map_err(|error| error.to_string())?;
     registry.audio.insert_named(path.as_str(), clip);
     Ok(())
 }
@@ -278,10 +300,13 @@ fn import_font(
 fn import_model(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    file: &Path,
     lookup: &mut BTreeMap<String, AssetPath>,
+    store: &dyn Store,
 ) -> Result<(), String> {
-    let loaded = render::load_gltf(file).map_err(|error| error.to_string())?;
+    let bytes = store
+        .read(path.file_path())
+        .map_err(|error| error.to_string())?;
+    let loaded = render::load_gltf_bytes(&bytes).map_err(|error| error.to_string())?;
     let registered = loaded.register(registry);
     for (mesh, handle) in loaded.meshes.iter().zip(&registered.meshes) {
         let fragment = fragment_path(path.as_str(), "mesh", &mesh.name);
