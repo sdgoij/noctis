@@ -1,0 +1,569 @@
+//! Editor extensions: the `noctis` JavaScript global, loading, and verb dispatch.
+//!
+//! This is the host half of `docs/extensions.md`. The pure loader
+//! ([`extensions`]) discovers and reads extensions; here they are evaluated in
+//! the Slag engine against a single versioned global, `noctis`, and their edits
+//! are replayed through [`Editor::apply_json`] — the same validated, undoable
+//! path the CLI and an AI agent use.
+//!
+//! The global is defined *in JavaScript* (the [`BOOTSTRAP`] source): it holds the
+//! registered verbs and hooks and calls a handful of Rust primitives
+//! (`__host_edit`, `__host_reads`, ...) for the things that need the editor. That
+//! mirrors how the Goat mod API wraps the scene in a bootstrap script: the Rust
+//! side stays small and the JS side owns the registry.
+//!
+//! JS gets no filesystem: an extension can only touch the editor through
+//! `noctis.edit` (an `EditorCommand` batch) and the read snapshots. It cannot
+//! corrupt the scene in a way `undo` cannot reverse.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use ecs::scene::SceneMode;
+use extensions::{Loader, Manifest};
+
+use crate::Editor;
+use crate::info::EntityDto;
+
+/// The `noctis` global, defined in JavaScript. See the module docs.
+const BOOTSTRAP: &str = r#"
+(function () {
+  "use strict";
+  var RESERVED = ["help", "extensions", "run", "quit", "exit"];
+  var current = null;
+  var frozen = false;
+  var extensions = {};
+  var commands = {};
+  var hooks = {};
+
+  var noctis = {
+    api: 1,
+    extension: null,
+    begin: function (id) { current = id; return noctis; },
+    end: function (id) { if (current === id) { current = null; } },
+    freeze: function () { current = null; frozen = true; },
+    on: function (event, fn) {
+      if (frozen) { throw new Error("registration is closed"); }
+      (hooks[event] = hooks[event] || []).push({ id: current, fn: fn });
+      return function () {};
+    },
+    off: function () {},
+    command: function (name, fn) {
+      if (frozen) { throw new Error("registration is closed"); }
+      if (RESERVED.indexOf(name) >= 0) {
+        __host_log("extension " + current + " may not shadow the built-in verb '" + name + "'");
+        return;
+      }
+      commands[name] = { id: current, fn: fn };
+    },
+    fail: function (message) { __host_log("extension " + current + " failed: " + message); },
+    log: function () { __host_log(Array.prototype.slice.call(arguments).join(" ")); },
+    edit: function (batch) {
+      var list = Array.isArray(batch) ? batch : [batch];
+      __host_edit(JSON.stringify(list));
+      return list.length;
+    },
+    editor: {
+      _reads: function () { return JSON.parse(__host_reads()); },
+      list_entities: function () { return JSON.stringify(this._reads().entities); },
+      selection: function () { return JSON.stringify(this._reads().selection); },
+      scene_name: function () { return this._reads().scene; },
+      mode: function () { return this._reads().mode; },
+      find: function (name) {
+        var list = this._reads().entities;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].name === name) { return list[i].entity; }
+        }
+        return undefined;
+      }
+    }
+  };
+  globalThis.noctis = noctis;
+
+  globalThis.__noctis_register_extension = function (id, info) {
+    extensions[id] = JSON.parse(info);
+  };
+
+  globalThis.__noctis_fire = function (event, arg) {
+    var fns = hooks[event] || [];
+    for (var i = 0; i < fns.length; i++) {
+      noctis.extension = extensions[fns[i].id] || null;
+      try { fns[i].fn(arg); } catch (e) { __host_log("hook '" + event + "' threw: " + e); }
+    }
+  };
+
+  globalThis.__noctis_dispatch = function (line) {
+    var text = String(line).trim();
+    var parts = text.length ? text.split(/\s+/) : [];
+    var verb = parts[0] || "";
+    var reply;
+    if (verb === "help" || verb === "") {
+      reply = "ok verbs: " + Object.keys(commands).sort().join(", ");
+    } else if (verb === "extensions") {
+      reply = "ok extensions: " + JSON.parse(__host_ids()).join(", ");
+    } else {
+      var observers = hooks["command"] || [];
+      for (var i = 0; i < observers.length; i++) {
+        noctis.extension = extensions[observers[i].id] || null;
+        try {
+          var observed = observers[i].fn(text, parts);
+          if (typeof observed === "string") { reply = observed; break; }
+        } catch (e) { __host_log("command observer threw: " + e); }
+      }
+      if (reply === undefined) {
+        var entry = commands[verb];
+        if (entry) {
+          noctis.extension = extensions[entry.id] || null;
+          try {
+            var out = entry.fn(parts, text);
+            reply = (typeof out === "string") ? out : "";
+          } catch (e) { reply = "error: verb '" + verb + "' threw: " + e; }
+        }
+      }
+    }
+    if (reply === undefined || reply === null) { __host_reply(0, ""); }
+    else { __host_reply(1, String(reply)); }
+  };
+})();
+"#;
+
+/// The shared state the JS primitives read and write.
+///
+/// The registered host functions are `'static` closures that cannot borrow the
+/// [`Editor`], so — like the script backend — the host snapshots the reads it
+/// exposes before a call and queues the edits to replay after it.
+#[derive(Default)]
+struct Bridge {
+    /// Queued `EditorCommand` batches (JSON text), applied after the call.
+    edits: Vec<String>,
+    /// The read snapshot (scene, mode, entities, selection) as JSON.
+    reads: String,
+    /// The loaded extension ids, as JSON.
+    ids: String,
+    /// Messages from `noctis.log`/`noctis.fail` and caught handler errors.
+    logs: Vec<String>,
+    /// The reply from the last dispatch (`None` means "no verb matched").
+    reply: Option<String>,
+}
+
+/// The JavaScript host for editor extensions.
+pub struct ExtensionHost {
+    context: slag::Context,
+    bridge: Rc<RefCell<Bridge>>,
+    ids: Vec<String>,
+    errors: Vec<String>,
+}
+
+impl std::fmt::Debug for ExtensionHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExtensionHost")
+            .field("ids", &self.ids)
+            .field("errors", &self.errors)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ExtensionHost {
+    /// Start the engine, install the primitives, and define the `noctis` global.
+    pub fn new() -> Result<Self, String> {
+        let context = slag::Context::new().map_err(|error| error.to_string())?;
+        let mut host = Self {
+            context,
+            bridge: Rc::new(RefCell::new(Bridge::default())),
+            ids: Vec::new(),
+            errors: Vec::new(),
+        };
+        host.install()?;
+        host.eval(BOOTSTRAP)?;
+        Ok(host)
+    }
+
+    /// The ids of the extensions that were loaded.
+    pub fn ids(&self) -> &[String] {
+        &self.ids
+    }
+
+    /// Failures from loading or running extensions.
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    /// Take the pending log lines.
+    pub fn take_logs(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.bridge.borrow_mut().logs)
+    }
+
+    /// Load every extension in `loader` for which `enabled` is true, evaluating
+    /// its entry inside a private wrapper, then close registration.
+    pub fn load(&mut self, loader: &Loader, enabled: impl Fn(&str) -> bool) {
+        let manifests: Vec<&Manifest> = loader
+            .extensions()
+            .iter()
+            .filter(|manifest| enabled(&manifest.id))
+            .collect();
+        self.ids = manifests
+            .iter()
+            .map(|manifest| manifest.id.clone())
+            .collect();
+        self.bridge.borrow_mut().ids =
+            serde_json::to_string(&self.ids).unwrap_or_else(|_| "[]".to_string());
+
+        for manifest in &manifests {
+            let info = serde_json::json!({
+                "id": manifest.id,
+                "name": manifest.name,
+                "version": manifest.version,
+            })
+            .to_string();
+            let program = format!(
+                "__noctis_register_extension({}, {});",
+                json_literal(&manifest.id),
+                json_literal(&info)
+            );
+            if let Err(error) = self.eval(&program) {
+                self.errors.push(format!("{}: {error}", manifest.id));
+                continue;
+            }
+
+            if let Some(source) = &manifest.entry_source {
+                let program = format!(
+                    "(function (noctis) {{\n\"use strict\";\n{source}\n}})(noctis.begin({}));",
+                    json_literal(&manifest.id)
+                );
+                if let Err(error) = self.eval(&program) {
+                    self.errors.push(format!("{}: {error}", manifest.id));
+                }
+            }
+
+            if manifest.wasm.is_some() {
+                self.errors.push(format!(
+                    "{}: WebAssembly extensions are not executed yet (docs/extensions.md phase 4)",
+                    manifest.id
+                ));
+            }
+        }
+
+        if let Err(error) = self.eval("noctis.freeze();") {
+            self.errors.push(format!("freeze: {error}"));
+        }
+    }
+
+    /// Fire the `"ready"` hook and apply any edits it queued.
+    pub fn ready(&mut self, editor: &mut Editor) -> Vec<String> {
+        self.snapshot(editor);
+        if let Err(error) = self.eval("__noctis_fire(\"ready\", undefined);") {
+            self.errors.push(format!("ready: {error}"));
+        }
+        self.apply_edits(editor)
+    }
+
+    /// Dispatch a verb line, applying any edits the handler queued.
+    ///
+    /// Returns the reply, or an error when no extension verb matched.
+    pub fn dispatch(&mut self, editor: &mut Editor, line: &str) -> Result<String, String> {
+        self.snapshot(editor);
+        self.bridge.borrow_mut().reply = None;
+        let program = format!("__noctis_dispatch({});", json_literal(line));
+        self.eval(&program)?;
+        self.apply_edits(editor);
+        match self.bridge.borrow_mut().reply.take() {
+            Some(reply) => Ok(reply),
+            None => Err(format!("no extension verb matched {line:?}")),
+        }
+    }
+
+    /// Copy the editor reads the API exposes into the bridge.
+    fn snapshot(&self, editor: &Editor) {
+        let entities = editor.list_entities();
+        let selection: Vec<EntityDto> = editor
+            .selection()
+            .iter()
+            .copied()
+            .map(EntityDto::new)
+            .collect();
+        let mode = match editor.mode() {
+            SceneMode::TwoD => "2d",
+            SceneMode::ThreeD => "3d",
+        };
+        let value = serde_json::json!({
+            "scene": editor.scene_name(),
+            "mode": mode,
+            "entities": entities,
+            "selection": selection,
+        });
+        self.bridge.borrow_mut().reads = value.to_string();
+    }
+
+    /// Apply the queued edit batches as one undo step. Returns a line per batch.
+    fn apply_edits(&mut self, editor: &mut Editor) -> Vec<String> {
+        let edits: Vec<String> = std::mem::take(&mut self.bridge.borrow_mut().edits);
+        if edits.is_empty() {
+            return Vec::new();
+        }
+        let mut results = Vec::new();
+        editor.begin_interactive_edit();
+        for json in edits {
+            match editor.apply_json(&json) {
+                Ok(outcomes) => results.push(format!("ok {} edit(s)", outcomes.len())),
+                Err(error) => {
+                    results.push(format!("error: {error}"));
+                    self.errors.push(format!("edit failed: {error}"));
+                }
+            }
+        }
+        editor.end_interactive_edit();
+        results
+    }
+
+    fn install(&mut self) -> Result<(), String> {
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_edit",
+            1,
+            Box::new(move |call| {
+                let json = arg_string(call, 0).unwrap_or_default();
+                let count = {
+                    let mut bridge = b.borrow_mut();
+                    bridge.edits.push(json);
+                    bridge.edits.len()
+                };
+                Ok(slag::JsValue::number(count as f64))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_reads",
+            0,
+            Box::new(move |_call| Ok(slag::JsValue::string(b.borrow().reads.clone()))),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_log",
+            1,
+            Box::new(move |call| {
+                let message = arg_string(call, 0).unwrap_or_default();
+                b.borrow_mut().logs.push(message);
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_ids",
+            0,
+            Box::new(move |_call| Ok(slag::JsValue::string(b.borrow().ids.clone()))),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_reply",
+            2,
+            Box::new(move |call| {
+                let ok = arg_number(call, 0).unwrap_or(0.0);
+                let text = arg_string(call, 1).unwrap_or_default();
+                b.borrow_mut().reply = if ok != 0.0 { Some(text) } else { None };
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        Ok(())
+    }
+
+    fn register(&mut self, name: &str, arity: u32, f: slag::HostFn) -> Result<(), String> {
+        self.context
+            .register_fn(name, arity, f)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn eval(&mut self, program: &str) -> Result<(), String> {
+        self.context
+            .eval(program)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// A JSON string literal (a valid JS string literal).
+fn json_literal(text: &str) -> String {
+    serde_json::to_string(text).expect("a string serializes")
+}
+
+fn arg_string(call: &slag::FunctionCall<'_>, index: usize) -> Option<String> {
+    let value = call.arg(index)?;
+    call.to_string(&value).ok()
+}
+
+fn arg_number(call: &slag::FunctionCall<'_>, index: usize) -> Option<f64> {
+    call.arg(index).and_then(|value| value.as_number())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use extensions::Loader;
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("noctis-editor-ext-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn write_extension(root: &std::path::Path, dir_name: &str, id: &str, js: &str) {
+        let dir = root.join(dir_name);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            dir.join("extension.json"),
+            format!(
+                r#"{{ "id": "{id}", "name": "{id}", "version": "1.0.0", "api": 1, "entry": "extension.js" }}"#
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(dir.join("extension.js"), js).expect("entry");
+    }
+
+    #[test]
+    fn a_command_spawns_through_the_editor() {
+        let root = temp_dir("spawn");
+        write_extension(
+            &root,
+            "spawner",
+            "com.example.spawner",
+            r#"
+            noctis.command("box", function (parts) {
+              var name = parts[1] || "Box";
+              noctis.edit({ op: "spawn", name: name });
+              return "ok box " + name;
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+
+        let reply = host.dispatch(&mut editor, "box Thing").expect("dispatch");
+        assert_eq!(reply, "ok box Thing");
+        assert!(editor.find_by_name("Thing").is_some());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_batch_is_one_undo_step() {
+        let root = temp_dir("batch");
+        write_extension(
+            &root,
+            "grid",
+            "com.example.grid",
+            r#"
+            noctis.command("grid", function () {
+              var batch = [];
+              for (var i = 0; i < 3; i++) { batch.push({ op: "spawn", name: "Grid " + i }); }
+              return "ok " + noctis.edit(batch);
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+
+        host.dispatch(&mut editor, "grid").unwrap();
+        assert_eq!(editor.list_entities().len(), 3);
+        assert!(editor.can_undo());
+        editor.undo();
+        assert_eq!(
+            editor.list_entities().len(),
+            0,
+            "one undo removes the batch"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reads_are_exposed_to_the_extension() {
+        let root = temp_dir("reads");
+        write_extension(
+            &root,
+            "reader",
+            "com.example.reader",
+            r#"
+            noctis.command("who", function () {
+              var list = JSON.parse(noctis.editor.list_entities());
+              var names = list.map(function (e) { return e.name; }).join(",");
+              return "ok " + noctis.editor.mode() + " " + names;
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+        editor.spawn("Sun", None);
+
+        let reply = host.dispatch(&mut editor, "who").unwrap();
+        assert_eq!(reply, "ok 3d Sun");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_disabled_extension_is_not_loaded() {
+        let root = temp_dir("disabled");
+        write_extension(
+            &root,
+            "loud",
+            "com.example.loud",
+            r#"noctis.command("loud", function () { return "ok loud"; });"#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| false);
+        assert!(host.ids().is_empty());
+        let mut editor = Editor::new();
+        assert!(host.dispatch(&mut editor, "loud").is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_help_verb_lists_extension_verbs() {
+        let root = temp_dir("help");
+        write_extension(
+            &root,
+            "a",
+            "com.example.a",
+            r#"noctis.command("alpha", function () { return "ok"; });"#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+        let reply = host.dispatch(&mut editor, "help").unwrap();
+        assert!(reply.contains("alpha"), "{reply}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_built_in_verb_cannot_be_shadowed() {
+        let root = temp_dir("shadow");
+        write_extension(
+            &root,
+            "sneaky",
+            "com.example.sneaky",
+            r#"noctis.command("help", function () { return "hijacked"; });"#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+        let reply = host.dispatch(&mut editor, "help").unwrap();
+        assert!(!reply.contains("hijacked"), "{reply}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+}

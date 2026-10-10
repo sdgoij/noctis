@@ -17,6 +17,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `script` | `crates/script` | Script runtime + engine API; JavaScript/WebAssembly via the Slag engine. |
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
 | `project` | `crates/project` | The project model: `noctis.toml`, canonical asset paths, type detection, discovery. |
+| `extensions` | `crates/extensions` | Loader for editor extensions: discovery, `extension.json`, ordering, config. |
 | `editor` | `crates/editor` | Scene editor library + AI-controllable command API; its CLI is `noctis editor`. |
 | `runtime` | `crates/runtime` | Game runtime/export loop (library); the tool and the client drive it in-process. |
 | `platform` | `crates/platform` | Window + winit event loop + egui overlay; drives any `AppDriver` into a surface-backed viewport. |
@@ -163,6 +164,16 @@ needed.
   component, a fly-camera system, and a simulated ball) is `examples/rustball`.
   **Not yet:** script reflection over custom components (phase 3) and
   native-WebAssembly reflection.
+- **Editor extensions** are shipped for the editor only (see
+  [`docs/extensions.md`](docs/extensions.md)): a project or user directory of
+  `extension.js`/`extension.wasm` extensions is discovered by `noctis editor`, and
+  each is evaluated against a versioned `noctis` global (`on`/`command`/`edit`/
+  `editor`) in the Slag engine. The pure loader is `crates/extensions`; the host is
+  `editor::extension`. The **headless** slice works (`--extensions`, `--run`,
+  `noctis.command`, `noctis.edit`), and enablement is remembered in a config file.
+  A worked example is `examples/extensions`. **Not yet:** the windowed UI
+  (`noctis.ui` panels/menus), native-WASM extension execution (modules are read and
+  validated but not run), `.zip` extensions, and hot reload.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

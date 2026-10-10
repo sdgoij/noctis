@@ -30,6 +30,9 @@ pub struct ProjectManifest {
     /// Optional `[input]` settings.
     #[serde(default)]
     pub input: InputSettings,
+    /// Optional `[extensions]` editor-extension settings.
+    #[serde(default)]
+    pub extensions: ExtensionsSettings,
     /// Optional `[rust]` project-Rust settings.
     #[serde(default)]
     pub rust: Option<RustSettings>,
@@ -87,6 +90,12 @@ impl ProjectManifest {
                     ProjectError::Manifest(format!("[rust].plugin is invalid: {error}"))
                 })?;
             }
+        }
+
+        for dir in &self.extensions.dirs {
+            AssetPath::parse(dir).map_err(|error| {
+                ProjectError::Manifest(format!("[extensions].dirs entry is invalid: {error}"))
+            })?;
         }
 
         let mut seen = std::collections::HashSet::new();
@@ -310,6 +319,21 @@ pub struct InputSettings {
     /// The camera-navigation bindings file (see `noctis editor --controls`).
     #[serde(default)]
     pub controls: Option<String>,
+}
+
+/// The `[extensions]` table: where a project keeps its editor extensions.
+///
+/// See `docs/extensions.md`. Presence of the table is optional; an empty table
+/// (or none) means the project ships no extensions of its own.
+#[derive(Clone, Debug, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionsSettings {
+    /// Extra search directories, project-relative.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+    /// Extension ids this project disables.
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 
 /// The `[rust]` table: a project that carries Rust (a [`Plugin`](ecs::app::Plugin)).
@@ -585,6 +609,31 @@ platform = "linux"
         assert_eq!(rust.crate_dir, "rust");
         assert_eq!(rust.plugin, None);
         defaults.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_extensions_settings() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[extensions]\ndirs = [\"tools/extensions\"]\ndisabled = [\"com.example.wip\"]\n",
+        )
+        .unwrap();
+        manifest.validate().unwrap();
+        assert_eq!(manifest.extensions.dirs, ["tools/extensions"]);
+        assert_eq!(manifest.extensions.disabled, ["com.example.wip"]);
+
+        // The table is optional and empty by default.
+        let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        assert!(none.extensions.dirs.is_empty());
+        assert!(none.extensions.disabled.is_empty());
+    }
+
+    #[test]
+    fn an_escaping_extension_dir_is_refused() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\n\n[extensions]\ndirs = [\"../escape\"]\n",
+        )
+        .unwrap();
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

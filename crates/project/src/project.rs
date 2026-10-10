@@ -183,6 +183,21 @@ impl Project {
         )?))
     }
 
+    /// The project's extension search directories, absolute (see `docs/extensions.md`).
+    pub fn extension_dirs(&self) -> Vec<PathBuf> {
+        self.manifest
+            .extensions
+            .dirs
+            .iter()
+            .map(|dir| self.dir(dir))
+            .collect()
+    }
+
+    /// The extension ids this project disables.
+    pub fn disabled_extensions(&self) -> &[String] {
+        &self.manifest.extensions.disabled
+    }
+
     /// The absolute assets directory.
     pub fn assets_dir(&self) -> PathBuf {
         self.dir(&self.manifest.paths.assets)

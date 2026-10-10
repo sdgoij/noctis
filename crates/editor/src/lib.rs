@@ -49,6 +49,7 @@ pub mod cli;
 pub mod command;
 pub mod editor;
 pub mod error;
+pub mod extension;
 pub mod gizmo;
 pub mod info;
 mod inspector;
@@ -66,6 +67,7 @@ pub use command::{
 };
 pub use editor::{Editor, parse_commands};
 pub use error::EditorError;
+pub use extension::ExtensionHost;
 pub use gizmo::GizmoOrientation;
 pub use info::{EntityDto, EntityInfo};
 

@@ -76,6 +76,12 @@ environment = "assets/hdris/sky.hdr"  # IBL source; omit for a neutral environme
 [input]
 controls = "input/controls.json"
 
+# Optional: where a project keeps its editor extensions (see docs/extensions.md).
+# `noctis editor` discovers and runs them; no rebuild is needed.
+[extensions]
+dirs = ["tools/extensions"]       # extra search directories (project-relative)
+disabled = ["com.example.wip"]    # extension ids this project turns off
+
 # Optional: the project carries Rust (a plugin of custom components and systems).
 # `noctis run`/`editor` build and run a per-project tool that links it, and
 # `noctis build` ships a plugin-linked game client. See docs/embedding.md.

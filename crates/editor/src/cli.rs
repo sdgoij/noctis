@@ -25,7 +25,7 @@ use ecs::scene::SceneMode;
 use platform::WindowConfig;
 use project::Project;
 
-use crate::{Editor, command_schema, parse_commands};
+use crate::{Editor, ExtensionHost, command_schema, parse_commands};
 
 /// The prefix on every diagnostic message.
 const PROGRAM: &str = "noctis";
@@ -53,6 +53,11 @@ OPTIONS:
         --save-prefabs      Write the prefab library to the project's prefabs/
                             directory (requires --project)
         --controls <PATH>   Load camera-navigation bindings (JSON)
+        --extensions <DIR>  Scan only this directory for editor extensions
+                            (repeatable; replaces the default search set)
+        --no-extensions     Scan no extension directories
+        --run <LINE>        Dispatch an extension verb line, e.g.
+                            --run \"scatter 5\" (repeatable)
         --print-schema      Print the JSON command schema and exit
     -h, --help              Print this help and exit
 
@@ -136,6 +141,9 @@ struct Options {
     headless: bool,
     testscene: bool,
     save_prefabs: bool,
+    extensions: Vec<String>,
+    no_extensions: bool,
+    run: Vec<String>,
     print_schema: bool,
     help: bool,
 }
@@ -234,6 +242,10 @@ fn build_editor(
         }
     }
 
+    // Editor extensions run after the scene and any command batch, and before
+    // `--out`, so an extension's edits are saved too.
+    run_extensions(&mut editor, options, project)?;
+
     if let Some(out) = &options.out {
         editor
             .save(out)
@@ -255,6 +267,90 @@ fn build_editor(
     }
 
     Ok(editor)
+}
+
+/// Load editor extensions and dispatch any `--run` verb lines.
+///
+/// Extension output (replies, logs, load warnings) goes to stderr, so stdout
+/// stays the scene JSON.
+fn run_extensions(
+    editor: &mut Editor,
+    options: &Options,
+    project: Option<&Project>,
+) -> Result<(), CliError> {
+    if options.no_extensions {
+        return Ok(());
+    }
+    // Extensions are headless for now: their UI hooks (`noctis.ui`) are
+    // docs/extensions.md phase 3, so a plain windowed editor has nothing to do
+    // with them yet and should not start the engine. `--run` and `--headless`
+    // still exercise the verb surface.
+    if !options.headless && options.run.is_empty() {
+        return Ok(());
+    }
+
+    // `--extensions` replaces the default search set; otherwise the environment,
+    // the executable and working directories, and the project's own directories.
+    let dirs: Vec<PathBuf> = if options.extensions.is_empty() {
+        let project_dirs = project.map(Project::extension_dirs).unwrap_or_default();
+        extensions::Loader::default_dirs(&project_dirs)
+    } else {
+        options.extensions.iter().map(PathBuf::from).collect()
+    };
+    let loader = extensions::Loader::discover(&dirs);
+    for error in loader.errors() {
+        eprintln!(
+            "{PROGRAM}: warning: extension {}: {}",
+            error.path.display(),
+            error.message
+        );
+    }
+
+    let config = match extensions::ExtensionConfig::load(extensions::default_config_path()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{PROGRAM}: warning: extension config: {error}");
+            extensions::ExtensionConfig::default()
+        }
+    };
+    let project_disabled: Vec<String> = project
+        .map(|project| project.disabled_extensions().to_vec())
+        .unwrap_or_default();
+    let enabled = |id: &str| config.is_enabled(id) && !project_disabled.iter().any(|d| d == id);
+
+    let any_enabled = loader
+        .extensions()
+        .iter()
+        .any(|manifest| enabled(&manifest.id));
+    if !any_enabled && options.run.is_empty() {
+        return Ok(());
+    }
+
+    let mut host = ExtensionHost::new().map_err(|error| {
+        CliError::Message(format!("failed to start the extension host: {error}"))
+    })?;
+    host.load(&loader, enabled);
+    for line in host.ready(editor) {
+        eprintln!("{PROGRAM}: {line}");
+    }
+    for line in host.take_logs() {
+        eprintln!("{PROGRAM}: log: {line}");
+    }
+
+    for line in &options.run {
+        let reply = host.dispatch(editor, line).map_err(CliError::Message)?;
+        if !reply.is_empty() {
+            eprintln!("{PROGRAM}: {reply}");
+        }
+        for log in host.take_logs() {
+            eprintln!("{PROGRAM}: log: {log}");
+        }
+    }
+
+    for error in host.errors() {
+        eprintln!("{PROGRAM}: warning: extension {error}");
+    }
+    Ok(())
 }
 
 fn parse_args(args: &[String]) -> Result<Options, CliError> {
@@ -324,6 +420,20 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
             "--controls" | "--bindings" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.controls = Some(value);
+                index = consumed;
+            }
+            "--extensions" | "-e" => {
+                let (value, consumed) = value_for(&inline, args, index, &flag)?;
+                options.extensions.push(value);
+                index = consumed;
+            }
+            "--no-extensions" => {
+                reject_inline(&inline, &flag)?;
+                options.no_extensions = true;
+            }
+            "--run" => {
+                let (value, consumed) = value_for(&inline, args, index, &flag)?;
+                options.run.push(value);
                 index = consumed;
             }
             other if other.starts_with('-') => {
@@ -673,5 +783,50 @@ mod tests {
         let output = run_default(&["--print-schema"]).unwrap();
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(value["commands"].is_array());
+    }
+
+    #[test]
+    fn parses_extension_flags() {
+        let options = parse_args(&args(&[
+            "--extensions",
+            "a",
+            "--extensions=b",
+            "--no-extensions",
+            "--run",
+            "scatter 3",
+            "--run=help",
+        ]))
+        .unwrap();
+        assert_eq!(options.extensions, ["a", "b"]);
+        assert!(options.no_extensions);
+        assert_eq!(options.run, ["scatter 3", "help"]);
+    }
+
+    #[test]
+    fn a_headless_run_dispatches_an_extension_verb() {
+        let dir = std::env::temp_dir().join(format!("noctis-cli-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let extension = dir.join("boxer");
+        std::fs::create_dir_all(&extension).unwrap();
+        std::fs::write(
+            extension.join("extension.json"),
+            r#"{ "id": "com.example.boxer", "name": "Boxer", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            extension.join("extension.js"),
+            r#"noctis.command("box", function (parts) { return "ok " + noctis.edit({ op: "spawn", name: parts[1] || "Box" }); });"#,
+        )
+        .unwrap();
+
+        let options = Options {
+            headless: true,
+            extensions: vec![dir.to_string_lossy().into_owned()],
+            run: vec!["box Made".to_string()],
+            ..Options::default()
+        };
+        let editor = build_editor(&options, None, &NullPlugin).expect("build");
+        assert!(editor.find_by_name("Made").is_some());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

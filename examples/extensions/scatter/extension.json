@@ -1,0 +1,9 @@
+{
+  "id": "com.example.scatter",
+  "name": "Scatter",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "Duplicate the selection on a grid. A worked editor extension.",
+  "author": "example",
+  "entry": "extension.js"
+}

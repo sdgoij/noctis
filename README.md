@@ -46,6 +46,11 @@ prefabs, scripts, and generated assets exercising every engine feature. See its
 systems (see [`docs/embedding.md`](docs/embedding.md) and its
 [README](examples/rustball/README.md)).
 
+The editor is **extendible**: JavaScript and WebAssembly extensions add verbs,
+panels and automation without a rebuild (see [`docs/extensions.md`](docs/extensions.md),
+[`examples/extensions`](examples/extensions), and
+[`examples/rustball`](examples/rustball) for the compiled `[rust]` plugin seam).
+
 Scripting is JavaScript, executed by the Slag engine, which is always built — a
 project's scripts run out of the box. The example project's JavaScript is covered
 directly:

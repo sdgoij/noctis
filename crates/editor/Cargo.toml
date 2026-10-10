@@ -14,9 +14,14 @@ render.workspace = true
 platform.workspace = true
 testscene.workspace = true
 project.workspace = true
+extensions.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
+
+# The Slag JavaScript engine, for editor extensions (`noctis` global). Matched to
+# the `script` crate's feature set so the dependency graph unifies.
+slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, features = ["wasm", "jit"] }
 
 [dev-dependencies]
 image.workspace = true
