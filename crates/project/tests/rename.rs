@@ -54,7 +54,7 @@ fn rename_moves_the_file_and_rewrites_scene_and_prefab_references() {
     }] } }"#;
     write(&dir.join("prefabs/robot.prefab.json"), prefab);
 
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
     let from = AssetPath::parse("assets/models/robot.glb").unwrap();
     let to = AssetPath::parse("assets/models/mech.glb").unwrap();
     let report = project.rename_asset(&from, &to).expect("rename");
@@ -95,7 +95,7 @@ fn rename_rejects_a_missing_source_and_an_existing_destination() {
     write(&dir.join("noctis.toml"), MANIFEST);
     write(&dir.join("assets/a.txt"), "a");
     write(&dir.join("assets/b.txt"), "b");
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
 
     let missing = project.rename_asset(
         &AssetPath::parse("assets/nope.txt").unwrap(),
@@ -130,7 +130,7 @@ fn rename_creates_the_destination_directory() {
     let dir = temp_project("mkdir");
     write(&dir.join("noctis.toml"), MANIFEST);
     write(&dir.join("assets/loose.txt"), "x");
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
 
     project
         .rename_asset(

@@ -33,7 +33,7 @@ fn import_places_a_file_by_kind_and_never_clobbers() {
     let source = temp_dir("source");
     write(&source.join("wood.png"), b"PNG");
 
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
 
     let first = project
         .import_file(&source.join("wood.png"))
@@ -67,7 +67,7 @@ fn import_routes_by_extension() {
     write(&source.join("theme.js"), b"// js");
     write(&source.join("hit.wav"), b"RIFF");
 
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
     assert_eq!(
         project.import_file(&source.join("hero.glb")).unwrap(),
         AssetPath::parse("assets/models/hero.glb").unwrap()
@@ -92,7 +92,7 @@ fn import_rejects_an_unknown_type() {
     let source = temp_dir("unknown-src");
     write(&source.join("mystery.xyz"), b"?");
 
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
     let error = project.import_file(&source.join("mystery.xyz"));
     assert!(error.is_err());
 

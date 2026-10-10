@@ -94,7 +94,7 @@ pub struct Entry {
 /// Paths are relative, `/`-separated keys. `""` names the root. Reads and writes
 /// are whole-file (the engine's files are small: JSON, sources, textures, audio);
 /// a caller that needs a byte cap uses [`Store::read_capped`].
-pub trait Store {
+pub trait Store: fmt::Debug {
     /// Read the whole file at `path`.
     fn read(&self, path: &str) -> Result<Vec<u8>, StoreError>;
 
@@ -151,6 +151,14 @@ pub trait Store {
         self.write(to, &bytes)?;
         self.remove(from)
     }
+
+    /// A boxed clone of this store.
+    ///
+    /// A `dyn Store` cannot derive `Clone`, so a type that owns one (a
+    /// [`Store`]-backed project) clones through this. A backend whose state is a
+    /// handle to shared data (a directory, a browser origin) returns a second
+    /// handle to the same data; a purely in-memory backend copies its files.
+    fn duplicate(&self) -> Box<dyn Store>;
 }
 
 /// Validate and normalize a relative path to a `/`-joined key.

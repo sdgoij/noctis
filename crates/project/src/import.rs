@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use vfs::{DirStore, Store};
+use vfs::Store;
 
 use crate::error::ProjectError;
 use crate::path::{AssetPath, detect};
@@ -20,7 +20,7 @@ impl Project {
     ///
     /// The file name is preserved; a collision gets a `-N` suffix rather than
     /// overwriting the existing file.
-    pub fn import_file(&self, source: &Path) -> Result<AssetPath, ProjectError> {
+    pub fn import_file(&mut self, source: &Path) -> Result<AssetPath, ProjectError> {
         let name = source
             .file_name()
             .and_then(|name| name.to_str())
@@ -36,8 +36,8 @@ impl Project {
         // The source is an arbitrary path outside the project, so it is read
         // directly; the copy into the project goes through the store.
         let bytes = std::fs::read(source).map_err(|e| ProjectError::Io(e.to_string()))?;
-        let mut store = self.store();
-        let file_name = unique_name(&store, dir, name);
+        let store = self.store_mut();
+        let file_name = unique_name(store, dir, name);
         let relative = format!("{dir}/{file_name}");
         store
             .write(&relative, &bytes)
@@ -48,7 +48,7 @@ impl Project {
 
 /// The name inside `dir` for `name`, with a `-N` suffix when the name is already
 /// taken (`wood.png` → `wood-1.png`, `wood-2.png`, …).
-fn unique_name(store: &DirStore, dir: &str, name: &str) -> String {
+fn unique_name(store: &dyn Store, dir: &str, name: &str) -> String {
     if !store.exists(&format!("{dir}/{name}")) {
         return name.to_string();
     }
@@ -76,6 +76,7 @@ fn split_name(name: &str) -> (&str, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vfs::DirStore;
 
     #[test]
     fn split_name_handles_dots() {

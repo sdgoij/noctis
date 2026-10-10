@@ -21,11 +21,29 @@ pub struct SceneInfo {
     pub name: String,
 }
 
-/// An open Noctis project: a root directory and its parsed manifest.
-#[derive(Clone, Debug)]
+/// An open Noctis project: a root directory, the store its files are read and
+/// written through, and its parsed manifest.
+///
+/// The store is a native directory for [`Project::open`], or any [`Store`] for
+/// [`Project::open_in`] (a `.zip` bundle, browser storage). The `root` is the
+/// logical base for the path-returning helpers ([`Project::dir`],
+/// [`Project::file_for`], ...); on the web those paths name nothing, and the
+/// store is what is read.
+#[derive(Debug)]
 pub struct Project {
     root: PathBuf,
+    store: Box<dyn Store>,
     manifest: ProjectManifest,
+}
+
+impl Clone for Project {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            store: self.store.duplicate(),
+            manifest: self.manifest.clone(),
+        }
+    }
 }
 
 impl Project {
@@ -45,43 +63,76 @@ impl Project {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| ProjectError::Io(format!("{}: bad manifest path", path.display())))?;
-        let text = DirStore::new(manifest_dir)
+        let store: Box<dyn Store> = Box::new(DirStore::new(manifest_dir));
+        let text = store
             .read_string(name)
             .map_err(|error| ProjectError::Io(error.to_string()))?;
-        let manifest = ProjectManifest::from_toml(&text)?;
+        Self::from_manifest_text(store, manifest_dir, &text)
+    }
+
+    /// Open a project stored in `store`, with logical root `root`.
+    ///
+    /// The manifest is read from the store's root as `noctis.toml`. This is the
+    /// browser counterpart of [`Project::open`]: the store can be a project
+    /// bundle (`ZipStore`) or browser storage, and `root` is only the base for the
+    /// path-returning helpers.
+    pub fn open_in(store: Box<dyn Store>, root: impl Into<PathBuf>) -> Result<Self, ProjectError> {
+        let root = root.into();
+        let text = store
+            .read_string(MANIFEST_FILE)
+            .map_err(|error| ProjectError::Io(format!("{MANIFEST_FILE}: {error}")))?;
+        Self::from_manifest_text(store, &root, &text)
+    }
+
+    /// Build a project from already-read manifest `text`, with `store` and a
+    /// `base` for the root. A `[project] root` relocates the root, so a
+    /// development build's manifest can sit beside its client while the files
+    /// live in the project it was built from.
+    fn from_manifest_text(
+        store: Box<dyn Store>,
+        base: &Path,
+        text: &str,
+    ) -> Result<Self, ProjectError> {
+        let manifest = ProjectManifest::from_toml(text)?;
         manifest.validate()?;
-        // A `[project] root` relocates the project, so a development build's
-        // manifest can sit beside its client while the files live in the project
-        // it was built from.
         let root = match manifest.project.root.as_deref() {
             Some(root) => {
                 let root = Path::new(root);
                 if root.is_absolute() {
                     root.to_path_buf()
                 } else {
-                    manifest_dir.join(root)
+                    base.join(root)
                 }
             }
-            None => manifest_dir.to_path_buf(),
+            None => base.to_path_buf(),
         };
-        Ok(Self { root, manifest })
+        Ok(Self {
+            root,
+            store,
+            manifest,
+        })
     }
 
     /// Build a project from an already-parsed manifest rooted at `dir`.
     pub fn from_manifest(root: impl Into<PathBuf>, manifest: ProjectManifest) -> Self {
+        let root = root.into();
+        let store: Box<dyn Store> = Box::new(DirStore::new(root.clone()));
         Self {
-            root: root.into(),
+            root,
+            store,
             manifest,
         }
     }
 
-    /// A store rooted at the project directory.
-    ///
-    /// Every project file is read and written through this, so the crate does not
-    /// call `std::fs` itself (see `docs/web.md`) and a browser build can swap the
-    /// backend.
-    pub(crate) fn store(&self) -> DirStore {
-        DirStore::new(self.root.clone())
+    /// The store every project file is read and written through (see
+    /// `docs/web.md`).
+    pub(crate) fn store(&self) -> &dyn Store {
+        self.store.as_ref()
+    }
+
+    /// The store, mutably, for this project's writes.
+    pub(crate) fn store_mut(&mut self) -> &mut dyn Store {
+        self.store.as_mut()
     }
 
     /// Read a project-relative file as UTF-8 text.
@@ -92,16 +143,15 @@ impl Project {
     }
 
     /// Write a project-relative file, creating parent directories.
-    fn write_file(&self, relative: &str, bytes: &[u8]) -> Result<(), ProjectError> {
-        let mut store = self.store();
-        store
+    fn write_file(&mut self, relative: &str, bytes: &[u8]) -> Result<(), ProjectError> {
+        self.store_mut()
             .write(relative, bytes)
             .map_err(|error| ProjectError::Io(format!("{relative}: {error}")))
     }
 
     /// The files under a project-relative directory, as `/`-joined relative paths.
     pub(crate) fn walk(&self, dir: &str, out: &mut Vec<String>) -> Result<(), ProjectError> {
-        walk_files(&self.store(), dir, out)
+        walk_files(self.store(), dir, out)
     }
 
     /// The `[package].name` of the crate at `<crate_dir>/Cargo.toml`.
@@ -310,7 +360,7 @@ impl Project {
 
     /// Write `prefab` to its document (`prefabs/<name>.prefab.json`), creating the
     /// directory. Returns the asset path written.
-    pub fn save_prefab(&self, prefab: &ecs::scene::Prefab) -> Result<AssetPath, ProjectError> {
+    pub fn save_prefab(&mut self, prefab: &ecs::scene::Prefab) -> Result<AssetPath, ProjectError> {
         let path = self.prefab_path(&prefab.name)?;
         self.write_file(path.file_path(), prefab.to_json().as_bytes())?;
         Ok(path)
@@ -357,7 +407,7 @@ fn scene_name(path: &AssetPath) -> String {
 /// Recursively collect the files under `dir` (a store-relative directory) as
 /// `/`-joined store-relative paths. A missing directory yields none.
 pub(crate) fn walk_files(
-    store: &DirStore,
+    store: &dyn Store,
     dir: &str,
     out: &mut Vec<String>,
 ) -> Result<(), ProjectError> {
@@ -398,6 +448,34 @@ mod tests {
         assert_eq!(scenes[0].path.as_str(), "scenes/menu.scene.json");
         // A missing name defaults to the file stem without `.scene.json`.
         assert_eq!(scenes[1].name, "level");
+    }
+
+    #[test]
+    fn a_project_opens_from_a_store() {
+        use vfs::MemoryStore;
+
+        let mut store = MemoryStore::new();
+        store
+            .write("noctis.toml", b"[project]\nname = \"Bundle\"\n")
+            .unwrap();
+        store
+            .write("scenes/level.scene.json", b"{ \"entities\": [] }")
+            .unwrap();
+        store.write("scenes/notes.txt", b"not a scene").unwrap();
+
+        // The store is the source of truth; `root` is only a path base.
+        let project = Project::open_in(Box::new(store), "/virtual/root").expect("open from store");
+        assert_eq!(project.name(), "Bundle");
+        assert_eq!(project.root(), Path::new("/virtual/root"));
+
+        let scenes: Vec<String> = project
+            .scenes()
+            .expect("scenes")
+            .into_iter()
+            .map(|scene| scene.path.as_str().to_string())
+            .collect();
+        assert_eq!(scenes, vec!["scenes/level.scene.json"]);
+        assert!(project.discover_prefabs().expect("prefabs").is_empty());
     }
 
     #[test]

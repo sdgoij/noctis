@@ -135,6 +135,10 @@ impl Store for DirStore {
         }
         std::fs::rename(&source, &destination).map_err(|error| io_error(from, error))
     }
+
+    fn duplicate(&self) -> Box<dyn Store> {
+        Box::new(DirStore::new(self.root.clone()))
+    }
 }
 
 /// Map an I/O error, distinguishing a missing path.
@@ -248,5 +252,19 @@ mod tests {
         let (store, key) = DirStore::for_file(Path::new("noctis.toml"));
         assert_eq!(key, "noctis.toml");
         assert_eq!(store.root(), Path::new("."));
+    }
+
+    #[test]
+    fn duplicate_views_the_same_directory() {
+        let dir = temp_dir("duplicate");
+        let mut store = DirStore::new(dir.clone());
+        store.write("a.txt", b"hi").unwrap();
+
+        let mut copy = store.duplicate();
+        assert_eq!(copy.read("a.txt").unwrap(), b"hi");
+        copy.write("b.txt", b"yo").unwrap();
+        // A directory clone sees the same files through the same root.
+        assert!(store.exists("b.txt"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

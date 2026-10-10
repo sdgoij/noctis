@@ -11,8 +11,6 @@
 
 use std::path::PathBuf;
 
-use vfs::Store;
-
 use crate::error::ProjectError;
 use crate::path::AssetPath;
 use crate::project::Project;
@@ -51,7 +49,7 @@ impl Project {
     /// exist and `to` must not. Scenes and prefabs under the project are rewritten
     /// in place; only the documents that changed are reported.
     pub fn rename_asset(
-        &self,
+        &mut self,
         from: &AssetPath,
         to: &AssetPath,
     ) -> Result<RenameReport, ProjectError> {
@@ -66,28 +64,38 @@ impl Project {
             ));
         }
 
-        let mut store = self.store();
         let source = from.file_path().to_string();
         let destination = to.file_path().to_string();
-        if !store.exists(&source) {
+        if !self.store().exists(&source) {
             return Err(ProjectError::MissingAsset(from.as_str().to_string()));
         }
-        if store.exists(&destination) {
+        if self.store().exists(&destination) {
             return Err(ProjectError::Rename(format!(
                 "{} already exists",
                 to.as_str()
             )));
         }
+
+        // Collect the documents to scan before taking the store mutably (the walk
+        // borrows `&self`).
+        let (scenes_dir, prefabs_dir) = {
+            let manifest = self.manifest();
+            (
+                manifest.paths.scenes.clone(),
+                manifest.paths.prefabs.clone(),
+            )
+        };
+        let mut files = Vec::new();
+        self.walk(&scenes_dir, &mut files)?;
+        self.walk(&prefabs_dir, &mut files)?;
+
+        let store = self.store_mut();
         store
             .rename(&source, &destination)
             .map_err(|e| ProjectError::Io(e.to_string()))?;
 
         // Rewrite references in every scene and prefab document.
         let mut documents = Vec::new();
-        let manifest = self.manifest();
-        let mut files = Vec::new();
-        self.walk(&manifest.paths.scenes, &mut files)?;
-        self.walk(&manifest.paths.prefabs, &mut files)?;
         for file in files {
             if !is_document(&file) {
                 continue;

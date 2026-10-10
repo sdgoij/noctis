@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use vfs::{DirStore, Store, StoreError};
+use vfs::{Store, StoreError};
 
 /// The sidecar file-name suffix (`<asset>.import.toml`).
 pub const SIDECAR_SUFFIX: &str = ".import.toml";
@@ -47,7 +47,7 @@ impl TextureImportSettings {
 
     /// Load the settings for the store-relative asset `relative`, or the defaults
     /// when there is no sidecar.
-    pub fn load(store: &DirStore, relative: &str) -> Result<Self, String> {
+    pub fn load(store: &dyn Store, relative: &str) -> Result<Self, String> {
         let sidecar = format!("{relative}{SIDECAR_SUFFIX}");
         let text = match store.read_string(&sidecar) {
             Ok(text) => text,
@@ -61,6 +61,7 @@ impl TextureImportSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vfs::DirStore;
 
     #[test]
     fn the_sidecar_path_appends_the_suffix() {

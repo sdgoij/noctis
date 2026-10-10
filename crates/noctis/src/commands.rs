@@ -172,7 +172,7 @@ pub(crate) fn rename(args: &[String]) -> Result<String, CliError> {
     }
     let from = AssetPath::parse(&paths[0]).map_err(|error| CliError::Message(error.to_string()))?;
     let to = AssetPath::parse(&paths[1]).map_err(|error| CliError::Message(error.to_string()))?;
-    let project = Project::open(PathBuf::from(&project))
+    let mut project = Project::open(PathBuf::from(&project))
         .map_err(|error| CliError::Message(error.to_string()))?;
     let report = project
         .rename_asset(&from, &to)

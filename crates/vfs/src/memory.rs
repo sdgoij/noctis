@@ -73,6 +73,10 @@ impl Store for MemoryStore {
         }
         Err(StoreError::NotFound(path.to_string()))
     }
+
+    fn duplicate(&self) -> Box<dyn Store> {
+        Box::new(MemoryStore::clone(self))
+    }
 }
 
 #[cfg(test)]

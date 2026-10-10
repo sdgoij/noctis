@@ -163,13 +163,13 @@ fn run(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to render schema: {e}")));
     }
 
-    let project = open_project(&options)?;
+    let mut project = open_project(&options)?;
     let mut editor = build_editor(&options, project.as_ref(), plugin)?;
 
     // Extensions run after the scene and any command batch, and before `--out`,
     // so an extension's edits (`--run`, a `"ready"` hook) are saved too.
     let _ = attach_extensions(&mut editor, &options, project.as_ref())?;
-    finalize(&mut editor, &options, project.as_ref())?;
+    finalize(&mut editor, &options, project.as_mut())?;
 
     let entities = editor.list_entities();
     serde_json::to_string_pretty(&entities)
@@ -259,7 +259,7 @@ fn build_editor(
 fn finalize(
     editor: &mut Editor,
     options: &Options,
-    project: Option<&Project>,
+    project: Option<&mut Project>,
 ) -> Result<(), CliError> {
     if let Some(out) = &options.out {
         editor
@@ -583,10 +583,10 @@ fn project_controls_path(project: Option<&Project>) -> Option<String> {
 
 /// Build the scene from the options, then run it in a window until closed.
 fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> {
-    let project = open_project(options)?;
+    let mut project = open_project(options)?;
     let mut editor = build_editor(options, project.as_ref(), plugin)?;
     let extensions = attach_extensions(&mut editor, options, project.as_ref())?;
-    finalize(&mut editor, options, project.as_ref())?;
+    finalize(&mut editor, options, project.as_mut())?;
     let config = window_config(project.as_ref());
 
     let attached = extensions.map(|loaded| {

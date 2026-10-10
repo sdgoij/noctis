@@ -104,6 +104,10 @@ impl Store for ZipStore {
     fn remove(&mut self, path: &str) -> Result<(), StoreError> {
         Err(StoreError::ReadOnly(path.to_string()))
     }
+
+    fn duplicate(&self) -> Box<dyn Store> {
+        Box::new(ZipStore::clone(self))
+    }
 }
 
 #[cfg(test)]

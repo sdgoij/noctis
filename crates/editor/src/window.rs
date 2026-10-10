@@ -1292,7 +1292,7 @@ impl AppDriver for EditorDriver {
         // With an open project, a dropped file is imported into it (and a model is
         // instantiated); without one, a model is imported directly.
         match self.project.clone() {
-            Some(project) => match project.import_file(path) {
+            Some(mut project) => match project.import_file(path) {
                 Ok(asset) => {
                     eprintln!("noctis editor: imported {}", asset.as_str());
                     if matches!(detect(asset.as_str()), AssetKind::Model) {

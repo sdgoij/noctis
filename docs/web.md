@@ -8,9 +8,11 @@
 > **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
 > `MemoryStore` and `ZipStore` — and the extension loader, the `project` crate,
 > and the `editor`/`runtime` scene documents read and write through it (phase 1,
-> partial). `Editor` gains `open_in`/`open_or_new_in`/`save_to`, and `DirStore::for_file`
-> views a single path-addressed document as a store. The native-only build/export/
-> plugin paths (`runtime::build`/`export`/`plugin`) and the decoders
+> partial). `Project` now **owns** its `Store` and can be opened from one with
+> `Project::open_in(store, root)` (a `.zip` bundle or browser storage); `Editor`
+> gains `open_in`/`open_or_new_in`/`save_to`, and `DirStore::for_file` views a
+> single path-addressed document as a store. The native-only build/export/plugin
+> paths (`runtime::build`/`export`/`plugin`) and the decoders
 > (`render::load_texture/load_hdr/load_gltf`, `audio::load_clip`) still call
 > `std::fs` / take a path; `import.rs` reads its *source* file with `std::fs`
 > deliberately (the source is outside the project).
@@ -76,30 +78,37 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Window / input / UI | `platform` | winit has a wasm backend and `egui-wgpu` paints to a canvas, but this is the least-travelled path; a new web host implements the same `AppDriver` seam. |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
 | Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend and decoding from bytes, not `File`. |
-| Project / data | `project`, `extensions`, `editor`, `runtime` | All use `std::fs` → move behind `vfs`. `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
+| Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated; the decoders still take a path). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
 ## The seams to introduce
 
 New crates (names provisional; they never leak into the native-only build):
 
-- **`crates/vfs`** — the `Store` trait and backends.
+- **`crates/vfs`** — the `Store` trait and backends. **Shipped** (its shape
+  evolved past the sketch: whole-file I/O, a byte cap, and a dyn-clone).
   ```rust
   /// A byte- and path-oriented filesystem view (native dir, web storage, or an
-  /// in-memory archive).
-  pub trait Store {
+  /// in-memory archive). `Debug` is a supertrait so a `dyn Store` can hold one.
+  pub trait Store: Debug {
       fn read(&self, path: &str) -> Result<Vec<u8>, StoreError>;
-      fn write(&mut self, path: &str, bytes: &[u8]) -> Result<(), StoreError>;
+      fn read_capped(&self, path: &str, max: u64) -> Result<Vec<u8>, StoreError>;
+      fn read_string(&self, path: &str) -> Result<String, StoreError>;
       fn exists(&self, path: &str) -> bool;
-      fn list(&self, dir: &str) -> Result<Vec<String>, StoreError>;
+      fn is_dir(&self, path: &str) -> bool;
+      fn list(&self, dir: &str) -> Result<Vec<Entry>, StoreError>;
+      fn write(&mut self, path: &str, bytes: &[u8]) -> Result<(), StoreError>;
       fn remove(&mut self, path: &str) -> Result<(), StoreError>;
+      fn copy(&mut self, from: &str, to: &str) -> Result<(), StoreError>;
+      fn rename(&mut self, from: &str, to: &str) -> Result<(), StoreError>;
+      fn duplicate(&self) -> Box<dyn Store>;
   }
   ```
-  Backends: `DirStore` (native `std::fs`), `ZipStore` (read an archive — lift the
-  extension loader's `Source::Zip` into this crate), `MemoryStore` (tests),
-  `OpfsStore` and `IdbStore` (web, behind `cfg(wasm32)`). Relative-path validation
-  (no `..`, no absolute paths) already exists in `extensions::source` and moves
-  here as the shared rule.
+  Backends: `DirStore` (native `std::fs`), `ZipStore` (a `.zip` read into memory — the
+  reader an extension archive and a project bundle share), `MemoryStore` (tests),
+  and `OpfsStore`/`IdbStore` (web, behind `cfg(wasm32)`, to come). Relative-path
+  validation is the shared `validate_relative` rule (no `..`, no absolute paths), and
+  `duplicate` is the dyn-clone a `Store`-owning `Project` needs for its `Clone`.
 - **`crates/platform-web`** — a web `AppDriver` host: acquire the canvas, create
   the wgpu surface, run `requestAnimationFrame`, and drive `prepare`/`update`/`ui`
   exactly as the native host does. `egui-wgpu` paints the same UI. The native
@@ -132,7 +141,8 @@ the folder zipped. It reuses:
 - the `Source::Zip` reader from `crates/extensions` (promoted into `vfs`), so a
   bundle and an extension archive are read by one code path;
 - [`docs/project.md`](project.md)'s manifest and canonical asset paths — the same
-  `noctis.toml`, resolved against the bundle root instead of a directory;
+  `noctis.toml`, resolved against the bundle root instead of a directory, which is
+  exactly `Project::open_in(ZipStore, root)` (`Project` now owns its `Store`);
 - [`docs/scripts.md`](scripts.md)'s profiles — a `release` bundle bakes scripts in
   (like the embedded pack), a `dev` bundle ships them loose and the client may
   reload them.

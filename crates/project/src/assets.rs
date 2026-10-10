@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ecs::assets::{AssetRegistry, FontAsset, ScriptAsset};
-use vfs::{DirStore, Store};
+use vfs::Store;
 
 use crate::cache::{ImportCache, texture_key};
 use crate::error::ProjectError;
@@ -147,7 +147,7 @@ impl Project {
         for entry in map.entries() {
             // The file is always bundleable, even if decoding it fails.
             lookup.insert(entry.path.as_str().to_string(), entry.path.clone());
-            if let Err(message) = import_entry(&mut registry, entry, &mut lookup, &cache, &store) {
+            if let Err(message) = import_entry(&mut registry, entry, &mut lookup, &cache, store) {
                 errors.push(AssetImportError {
                     path: entry.path.clone(),
                     message,
@@ -169,7 +169,7 @@ fn import_entry(
     entry: &AssetMapEntry,
     lookup: &mut BTreeMap<String, AssetPath>,
     cache: &ImportCache,
-    store: &DirStore,
+    store: &dyn Store,
 ) -> Result<(), String> {
     match entry.kind {
         AssetKind::Model => import_model(registry, &entry.path, &entry.file, lookup),
@@ -205,7 +205,7 @@ fn import_texture(
     path: &AssetPath,
     file: &Path,
     cache: &ImportCache,
-    store: &DirStore,
+    store: &dyn Store,
 ) -> Result<(), String> {
     let settings = TextureImportSettings::load(store, path.file_path())?;
     let bytes = store
@@ -231,7 +231,7 @@ fn import_texture(
 fn import_script(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    store: &DirStore,
+    store: &dyn Store,
 ) -> Result<(), String> {
     let bytes = store
         .read(path.file_path())
@@ -256,7 +256,7 @@ fn import_audio(registry: &mut AssetRegistry, path: &AssetPath, file: &Path) -> 
 fn import_font(
     registry: &mut AssetRegistry,
     path: &AssetPath,
-    store: &DirStore,
+    store: &dyn Store,
 ) -> Result<(), String> {
     let data = store
         .read(path.file_path())
@@ -336,7 +336,7 @@ mod tests {
         .expect("write");
 
         let path = AssetPath::parse("scripts/brain.wasm").expect("asset path");
-        let store = DirStore::new(&dir);
+        let store = vfs::DirStore::new(&dir);
         let mut registry = AssetRegistry::new();
         import_script(&mut registry, &path, &store).expect("import a wasm file");
 

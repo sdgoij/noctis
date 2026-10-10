@@ -38,7 +38,7 @@ fn prefab(name: &str) -> Prefab {
 fn a_prefab_round_trips_through_the_project() {
     let dir = temp_project("roundtrip");
     write(&dir.join("noctis.toml"), MANIFEST);
-    let project = Project::open(&dir).expect("open");
+    let mut project = Project::open(&dir).expect("open");
 
     assert_eq!(
         project.prefab_path("Pair").unwrap(),
