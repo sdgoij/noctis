@@ -40,6 +40,11 @@ designed in [`docs/embedding.md`](docs/embedding.md). The `Plugin` seam and proj
 Rust are shipped (it extends the `ecs` core contract — a component registry — which
 `docs/core-api.md` records); script reflection is not yet built.
 
+Running the engine in a browser (WebAssembly) — the generic game client first, a
+`vfs` `Store` for files, a `platform-web` host, WebGPU-only rendering and
+JS-only scripting — is designed in [`docs/web.md`](docs/web.md). **Nothing is
+built yet.**
+
 ## Commands
 
 ```sh
