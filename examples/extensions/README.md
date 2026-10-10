@@ -17,6 +17,20 @@ extensions/
 command API (`noctis.edit`), applied as a single undo step. It also adds a
 **Scatter** panel with a button, and logs to the console when it loads.
 
+## WebAssembly extensions
+
+An extension may ship a compiled module instead of (or beside) JavaScript. The
+manifest declares it with `"wasm": { "module": "extension.wasm" }`. A module
+imports the host API from the namespace `noctis` — `log(ptr, len)`,
+`editor_json(out_ptr, out_cap)`, `edit(ptr, len)` and `run(ptr, len)` — and must
+export `noctis_abi() -> i32` (returning `1`), `noctis_init() -> i32` and
+`noctis_update(ptr, count, dt) -> i32`. The import list *is* the API: a module
+can reach nothing it did not declare, and one importing an ungranted function
+fails to link. `edit`/`run` queue work the host replays after the call, in
+order, as one undo step. There is no WASI, so file I/O does not link. See
+[`docs/extensions.md`](../../docs/extensions.md#wasm-extensions) for the full
+ABI; the WASM host is covered by the tests in `crates/editor/src/extension`.
+
 ## Try it
 
 Point the editor at this directory and dispatch the verb headlessly:

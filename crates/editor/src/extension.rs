@@ -25,6 +25,10 @@ use extensions::{Loader, Manifest};
 use crate::Editor;
 use crate::info::EntityDto;
 
+mod wasm;
+
+use wasm::WasmHost;
+
 /// The `noctis` global, defined in JavaScript. See the module docs.
 const BOOTSTRAP: &str = r#"
 (function () {
@@ -213,15 +217,23 @@ pub struct ExtensionEntry {
     pub enabled: bool,
 }
 
-/// The shared state the JS primitives read and write.
+/// One piece of work a callback queued, replayed after the call in order.
+enum Queued {
+    /// An `EditorCommand` batch (JSON text).
+    Edit(String),
+    /// A verb line to dispatch through the registry.
+    Run(String),
+}
+
+/// The shared state the JS and WebAssembly primitives read and write.
 ///
 /// The registered host functions are `'static` closures that cannot borrow the
 /// [`Editor`], so — like the script backend — the host snapshots the reads it
-/// exposes before a call and queues the edits to replay after it.
+/// exposes before a call and queues the work to replay after it.
 #[derive(Default)]
 struct Bridge {
-    /// Queued `EditorCommand` batches (JSON text), applied after the call.
-    edits: Vec<String>,
+    /// Queued edits and verbs, applied after the call in order.
+    queued: Vec<Queued>,
     /// The read snapshot (scene, mode, entities, selection) as JSON.
     reads: String,
     /// The loaded extension ids, as JSON.
@@ -240,6 +252,7 @@ struct Bridge {
 pub struct ExtensionHost {
     context: slag::Context,
     bridge: Rc<RefCell<Bridge>>,
+    wasm: WasmHost,
     ids: Vec<String>,
     entries: Vec<ExtensionEntry>,
     errors: Vec<String>,
@@ -250,6 +263,7 @@ impl std::fmt::Debug for ExtensionHost {
         formatter
             .debug_struct("ExtensionHost")
             .field("ids", &self.ids)
+            .field("wasm", &self.wasm)
             .field("errors", &self.errors)
             .finish_non_exhaustive()
     }
@@ -259,9 +273,12 @@ impl ExtensionHost {
     /// Start the engine, install the primitives, and define the `noctis` global.
     pub fn new() -> Result<Self, String> {
         let context = slag::Context::new().map_err(|error| error.to_string())?;
+        let bridge = Rc::new(RefCell::new(Bridge::default()));
+        let wasm = WasmHost::new(Rc::clone(&bridge));
         let mut host = Self {
             context,
-            bridge: Rc::new(RefCell::new(Bridge::default())),
+            bridge,
+            wasm,
             ids: Vec::new(),
             entries: Vec::new(),
             errors: Vec::new(),
@@ -343,11 +360,10 @@ impl ExtensionHost {
                 }
             }
 
-            if manifest.wasm.is_some() {
-                self.errors.push(format!(
-                    "{}: WebAssembly extensions are not executed yet (docs/extensions.md phase 4)",
-                    manifest.id
-                ));
+            if let Some(module) = &manifest.wasm
+                && let Err(error) = self.wasm.load(&module.bytes)
+            {
+                self.errors.push(format!("{}: {error}", manifest.id));
             }
         }
 
@@ -362,18 +378,24 @@ impl ExtensionHost {
         if let Err(error) = self.eval("__noctis_fire(\"ready\", undefined);") {
             self.errors.push(format!("ready: {error}"));
         }
-        self.apply_edits(editor)
+        self.apply_queued(editor)
     }
 
     /// Dispatch a verb line, applying any edits the handler queued.
     ///
     /// Returns the reply, or an error when no extension verb matched.
     pub fn dispatch(&mut self, editor: &mut Editor, line: &str) -> Result<String, String> {
+        let result = self.dispatch_line(editor, line);
+        self.apply_queued(editor);
+        result
+    }
+
+    /// Dispatch a verb line, queueing — but not applying — the work it makes.
+    fn dispatch_line(&mut self, editor: &mut Editor, line: &str) -> Result<String, String> {
         self.snapshot(editor);
         self.bridge.borrow_mut().reply = None;
         let program = format!("__noctis_dispatch_line({});", json_literal(line));
         self.eval(&program)?;
-        self.apply_edits(editor);
         match self.bridge.borrow_mut().reply.take() {
             Some(reply) => Ok(reply),
             None => Err(format!("no extension verb matched {line:?}")),
@@ -387,7 +409,11 @@ impl ExtensionHost {
         if let Err(error) = self.eval(&program) {
             self.errors.push(format!("update: {error}"));
         }
-        self.apply_edits(editor)
+        self.wasm.update(dt);
+        for error in self.wasm.take_errors() {
+            self.errors.push(error);
+        }
+        self.apply_queued(editor)
     }
 
     /// Draw the registered panels, using the clicks from the previous frame.
@@ -404,9 +430,9 @@ impl ExtensionHost {
         std::mem::take(&mut self.bridge.borrow_mut().panels)
     }
 
-    /// Apply any edits a panel draw (or `noctis.run`) queued.
+    /// Apply any work a panel draw (or `noctis.run`) queued.
     pub fn apply_pending(&mut self, editor: &mut Editor) -> Vec<String> {
-        self.apply_edits(editor)
+        self.apply_queued(editor)
     }
 
     /// Copy the editor reads the API exposes into the bridge.
@@ -431,20 +457,36 @@ impl ExtensionHost {
         self.bridge.borrow_mut().reads = value.to_string();
     }
 
-    /// Apply the queued edit batches as one undo step. Returns a line per batch.
-    fn apply_edits(&mut self, editor: &mut Editor) -> Vec<String> {
-        let edits: Vec<String> = std::mem::take(&mut self.bridge.borrow_mut().edits);
-        if edits.is_empty() {
+    /// Apply the queued work as one undo step, in the order it was queued.
+    ///
+    /// Dispatching a queued verb can queue more work (a verb that edits or runs
+    /// another verb), so the queue is drained until empty. Returns a line per edit
+    /// batch.
+    fn apply_queued(&mut self, editor: &mut Editor) -> Vec<String> {
+        if self.bridge.borrow().queued.is_empty() {
             return Vec::new();
         }
         let mut results = Vec::new();
         editor.begin_interactive_edit();
-        for json in edits {
-            match editor.apply_json(&json) {
-                Ok(outcomes) => results.push(format!("ok {} edit(s)", outcomes.len())),
-                Err(error) => {
-                    results.push(format!("error: {error}"));
-                    self.errors.push(format!("edit failed: {error}"));
+        loop {
+            let queued = std::mem::take(&mut self.bridge.borrow_mut().queued);
+            if queued.is_empty() {
+                break;
+            }
+            for work in queued {
+                match work {
+                    Queued::Edit(json) => match editor.apply_json(&json) {
+                        Ok(outcomes) => results.push(format!("ok {} edit(s)", outcomes.len())),
+                        Err(error) => {
+                            results.push(format!("error: {error}"));
+                            self.errors.push(format!("edit failed: {error}"));
+                        }
+                    },
+                    Queued::Run(line) => {
+                        if let Err(error) = self.dispatch_line(editor, &line) {
+                            results.push(format!("error: {error}"));
+                        }
+                    }
                 }
             }
         }
@@ -461,8 +503,8 @@ impl ExtensionHost {
                 let json = arg_string(call, 0).unwrap_or_default();
                 let count = {
                     let mut bridge = b.borrow_mut();
-                    bridge.edits.push(json);
-                    bridge.edits.len()
+                    bridge.queued.push(Queued::Edit(json));
+                    bridge.queued.len()
                 };
                 Ok(slag::JsValue::number(count as f64))
             }),
@@ -843,6 +885,295 @@ mod tests {
         assert_eq!(host.entries().len(), 2);
         assert!(host.entries()[0].enabled);
         assert!(!host.entries()[1].enabled);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // WebAssembly extensions. The fixtures are built with a tiny inline encoder
+    // so the tests need no toolchain and no binary blobs in the tree.
+    // -----------------------------------------------------------------------
+
+    const I32: u8 = 0x7f;
+    const F32: u8 = 0x7d;
+
+    fn leb(mut value: u32, out: &mut Vec<u8>) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn section(id: u8, content: &[u8], out: &mut Vec<u8>) {
+        out.push(id);
+        leb(content.len() as u32, out);
+        out.extend_from_slice(content);
+    }
+
+    fn wasm_name(text: &str, out: &mut Vec<u8>) {
+        leb(text.len() as u32, out);
+        out.extend_from_slice(text.as_bytes());
+    }
+
+    fn func_type(params: &[u8], results: &[u8], out: &mut Vec<u8>) {
+        out.push(0x60);
+        leb(params.len() as u32, out);
+        out.extend_from_slice(params);
+        leb(results.len() as u32, out);
+        out.extend_from_slice(results);
+    }
+
+    fn import(module: &str, field: &str, type_index: u32, out: &mut Vec<u8>) {
+        wasm_name(module, out);
+        wasm_name(field, out);
+        out.push(0x00); // import kind: function
+        leb(type_index, out);
+    }
+
+    fn wasm_header() -> Vec<u8> {
+        vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
+    }
+
+    /// Signed LEB128, for `i32.const` operands (which are signed).
+    fn sleb(mut value: i32, out: &mut Vec<u8>) {
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
+            if done {
+                out.push(byte);
+                return;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn i32_const(value: i32, out: &mut Vec<u8>) {
+        out.push(0x41);
+        sleb(value, out);
+    }
+
+    /// A module that imports `log`, `edit` and `run`; its `noctis_update` logs a
+    /// byte string, queues a spawn, and dispatches the `bump` verb.
+    fn wasm_kitchen_sink_module() -> Vec<u8> {
+        let json = br#"[{"op":"spawn","name":"Wasm"}]"#;
+        let bump = b"bump";
+        let json_at = 2;
+        let bump_at = json_at + json.len();
+
+        let mut out = wasm_header();
+
+        // types: 0 (i32,i32)->(), 1 (i32,i32)->i32, 2 ()->i32, 3 (i32,i32,f32)->()
+        let mut types = Vec::new();
+        leb(4, &mut types);
+        func_type(&[I32, I32], &[], &mut types);
+        func_type(&[I32, I32], &[I32], &mut types);
+        func_type(&[], &[I32], &mut types);
+        func_type(&[I32, I32, F32], &[], &mut types);
+        section(1, &types, &mut out);
+
+        // imports: log -> 0, edit -> 1, run -> 2
+        let mut imports = Vec::new();
+        leb(3, &mut imports);
+        import("noctis", "log", 0, &mut imports);
+        import("noctis", "edit", 1, &mut imports);
+        import("noctis", "run", 0, &mut imports);
+        section(2, &imports, &mut out);
+
+        // functions: noctis_abi (type 2), noctis_init (type 2), noctis_update (type 3)
+        let mut functions = Vec::new();
+        leb(3, &mut functions);
+        leb(2, &mut functions);
+        leb(2, &mut functions);
+        leb(3, &mut functions);
+        section(3, &functions, &mut out);
+
+        // memory: 1 page
+        let mut memory = Vec::new();
+        leb(1, &mut memory);
+        memory.push(0x00);
+        leb(1, &mut memory);
+        section(5, &memory, &mut out);
+
+        // exports: memory, then the three ABI functions (indices 3, 4, 5)
+        let mut exports = Vec::new();
+        leb(4, &mut exports);
+        wasm_name("memory", &mut exports);
+        exports.push(0x02);
+        leb(0, &mut exports);
+        wasm_name("noctis_abi", &mut exports);
+        exports.push(0x00);
+        leb(3, &mut exports);
+        wasm_name("noctis_init", &mut exports);
+        exports.push(0x00);
+        leb(4, &mut exports);
+        wasm_name("noctis_update", &mut exports);
+        exports.push(0x00);
+        leb(5, &mut exports);
+        section(7, &exports, &mut out);
+
+        // code
+        let mut code = Vec::new();
+        leb(3, &mut code);
+        for body in [
+            abi_body(1),
+            abi_body(0),
+            update_body(json, json_at, bump_at, bump.len()),
+        ] {
+            leb(body.len() as u32, &mut code);
+            code.extend_from_slice(&body);
+        }
+        section(10, &code, &mut out);
+
+        // data: "hi" at 0, the spawn JSON at 2, "bump" after it
+        let mut data = Vec::new();
+        leb(3, &mut data);
+        data.push(0x00);
+        data.extend_from_slice(&[0x41, 0x00, 0x0b]);
+        leb(2, &mut data);
+        data.extend_from_slice(b"hi");
+        data.push(0x00);
+        i32_const_segment(json_at, &mut data);
+        leb(json.len() as u32, &mut data);
+        data.extend_from_slice(json);
+        data.push(0x00);
+        i32_const_segment(bump_at, &mut data);
+        leb(bump.len() as u32, &mut data);
+        data.extend_from_slice(bump);
+        section(11, &data, &mut out);
+
+        out
+    }
+
+    /// An active data segment's offset expression: `i32.const offset; end`.
+    fn i32_const_segment(offset: usize, out: &mut Vec<u8>) {
+        i32_const(offset as i32, out);
+        out.push(0x0b);
+    }
+
+    /// A body with no locals returning the constant `value`.
+    fn abi_body(value: i32) -> Vec<u8> {
+        let mut body = Vec::new();
+        leb(0, &mut body); // no locals
+        i32_const(value, &mut body);
+        body.push(0x0b);
+        body
+    }
+
+    /// `noctis_update`: `log("hi")`, `edit(json)`, `run("bump")`.
+    fn update_body(json: &[u8], json_at: usize, bump_at: usize, bump_len: usize) -> Vec<u8> {
+        let mut body = Vec::new();
+        leb(0, &mut body); // no locals
+        i32_const(0, &mut body);
+        i32_const(2, &mut body);
+        body.extend_from_slice(&[0x10, 0x00]); // call log
+        i32_const(json_at as i32, &mut body);
+        i32_const(json.len() as i32, &mut body);
+        body.extend_from_slice(&[0x10, 0x01, 0x1a]); // call edit; drop
+        i32_const(bump_at as i32, &mut body);
+        i32_const(bump_len as i32, &mut body);
+        body.extend_from_slice(&[0x10, 0x02]); // call run
+        body.push(0x0b);
+        body
+    }
+
+    /// A module importing `edit` with a signature the ABI does not fix — it must
+    /// be refused by name, not called with misread arguments.
+    fn wasm_wrong_signature_module() -> Vec<u8> {
+        let mut out = wasm_header();
+        let mut types = Vec::new();
+        leb(1, &mut types);
+        func_type(&[I32], &[], &mut types);
+        section(1, &types, &mut out);
+
+        let mut imports = Vec::new();
+        leb(1, &mut imports);
+        import("noctis", "edit", 0, &mut imports);
+        section(2, &imports, &mut out);
+        out
+    }
+
+    /// Write an extension carrying both a JavaScript entry and a WASM module.
+    fn write_wasm_extension(
+        root: &std::path::Path,
+        dir_name: &str,
+        id: &str,
+        js: &str,
+        module: &[u8],
+    ) {
+        let dir = root.join(dir_name);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            dir.join("extension.json"),
+            format!(
+                r#"{{ "id": "{id}", "name": "{id}", "version": "1.0.0", "api": 1, "entry": "extension.js", "wasm": {{ "module": "extension.wasm" }} }}"#
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(dir.join("extension.js"), js).expect("entry");
+        std::fs::write(dir.join("extension.wasm"), module).expect("module");
+    }
+
+    #[test]
+    fn a_wasm_extension_logs_edits_and_runs_a_verb() {
+        let root = temp_dir("wasm-full");
+        let js = r#"noctis.command("bump", function () {
+          noctis.edit({ op: "spawn", name: "Bumped" });
+          return "ok bump";
+        });"#;
+        write_wasm_extension(
+            &root,
+            "full",
+            "com.example.wasmfull",
+            js,
+            &wasm_kitchen_sink_module(),
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+
+        let mut editor = Editor::new();
+        host.update(&mut editor, 0.016);
+        assert!(editor.find_by_name("Wasm").is_some(), "the module's edit");
+        assert!(
+            editor.find_by_name("Bumped").is_some(),
+            "the dispatched verb's edit"
+        );
+        assert_eq!(editor.list_entities().len(), 2);
+        assert!(editor.can_undo());
+        editor.undo();
+        assert_eq!(editor.list_entities().len(), 0, "one undo covers the frame");
+
+        let logs = host.take_logs();
+        assert!(logs.iter().any(|line| line == "hi"), "{logs:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_wasm_module_with_a_wrong_signature_is_reported() {
+        let root = temp_dir("wasm-bad");
+        write_wasm_extension(
+            &root,
+            "bad",
+            "com.example.wasmbad",
+            "",
+            &wasm_wrong_signature_module(),
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(
+            host.errors()
+                .iter()
+                .any(|error| error.contains("wrong signature")),
+            "{:?}",
+            host.errors()
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

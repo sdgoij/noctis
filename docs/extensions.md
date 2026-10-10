@@ -2,9 +2,10 @@
 
 > **Status:** the contract for making the editor extendible with JavaScript and
 > WebAssembly. The pure loader is `crates/extensions`; the host lives in
-> `crates/editor` (`editor::extension`). The headless slice (load, discover,
-> `noctis.command`, `noctis.edit`, `--run`) is implemented; the windowed UI
-> (`noctis.ui`) and native WASM execution are designed here and phased below.
+> `crates/editor` (`editor::extension`, with the WASM half in
+> `editor::extension::wasm`). The headless slice (load, discover,
+> `noctis.command`, `noctis.edit`, `--run`), the windowed UI (`noctis.ui`) and
+> native WASM execution are implemented; the remaining phase is `--watch`.
 
 An **extension** is a directory of JavaScript, WebAssembly, JSON and assets. It is
 discovered by the editor, evaluated against the open scene, and talks to the
@@ -262,14 +263,21 @@ once per frame, and reads the results out of the same memory.
 | `editor_json` | `(out_ptr, out_cap) -> i32` | Write the entity list JSON; a length, or `-2` if the buffer is too small. |
 | `edit` | `(ptr, len) -> i32` | Apply an `EditorCommand` batch (JSON) from memory; `0` ok, non-zero is the error count. |
 | `run` | `(ptr, len)` | Dispatch a verb line. |
-| `ui_panel` | `(ptr, len) -> i32` | Client-only: register a panel whose draw is the export `noctis_ui(draw)`. |
+| `ui_panel` | `(ptr, len) -> i32` | Planned: register a panel whose draw is the export `noctis_ui(draw)`. Not yet linked. |
 
-**Exports**: `noctis_abi() -> i32`, `noctis_alloc(len) -> i32`, `noctis_init() -> i32`,
-`noctis_update(ptr, count, dt) -> i32`, optional `noctis_ui(ptr) -> i32`.
+**Exports**: `noctis_abi() -> i32`, `noctis_init() -> i32`,
+`noctis_update(ptr, count, dt) -> i32` (all three are required).
+`noctis_alloc(len) -> i32` and `noctis_ui(ptr) -> i32` are reserved for the
+buffer and panel ABI and not yet required.
 
-A `noctis_abi` the host does not know is refused by name. The module's bytes are
-read once by the loader (which validates the wasm magic) and handed to the host;
-JS never sees them.
+A `noctis_abi` the host does not know is refused by name, and an import with a
+signature the ABI does not fix is refused *before* the module runs, so a
+mismatched module is rejected rather than called with misread arguments. The
+module's bytes are read once by the loader (which validates the wasm magic) and
+handed to the host; JS never sees them. The host instantiates the module, calls
+`noctis_init` once, then `noctis_update(0, 0, dt)` each frame; `edit`/`run` queue
+work the host replays after the call, in the order the module issued it, as one
+undo step. `log` is served from the frame's read snapshot.
 
 ## Persistence
 
@@ -332,6 +340,10 @@ an **Extensions** screen listing the table with toggles that write the config.
 - `editor::extension` — the JS host: the `noctis` global
   (`on`/`command`/`edit`/`editor`/`ui`/`log`/`freeze`), loading, `"ready"`, verb
   dispatch, `"update"`, panel drawing, and edit batching through `Editor::apply`.
+- `editor::extension::wasm` — the WASM host: `decode`/`validate`, link the
+  `noctis` imports (default-deny), instantiate, call `noctis_abi`/`noctis_init`,
+  and drive `noctis_update` each frame — queueing `log`/`edit`/`run` through the
+  same ordered bridge as the JS host.
 - `editor::window` — the windowed UI: panels rendered as egui windows (buttons
   are live), the `"update"` hook each frame, a console with a scrollback, and an
   Extensions screen whose toggles write the config.
@@ -348,7 +360,8 @@ an **Extensions** screen listing the table with toggles that write the config.
    and the Extensions screen writing the config. *(shipped for
    headings/labels/separators/buttons; `checkbox`/`slider` remain)*
 4. **WASM execution**: instantiate a module, drive `noctis_update`, provide the
-   imports above.
+   imports above. *(shipped for `log`/`editor_json`/`edit`/`run`; the
+   `noctis_alloc`/`ui_panel` buffer and panel ABI remain)*
 5. **Dev loop**: `--watch` hot-reload per extension (reusing `notify`).
 
 ## Non-goals for v1
