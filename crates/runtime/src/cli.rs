@@ -21,6 +21,7 @@ use math::vec3;
 use platform::WindowConfig;
 use project::{Profile, Project};
 use render::RendererConfig;
+use vfs::{DirStore, Store};
 
 use crate::window::run_in_window;
 use crate::{
@@ -409,7 +410,9 @@ fn load_scene(
         );
         return Ok(demo::demo_scene(assets).with_component_registry(components.clone()));
     }
-    let json = fs::read_to_string(&path)
+    let (store, key) = DirStore::for_file(&path);
+    let json = store
+        .read_string(&key)
         .map_err(|err| format!("failed to read scene '{}': {err}", path.display()))?;
     Scene::from_json_with(&json, assets, components)
         .map_err(|err| format!("failed to load scene '{}': {err}", path.display()))

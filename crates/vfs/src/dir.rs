@@ -21,6 +21,26 @@ impl DirStore {
         &self.root
     }
 
+    /// The store view of a single, path-addressed file: a `DirStore` rooted at
+    /// `path`'s parent, plus `path`'s file name as the key.
+    ///
+    /// Handy for reading or writing one document (a scene, a controls file)
+    /// through the [`Store`] API without opening a whole project. A bare file
+    /// name (no parent) is rooted at the current directory; a path with no file
+    /// name yields an empty key.
+    pub fn for_file(path: &Path) -> (DirStore, String) {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        (DirStore::new(parent), name)
+    }
+
     /// Resolve a relative path to a native path inside the root.
     fn resolve(&self, path: &str) -> Result<PathBuf, StoreError> {
         let relative = validate_relative(path)?;
@@ -214,5 +234,19 @@ mod tests {
         let store = DirStore::new(temp_dir("escape"));
         assert!(matches!(store.read("../x"), Err(StoreError::Invalid(_))));
         assert!(!store.exists("../x"));
+    }
+
+    #[test]
+    fn for_file_views_the_parent_and_name() {
+        let dir = temp_dir("for-file");
+        let (store, key) = DirStore::for_file(&dir.join("scenes/level.scene.json"));
+        assert_eq!(key, "level.scene.json");
+        // The store's root is the file's parent, so the key resolves back.
+        assert_eq!(store.root(), dir.join("scenes"));
+
+        // A bare file name is rooted at the current directory and keeps its name.
+        let (store, key) = DirStore::for_file(Path::new("noctis.toml"));
+        assert_eq!(key, "noctis.toml");
+        assert_eq!(store.root(), Path::new("."));
     }
 }

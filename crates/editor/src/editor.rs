@@ -20,7 +20,6 @@
 //! they are *not* undone. Scene edits that reference them are.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture};
@@ -33,6 +32,7 @@ use ecs::reflect::{ComponentRegistry, Field};
 use ecs::scene::{Prefab, Scene, SceneDesc, SceneMode, set_parent};
 use ecs::world::{Entity, World};
 use math::{Quat, Transform, Vec3, degrees, radians, vec3, zero3};
+use vfs::{DirStore, Store};
 
 use crate::command::{
     AssetRef, AudioSourceParams, CameraParams, ColliderParams, CommandOutcome, ComponentName,
@@ -148,6 +148,17 @@ fn add3(a: Vec3, b: Vec3) -> Vec3 {
     vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 }
 
+/// The display name for a document path: its last path component without the
+/// final extension, or `"Untitled"` when there is none. Used to name a scene
+/// created because its file did not exist yet.
+fn document_name(path: &str) -> &str {
+    let name = Path::new(path).file_name().and_then(|name| name.to_str());
+    match name.and_then(|name| Path::new(name).file_stem().and_then(|stem| stem.to_str())) {
+        Some(stem) if !stem.is_empty() => stem,
+        _ => "Untitled",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Editor
 // ---------------------------------------------------------------------------
@@ -225,7 +236,19 @@ impl Editor {
 
     /// Load a scene from `path`, replacing the current scene and history.
     pub fn open(&mut self, path: impl AsRef<Path>) -> Result<(), EditorError> {
-        let text = fs::read_to_string(path).map_err(|e| EditorError::Io(e.to_string()))?;
+        let (store, key) = DirStore::for_file(path.as_ref());
+        self.open_in(&store, &key)
+    }
+
+    /// Load a scene from a store path, replacing the current scene and history.
+    ///
+    /// The store is the seam for reading a document from anywhere other than a
+    /// native directory (a project bundle, browser storage); [`Editor::open`] is
+    /// the path-addressed wrapper over a [`DirStore`].
+    pub fn open_in(&mut self, store: &dyn Store, path: &str) -> Result<(), EditorError> {
+        let text = store
+            .read_string(path)
+            .map_err(|error| EditorError::Io(error.to_string()))?;
         self.load_json(&text)
     }
 
@@ -244,16 +267,22 @@ impl Editor {
         path: impl AsRef<Path>,
         mode: SceneMode,
     ) -> Result<(), EditorError> {
-        let path = path.as_ref();
-        if path.exists() {
-            self.open(path)
+        let (store, key) = DirStore::for_file(path.as_ref());
+        self.open_or_new_in(&store, &key, mode)
+    }
+
+    /// The store counterpart of [`Editor::open_or_new_with_mode`]: open `path`
+    /// from `store` if it exists, otherwise start a new scene named after it.
+    pub fn open_or_new_in(
+        &mut self,
+        store: &dyn Store,
+        path: &str,
+        mode: SceneMode,
+    ) -> Result<(), EditorError> {
+        if store.exists(path) {
+            self.open_in(store, path)
         } else {
-            let name = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .filter(|stem| !stem.is_empty())
-                .unwrap_or("Untitled");
-            self.new_scene_with_mode(name, mode);
+            self.new_scene_with_mode(document_name(path), mode);
             Ok(())
         }
     }
@@ -274,13 +303,16 @@ impl Editor {
     /// Missing parent directories are created, so `--out scenes/level.json`
     /// works without `scenes/` having to exist first.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), EditorError> {
-        let path = path.as_ref();
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|e| EditorError::Io(e.to_string()))?;
-        }
-        fs::write(path, self.to_json()).map_err(|e| EditorError::Io(e.to_string()))
+        let (mut store, key) = DirStore::for_file(path.as_ref());
+        self.save_to(&mut store, &key)
+    }
+
+    /// Save the scene to a store path. The store counterpart of [`Editor::save`];
+    /// the store creates parent directories as needed.
+    pub fn save_to(&self, store: &mut dyn Store, path: &str) -> Result<(), EditorError> {
+        store
+            .write(path, self.to_json().as_bytes())
+            .map_err(|error| EditorError::Io(error.to_string()))
     }
 
     /// The scene serialized to pretty JSON.
@@ -2655,6 +2687,32 @@ mod tests {
         assert!(target.is_file());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_scene_round_trips_through_a_store() {
+        let mut store = vfs::MemoryStore::new();
+        let mut ed = editor();
+        let root = ed.spawn("Root", None);
+        ed.set_translation(root, vec3(1.0, 2.0, 3.0)).unwrap();
+        ed.save_to(&mut store, "scenes/level.scene.json")
+            .expect("save through the store");
+        assert!(store.exists("scenes/level.scene.json"));
+
+        let mut reopened = editor();
+        reopened
+            .open_in(&store, "scenes/level.scene.json")
+            .expect("open through the store");
+        assert_eq!(reopened.to_json(), ed.to_json(), "stable through a store");
+
+        // A missing key creates a fresh scene named after the file stem.
+        let mut fresh = editor();
+        fresh
+            .open_or_new_in(&store, "scenes/menu.scene.json", SceneMode::ThreeD)
+            .expect("open_or_new never fails on a missing document");
+        assert_eq!(fresh.entity_count(), 0);
+        // `file_stem` drops only the final extension: `menu.scene.json` -> `menu.scene`.
+        assert_eq!(fresh.scene_name(), "menu.scene");
     }
 
     #[test]

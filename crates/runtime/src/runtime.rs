@@ -30,6 +30,7 @@ use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
 use render::{Frame, IblConfig, RenderError, Renderer, RendererConfig};
 use script::{NoopHost, ScriptHost, ScriptRuntime};
+use vfs::{DirStore, Store};
 
 use crate::config::RuntimeConfig;
 
@@ -265,10 +266,13 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         let Some(root) = self.watch.as_ref().map(|watch| watch.root().to_path_buf()) else {
             return false;
         };
-        let file = root.join(relative);
-        match std::fs::read(&file).and_then(|bytes| {
-            ScriptAsset::from_file_bytes(relative, &bytes).map_err(std::io::Error::other)
-        }) {
+        let loaded = DirStore::new(&root)
+            .read(relative)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                ScriptAsset::from_file_bytes(relative, &bytes).map_err(|error| error.to_string())
+            });
+        match loaded {
             Ok(asset) => {
                 self.app
                     .context

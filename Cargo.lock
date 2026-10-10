@@ -834,6 +834,7 @@ dependencies = [
  "serde_json",
  "slag",
  "testscene",
+ "vfs",
 ]
 
 [[package]]
@@ -3123,6 +3124,7 @@ dependencies = [
  "script",
  "serde",
  "serde_json",
+ "vfs",
 ]
 
 [[package]]
