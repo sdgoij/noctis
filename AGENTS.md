@@ -177,9 +177,8 @@ needed.
   `examples/extensions`. A `.wasm` module links the `noctis` imports
   (`log`/`editor_json`/`edit`/`run`) — default-deny by the linker, no WASI — and
   exports `noctis_abi`/`noctis_init`/`noctis_update`, driven once per frame.
-  **Not yet:** `checkbox`/`slider` panel widgets, the `noctis_alloc`/`ui_panel`
-  buffer and panel ABI (WASM does not draw panels), `.zip` extensions, and hot
-  reload.
+  **Not yet:** the `noctis_alloc`/`ui_panel` buffer and panel ABI (WASM does not
+  draw panels), `.zip` extensions, and hot reload.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

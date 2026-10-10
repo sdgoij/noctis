@@ -15,7 +15,7 @@ use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
-use crate::extension::{ExtensionHost, Widget};
+use crate::extension::{ExtensionHost, Interactions, Widget};
 use crate::gizmo;
 use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
@@ -104,8 +104,8 @@ pub struct EditorDriver {
     extensions: Option<ExtensionHost>,
     /// The enablement config and the file it is written to.
     extension_config: Option<(ExtensionConfig, PathBuf)>,
-    /// Button clicks from the last frame, fed to panels on the next draw.
-    pending_activations: Vec<(usize, usize)>,
+    /// UI interactions from the last frame, fed to panels on the next draw.
+    pending_interactions: Interactions,
     /// The console's input line and scrollback.
     console_line: String,
     console_log: Vec<String>,
@@ -154,7 +154,7 @@ impl EditorDriver {
             project: None,
             extensions: None,
             extension_config: None,
-            pending_activations: Vec::new(),
+            pending_interactions: Interactions::default(),
             console_line: String::new(),
             console_log: Vec::new(),
             show_console: false,
@@ -203,10 +203,10 @@ impl EditorDriver {
             return;
         }
 
-        let activations = std::mem::take(&mut self.pending_activations);
+        let interactions = std::mem::take(&mut self.pending_interactions);
         let panels = {
             let host = self.extensions.as_mut().expect("checked above");
-            host.draw_panels(&self.editor, &activations)
+            host.draw_panels(&self.editor, &interactions)
         };
         // A panel button may have run a verb, queueing edits.
         if let Some(host) = self.extensions.as_mut() {
@@ -219,6 +219,7 @@ impl EditorDriver {
 
         for (panel_index, panel) in panels.iter().enumerate() {
             let mut clicks: Vec<(usize, usize)> = Vec::new();
+            let mut values: Vec<((usize, usize), f64)> = Vec::new();
             egui::Window::new(&panel.title)
                 .id(egui::Id::new(("noctis_ext_panel", panel_index)))
                 .default_width(220.0)
@@ -239,10 +240,37 @@ impl EditorDriver {
                                     clicks.push((panel_index, *index));
                                 }
                             }
+                            Widget::Checkbox {
+                                index,
+                                label,
+                                checked,
+                            } => {
+                                let mut state = *checked;
+                                if ui.checkbox(&mut state, label).changed() {
+                                    values.push((
+                                        (panel_index, *index),
+                                        if state { 1.0 } else { 0.0 },
+                                    ));
+                                }
+                            }
+                            Widget::Slider {
+                                index,
+                                label,
+                                value,
+                                min,
+                                max,
+                            } => {
+                                let mut state = *value;
+                                let slider = egui::Slider::new(&mut state, *min..=*max).text(label);
+                                if ui.add(slider).changed() {
+                                    values.push(((panel_index, *index), state));
+                                }
+                            }
                         }
                     }
                 });
-            self.pending_activations.extend(clicks);
+            self.pending_interactions.activations.extend(clicks);
+            self.pending_interactions.values.extend(values);
         }
 
         self.console_window(ui);

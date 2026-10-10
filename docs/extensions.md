@@ -232,16 +232,21 @@ slot is not a closed set: an extension may invent one. JS never sees a path.
 ```js
 noctis.ui.panel("Scatter", (ui) => {
   if (ui.button("Scatter 5")) noctis.run("scatter 5");
+  const on = ui.checkbox("Enabled", true);
+  const n = ui.slider("Count", 5, 1, 20);
+  ui.label(`enabled ${on}, count ${n}`);
 });
 noctis.ui.menu("Tools", "Scatter", () => noctis.run("scatter 5"));
 ```
 
 `noctis.ui.panel(title, draw)` registers an egui window; `draw` receives a
-recording `ui` handle — `text`/`label`, `heading`, `separator` and `button` in
-v1 (`checkbox`/`slider` are planned). `ui.button(label)` is live: it returns
-true the frame after the click. `noctis.ui.menu(menu, label, run)` is a
-one-button panel. Panels are windowed-only; a headless run never calls `draw`.
-The WASM equivalent is the client-only `ui_panel` import (§ WASM).
+recording `ui` handle — `text`/`label`, `heading`, `separator`, `button`,
+`checkbox` and `slider`. `ui.button(label)` is live: it returns true the frame
+after the click. `ui.checkbox(label, value)` and `ui.slider(label, value, min,
+max)` are stateful: the host renders them and the next frame returns the value
+the user set, falling back to the passed default. `noctis.ui.menu(menu, label,
+run)` is a one-button panel. Panels are windowed-only; a headless run never
+calls `draw`. The WASM equivalent is the planned `ui_panel` import (§ WASM).
 
 ## WASM extensions
 
@@ -344,9 +349,9 @@ an **Extensions** screen listing the table with toggles that write the config.
   `noctis` imports (default-deny), instantiate, call `noctis_abi`/`noctis_init`,
   and drive `noctis_update` each frame — queueing `log`/`edit`/`run` through the
   same ordered bridge as the JS host.
-- `editor::window` — the windowed UI: panels rendered as egui windows (buttons
-  are live), the `"update"` hook each frame, a console with a scrollback, and an
-  Extensions screen whose toggles write the config.
+- `editor::window` — the windowed UI: panels rendered as egui windows (buttons,
+  checkboxes and sliders are live), the `"update"` hook each frame, a console
+  with a scrollback, and an Extensions screen whose toggles write the config.
 - `editor` CLI — `--extensions`, `--no-extensions`, `--run`.
 - A fixture at `examples/extensions/`.
 
@@ -357,8 +362,7 @@ an **Extensions** screen listing the table with toggles that write the config.
 2. **Headless host**: the `noctis` global, `ready`/`command`, `edit`, `--run`.
    *(shipped)*
 3. **Windowed UI**: `noctis.ui.panel`/`menu` in `EditorDriver::ui`, the console,
-   and the Extensions screen writing the config. *(shipped for
-   headings/labels/separators/buttons; `checkbox`/`slider` remain)*
+   and the Extensions screen writing the config. *(shipped)*
 4. **WASM execution**: instantiate a module, drive `noctis_update`, provide the
    imports above. *(shipped for `log`/`editor_json`/`edit`/`run`; the
    `noctis_alloc`/`ui_panel` buffer and panel ABI remain)*

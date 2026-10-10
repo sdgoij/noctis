@@ -138,7 +138,9 @@ const BOOTSTRAP: &str = r#"
   // Editor panels. `panel(title, draw)` registers a floating panel; `draw`
   // receives a recording `ui` and the host renders the ops it records. A
   // recorded button is live: `ui.button(label)` returns true on the frame after
-  // it is clicked. `menu(menu, label, run)` is a one-button panel.
+  // it is clicked. `ui.checkbox(label, value)` and `ui.slider(label, value, min,
+  // max)` return the value the user set on the previous frame. `menu(menu, label,
+  // run)` is a one-button panel.
   var panels = [];
   noctis.ui = {
     panel: function (title, draw) {
@@ -168,6 +170,20 @@ const BOOTSTRAP: &str = r#"
           var hit = __host_activated(p, id) !== 0;
           ops.push({ kind: "button", id: id, label: String(label) });
           return hit;
+        },
+        checkbox: function (label, value) {
+          var id = n++;
+          var v = __host_value(p, id);
+          var checked = (v === v) ? (v !== 0) : !!value;
+          ops.push({ kind: "checkbox", id: id, label: String(label), value: checked ? 1 : 0 });
+          return checked;
+        },
+        slider: function (label, value, min, max) {
+          var id = n++;
+          var v = __host_value(p, id);
+          var current = (v === v) ? v : Number(value);
+          ops.push({ kind: "slider", id: id, label: String(label), value: current, min: Number(min), max: Number(max) });
+          return current;
         }
       };
       try { panels[p].draw(ui); } catch (e) { __host_log("panel '" + panels[p].title + "' threw: " + e); }
@@ -193,6 +209,28 @@ pub enum Widget {
         /// The button's label.
         label: String,
     },
+    /// A toggle, `index` is the widget's position within the panel.
+    Checkbox {
+        /// The checkbox's index (its value id).
+        index: usize,
+        /// The checkbox's label.
+        label: String,
+        /// Its checked state.
+        checked: bool,
+    },
+    /// A numeric slider, `index` is the widget's position within the panel.
+    Slider {
+        /// The slider's index (its value id).
+        index: usize,
+        /// The slider's label.
+        label: String,
+        /// Its current value.
+        value: f64,
+        /// Its lower bound.
+        min: f64,
+        /// Its upper bound.
+        max: f64,
+    },
 }
 
 /// A panel an extension drew this frame.
@@ -215,6 +253,15 @@ pub struct ExtensionEntry {
     pub version: String,
     /// Whether it loaded (not disabled).
     pub enabled: bool,
+}
+
+/// What the extension UI reported for the previous frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Interactions {
+    /// Buttons clicked, as `(panel, widget)`.
+    pub activations: Vec<(usize, usize)>,
+    /// Controls whose value changed, as `((panel, widget), value)`.
+    pub values: Vec<((usize, usize), f64)>,
 }
 
 /// One piece of work a callback queued, replayed after the call in order.
@@ -244,8 +291,8 @@ struct Bridge {
     reply: Option<String>,
     /// The panels drawn this frame.
     panels: Vec<Panel>,
-    /// The (panel, widget) activations from the previous frame.
-    activations: Vec<(usize, usize)>,
+    /// The (panel, widget) activations and value changes from the previous frame.
+    interactions: Interactions,
 }
 
 /// The JavaScript host for editor extensions.
@@ -416,13 +463,13 @@ impl ExtensionHost {
         self.apply_queued(editor)
     }
 
-    /// Draw the registered panels, using the clicks from the previous frame.
-    pub fn draw_panels(&mut self, editor: &Editor, activations: &[(usize, usize)]) -> Vec<Panel> {
+    /// Draw the registered panels, using the interactions from the previous frame.
+    pub fn draw_panels(&mut self, editor: &Editor, interactions: &Interactions) -> Vec<Panel> {
         self.snapshot(editor);
         {
             let mut bridge = self.bridge.borrow_mut();
             bridge.panels.clear();
-            bridge.activations = activations.to_vec();
+            bridge.interactions = interactions.clone();
         }
         if let Err(error) = self.eval("__noctis_draw_panels();") {
             self.errors.push(format!("panels: {error}"));
@@ -569,8 +616,30 @@ impl ExtensionHost {
             Box::new(move |call| {
                 let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
                 let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
-                let hit = b.borrow().activations.contains(&(panel, widget));
+                let hit = b
+                    .borrow()
+                    .interactions
+                    .activations
+                    .contains(&(panel, widget));
                 Ok(slag::JsValue::number(if hit { 1.0 } else { 0.0 }))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "__host_value",
+            2,
+            Box::new(move |call| {
+                let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
+                let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
+                let value = b
+                    .borrow()
+                    .interactions
+                    .values
+                    .iter()
+                    .find(|(key, _)| *key == (panel, widget))
+                    .map_or(f64::NAN, |(_, value)| *value);
+                Ok(slag::JsValue::number(value))
             }),
         )?;
 
@@ -610,6 +679,18 @@ fn parse_ops(json: &str) -> Vec<Widget> {
             "button" => Some(Widget::Button {
                 index: op.get("id")?.as_u64()? as usize,
                 label: op.get("label")?.as_str()?.to_string(),
+            }),
+            "checkbox" => Some(Widget::Checkbox {
+                index: op.get("id")?.as_u64()? as usize,
+                label: op.get("label")?.as_str()?.to_string(),
+                checked: op.get("value")?.as_f64()? != 0.0,
+            }),
+            "slider" => Some(Widget::Slider {
+                index: op.get("id")?.as_u64()? as usize,
+                label: op.get("label")?.as_str()?.to_string(),
+                value: op.get("value")?.as_f64()?,
+                min: op.get("min")?.as_f64()?,
+                max: op.get("max")?.as_f64()?,
             }),
             _ => None,
         })
@@ -814,7 +895,7 @@ mod tests {
         let mut editor = Editor::new();
 
         // The first draw records the widgets; nothing is activated yet.
-        let panels = host.draw_panels(&editor, &[]);
+        let panels = host.draw_panels(&editor, &Interactions::default());
         assert_eq!(panels.len(), 1);
         assert_eq!(panels[0].title, "Tools");
         assert!(matches!(panels[0].widgets[0], Widget::Heading(_)));
@@ -833,13 +914,19 @@ mod tests {
         assert!(editor.find_by_name("Bumped").is_none());
 
         // Clicking widget 0 activates the button on the next draw.
-        host.draw_panels(&editor, &[(0, 0)]);
+        host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: vec![(0, 0)],
+                values: Vec::new(),
+            },
+        );
         host.apply_pending(&mut editor);
         assert!(editor.find_by_name("Bumped").is_some());
 
         // The label is drawn before the button, so it reflects the click on the
         // draw after the activation.
-        let panels = host.draw_panels(&editor, &[]);
+        let panels = host.draw_panels(&editor, &Interactions::default());
         assert!(
             panels[0]
                 .widgets
@@ -871,6 +958,83 @@ mod tests {
 
         host.update(&mut editor, 0.6);
         assert_eq!(editor.list_entities().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_panel_round_trips_checkbox_and_slider_values() {
+        let root = temp_dir("values");
+        write_extension(
+            &root,
+            "values",
+            "com.example.values",
+            r#"
+            noctis.ui.panel("Tune", function (ui) {
+              var on = ui.checkbox("Enable", false);
+              var gain = ui.slider("Gain", 0, 0, 10);
+              ui.label("enable " + on + " gain " + gain);
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let editor = Editor::new();
+
+        // No interactions yet: the widgets carry the defaults the panel passed.
+        let panels = host.draw_panels(&editor, &Interactions::default());
+        assert_eq!(
+            panels[0].widgets[0],
+            Widget::Checkbox {
+                index: 0,
+                label: "Enable".into(),
+                checked: false,
+            }
+        );
+        assert_eq!(
+            panels[0].widgets[1],
+            Widget::Slider {
+                index: 1,
+                label: "Gain".into(),
+                value: 0.0,
+                min: 0.0,
+                max: 10.0,
+            }
+        );
+
+        // A change fed back on the next draw is what the panel reads and draws.
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: Vec::new(),
+                values: vec![((0, 0), 1.0), ((0, 1), 5.0)],
+            },
+        );
+        assert_eq!(
+            panels[0].widgets[0],
+            Widget::Checkbox {
+                index: 0,
+                label: "Enable".into(),
+                checked: true,
+            }
+        );
+        assert_eq!(
+            panels[0].widgets[1],
+            Widget::Slider {
+                index: 1,
+                label: "Gain".into(),
+                value: 5.0,
+                min: 0.0,
+                max: 10.0,
+            }
+        );
+        assert!(
+            panels[0].widgets.iter().any(
+                |widget| matches!(widget, Widget::Label(text) if text == "enable true gain 5")
+            ),
+            "{:?}",
+            panels[0].widgets
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
