@@ -88,6 +88,8 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
+**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs` and `extensions` compile as-is. The first blockers for the rest are concrete — `project`/`audio` stop at `rodio` → `rand_distr` → `rand` → `getrandom` (needs its `wasm_js` feature and `--cfg getrandom_backend="wasm_js"`), and `audio` also needs its output sink split from decode; `script` stops at Cranelift (drop the `jit` feature on web); `platform` needs winit's web backend features.
+
 ## The seams to introduce
 
 New crates (names provisional; they never leak into the native-only build):
