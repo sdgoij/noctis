@@ -81,7 +81,11 @@ impl SlagHost {
     /// The JIT is an optimisation: if the hook cannot be installed, scripts still
     /// run on the interpreter, so the failure is logged rather than fatal.
     pub fn new() -> Result<Self, SlagError> {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut context = slag::Context::new().map_err(engine_err)?;
+        // The Cranelift JIT hook is native-only (Slag's `jit` feature is not built
+        // for wasm), so on the web scripts run on the interpreter.
+        #[cfg(not(target_arch = "wasm32"))]
         let jit = match slag::install_jit(&mut context) {
             Ok(()) => true,
             Err(err) => {
@@ -89,6 +93,8 @@ impl SlagHost {
                 false
             }
         };
+        #[cfg(target_arch = "wasm32")]
+        let jit = false;
         let mut host = Self {
             context,
             bridge: Rc::new(RefCell::new(Bridge::default())),
@@ -102,7 +108,8 @@ impl SlagHost {
     }
 
     /// `true` if the Cranelift JIT hook was installed. Only ever `false` when the
-    /// hook failed to install, in which case scripts still run interpretively.
+    /// hook failed to install, in which case scripts still run interpretively; it
+    /// is always `false` on wasm, where the JIT is not built.
     pub fn jit_enabled(&self) -> bool {
         self.jit
     }

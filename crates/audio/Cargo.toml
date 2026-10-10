@@ -11,3 +11,9 @@ repository.workspace = true
 math.workspace = true
 ecs.workspace = true
 rodio.workspace = true
+
+# getrandom (reached through rodio → rand_distr → rand) needs its `wasm_js`
+# backend enabled to build for `wasm32-unknown-unknown`; `.cargo/config.toml`
+# selects the matching backend cfg. Native builds do not need this.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
