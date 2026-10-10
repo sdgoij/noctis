@@ -477,6 +477,12 @@ impl ExtensionHost {
         if let Err(error) = self.eval("__noctis_draw_panels();") {
             self.errors.push(format!("panels: {error}"));
         }
+        // WebAssembly panels are appended after the JavaScript ones, so a
+        // module's local panel ids map onto the global list the window renders.
+        self.wasm.draw();
+        for error in self.wasm.take_errors() {
+            self.errors.push(error);
+        }
         std::mem::take(&mut self.bridge.borrow_mut().panels)
     }
 
@@ -1062,6 +1068,7 @@ mod tests {
 
     const I32: u8 = 0x7f;
     const F32: u8 = 0x7d;
+    const F64: u8 = 0x7c;
 
     fn leb(mut value: u32, out: &mut Vec<u8>) {
         loop {
@@ -1341,6 +1348,310 @@ mod tests {
             "{:?}",
             host.errors()
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn f64_const(value: f64, out: &mut Vec<u8>) {
+        out.push(0x44);
+        out.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+
+    /// A body with no locals returning `value`.
+    fn const_body(value: i32) -> Vec<u8> {
+        let mut body = Vec::new();
+        leb(0, &mut body);
+        i32_const(value, &mut body);
+        body.push(0x0b);
+        body
+    }
+
+    /// `noctis_init`: register a panel titled at `[ptr, ptr+len)`.
+    fn panel_init_body(ptr: usize, len: usize) -> Vec<u8> {
+        let mut body = Vec::new();
+        leb(0, &mut body);
+        i32_const(ptr as i32, &mut body);
+        i32_const(len as i32, &mut body);
+        body.extend_from_slice(&[0x10, 0x00, 0x1a]); // call ui_panel; drop
+        i32_const(0, &mut body); // return 0
+        body.push(0x0b);
+        body
+    }
+
+    /// `noctis_alloc(len) -> scratch`, ignoring `len` (a fixed scratch region).
+    fn panel_alloc_body(scratch: usize) -> Vec<u8> {
+        let mut body = Vec::new();
+        leb(0, &mut body);
+        i32_const(scratch as i32, &mut body);
+        body.push(0x0b);
+        body
+    }
+
+    /// `noctis_ui(panel, out, cap) -> len`: copy the `hit` op-string when the
+    /// panel's button was activated or its slider has a value, else the `miss`
+    /// one, into `out`; return the length.
+    fn panel_ui_body(hit_at: usize, len: usize) -> Vec<u8> {
+        let mut body = Vec::new();
+        // One local: `src` is local 3 (after the three params).
+        leb(1, &mut body);
+        leb(1, &mut body);
+        body.push(I32);
+
+        // src = select(hit_at, miss_at, activated | (value > 0))
+        i32_const(hit_at as i32, &mut body);
+        i32_const(0, &mut body); // miss at 0
+        body.extend_from_slice(&[0x20, 0x00, 0x41, 0x00, 0x10, 0x01]); // ui_activated(panel, 0)
+        body.extend_from_slice(&[0x20, 0x00, 0x41, 0x00, 0x10, 0x02]); // ui_value(panel, 0)
+        f64_const(0.0, &mut body);
+        body.extend_from_slice(&[0x64, 0x72]); // f64.gt; i32.or
+        body.push(0x1b); // select
+        body.extend_from_slice(&[0x21, 0x03]); // local.set 3
+
+        // Copy `len` bytes from src to out, one at a time.
+        for index in 0..len {
+            body.extend_from_slice(&[0x20, 0x01]); // out
+            i32_const(index as i32, &mut body);
+            body.push(0x6a); // i32.add
+            body.extend_from_slice(&[0x20, 0x03]); // src
+            i32_const(index as i32, &mut body);
+            body.push(0x6a); // i32.add
+            body.extend_from_slice(&[0x2d, 0x00, 0x00]); // i32.load8_u
+            body.extend_from_slice(&[0x3a, 0x00, 0x00]); // i32.store8
+        }
+        i32_const(len as i32, &mut body);
+        body.push(0x0b);
+        body
+    }
+
+    /// A module that registers one panel and draws it, reading its button/slider
+    /// state back through `ui_activated`/`ui_value`.
+    fn wasm_panel_module() -> Vec<u8> {
+        let miss = br#"[{"kind":"label","text":"off"}]"#;
+        let hit = br#"[{"kind":"label","text":"on!"}]"#;
+        let title = b"Tools";
+        assert_eq!(miss.len(), hit.len(), "the two op strings must match");
+        let len = miss.len();
+        let title_at = len * 2;
+        let scratch = 2048;
+
+        let mut out = wasm_header();
+
+        // types: 0 (i32,i32)->i32, 1 (i32,i32)->f64, 2 ()->i32,
+        //        3 (i32,i32,f32)->(), 4 (i32)->i32, 5 (i32,i32,i32)->i32
+        let mut types = Vec::new();
+        leb(6, &mut types);
+        func_type(&[I32, I32], &[I32], &mut types);
+        func_type(&[I32, I32], &[F64], &mut types);
+        func_type(&[], &[I32], &mut types);
+        func_type(&[I32, I32, F32], &[], &mut types);
+        func_type(&[I32], &[I32], &mut types);
+        func_type(&[I32, I32, I32], &[I32], &mut types);
+        section(1, &types, &mut out);
+
+        // imports: ui_panel -> 0, ui_activated -> 1, ui_value -> 2
+        let mut imports = Vec::new();
+        leb(3, &mut imports);
+        import("noctis", "ui_panel", 0, &mut imports);
+        import("noctis", "ui_activated", 0, &mut imports);
+        import("noctis", "ui_value", 1, &mut imports);
+        section(2, &imports, &mut out);
+
+        // functions: abi(2), init(2), update(3), alloc(4), ui(5)
+        let mut functions = Vec::new();
+        leb(5, &mut functions);
+        for type_index in [2u32, 2, 3, 4, 5] {
+            leb(type_index, &mut functions);
+        }
+        section(3, &functions, &mut out);
+
+        // memory: 1 page
+        let mut memory = Vec::new();
+        leb(1, &mut memory);
+        memory.push(0x00);
+        leb(1, &mut memory);
+        section(5, &memory, &mut out);
+
+        // exports: memory, noctis_abi(3), noctis_init(4), noctis_update(5),
+        //          noctis_alloc(6), noctis_ui(7)
+        let mut exports = Vec::new();
+        leb(6, &mut exports);
+        wasm_name("memory", &mut exports);
+        exports.push(0x02);
+        leb(0, &mut exports);
+        for (name, index) in [
+            ("noctis_abi", 3u32),
+            ("noctis_init", 4),
+            ("noctis_update", 5),
+            ("noctis_alloc", 6),
+            ("noctis_ui", 7),
+        ] {
+            wasm_name(name, &mut exports);
+            exports.push(0x00);
+            leb(index, &mut exports);
+        }
+        section(7, &exports, &mut out);
+
+        // code
+        let mut code = Vec::new();
+        let bodies = [
+            const_body(1),
+            panel_init_body(title_at, title.len()),
+            {
+                let mut body = Vec::new();
+                leb(0, &mut body);
+                body.push(0x0b);
+                body
+            },
+            panel_alloc_body(scratch),
+            panel_ui_body(len, len),
+        ];
+        leb(bodies.len() as u32, &mut code);
+        for body in bodies {
+            leb(body.len() as u32, &mut code);
+            code.extend_from_slice(&body);
+        }
+        section(10, &code, &mut out);
+
+        // data: the miss ops at 0, the hit ops at len, the title after them
+        let mut data = Vec::new();
+        leb(3, &mut data);
+        data.push(0x00);
+        i32_const_segment(0, &mut data);
+        leb(miss.len() as u32, &mut data);
+        data.extend_from_slice(miss);
+        data.push(0x00);
+        i32_const_segment(len, &mut data);
+        leb(hit.len() as u32, &mut data);
+        data.extend_from_slice(hit);
+        data.push(0x00);
+        i32_const_segment(title_at, &mut data);
+        leb(title.len() as u32, &mut data);
+        data.extend_from_slice(title);
+        section(11, &data, &mut out);
+
+        out
+    }
+
+    #[test]
+    fn a_wasm_extension_draws_a_panel_and_reads_interactions() {
+        let root = temp_dir("wasm-panel");
+        write_wasm_extension(
+            &root,
+            "panel",
+            "com.example.wasmpanel",
+            "",
+            &wasm_panel_module(),
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        let editor = Editor::new();
+
+        // No interaction: the module draws its "off" ops.
+        let panels = host.draw_panels(&editor, &Interactions::default());
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].title, "Tools");
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Label(text) if text == "off")),
+            "{:?}",
+            panels[0].widgets
+        );
+
+        // A button click at the panel's global index is seen by ui_activated.
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: vec![(0, 0)],
+                values: Vec::new(),
+            },
+        );
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Label(text) if text == "on!")),
+            "{:?}",
+            panels[0].widgets
+        );
+
+        // A control value is seen by ui_value.
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: Vec::new(),
+                values: vec![((0, 0), 3.0)],
+            },
+        );
+        assert!(
+            panels[0]
+                .widgets
+                .iter()
+                .any(|widget| matches!(widget, Widget::Label(text) if text == "on!")),
+            "{:?}",
+            panels[0].widgets
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn wasm_panel_ids_are_offset_past_the_javascript_panels() {
+        let root = temp_dir("wasm-panel-offset");
+        let js = r#"noctis.ui.panel("JS Panel", function (ui) { ui.label("js"); });"#;
+        write_wasm_extension(
+            &root,
+            "panel",
+            "com.example.wasmpanel",
+            js,
+            &wasm_panel_module(),
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        let editor = Editor::new();
+
+        // The JavaScript panel comes first; the module's panel follows it.
+        let panels = host.draw_panels(&editor, &Interactions::default());
+        assert_eq!(panels.len(), 2);
+        assert_eq!(panels[0].title, "JS Panel");
+        assert_eq!(panels[1].title, "Tools");
+
+        // Global index 1 is the module's panel, so its local id 0 maps there.
+        let see = |panels: &[Panel], text: &str| {
+            panels
+                .iter()
+                .find(|panel| panel.title == "Tools")
+                .is_some_and(|panel| {
+                    panel
+                        .widgets
+                        .iter()
+                        .any(|widget| matches!(widget, Widget::Label(t) if t == text))
+                })
+        };
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: vec![(1, 0)],
+                values: Vec::new(),
+            },
+        );
+        assert!(
+            see(&panels, "on!"),
+            "index 1 reaches the module: {panels:?}"
+        );
+
+        // Global index 0 is the JavaScript panel and must not reach it.
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: vec![(0, 0)],
+                values: Vec::new(),
+            },
+        );
+        assert!(see(&panels, "off"), "index 0 is not the module: {panels:?}");
         std::fs::remove_dir_all(&root).ok();
     }
 }

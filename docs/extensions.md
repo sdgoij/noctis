@@ -248,7 +248,7 @@ after the click. `ui.checkbox(label, value)` and `ui.slider(label, value, min,
 max)` are stateful: the host renders them and the next frame returns the value
 the user set, falling back to the passed default. `noctis.ui.menu(menu, label,
 run)` is a one-button panel. Panels are windowed-only; a headless run never
-calls `draw`. The WASM equivalent is the planned `ui_panel` import (§ WASM).
+calls `draw`. The WASM equivalent is the `ui_panel` import (§ WASM panels).
 
 ## WASM extensions
 
@@ -270,12 +270,14 @@ once per frame, and reads the results out of the same memory.
 | `editor_json` | `(out_ptr, out_cap) -> i32` | Write the entity list JSON; a length, or `-2` if the buffer is too small. |
 | `edit` | `(ptr, len) -> i32` | Apply an `EditorCommand` batch (JSON) from memory; `0` ok, non-zero is the error count. |
 | `run` | `(ptr, len)` | Dispatch a verb line. |
-| `ui_panel` | `(ptr, len) -> i32` | Planned: register a panel whose draw is the export `noctis_ui(draw)`. Not yet linked. |
+| `ui_panel` | `(ptr, len) -> i32` | Register a panel titled by those bytes; returns its module-local id (idempotent by title). |
+| `ui_activated` | `(panel, widget) -> i32` | Whether that button was clicked this frame. |
+| `ui_value` | `(panel, widget) -> f64` | The value a checkbox/slider was set to, or NaN when none. |
 
 **Exports**: `noctis_abi() -> i32`, `noctis_init() -> i32`,
-`noctis_update(ptr, count, dt) -> i32` (all three are required).
-`noctis_alloc(len) -> i32` and `noctis_ui(ptr) -> i32` are reserved for the
-buffer and panel ABI and not yet required.
+`noctis_update(ptr, count, dt) -> i32` (all three are required). A module that
+registers a panel must also export `noctis_alloc(len) -> i32` (a buffer in its
+memory) and `noctis_ui(panel, out_ptr, out_cap) -> i32`.
 
 A `noctis_abi` the host does not know is refused by name, and an import with a
 signature the ABI does not fix is refused *before* the module runs, so a
@@ -285,6 +287,18 @@ handed to the host; JS never sees them. The host instantiates the module, calls
 `noctis_init` once, then `noctis_update(0, 0, dt)` each frame; `edit`/`run` queue
 work the host replays after the call, in the order the module issued it, as one
 undo step. `log` is served from the frame's read snapshot.
+
+### WASM panels
+
+A panel is drawn with the same widget-op JSON the JavaScript host records: the
+host calls `noctis_alloc(cap)` for a buffer, then `noctis_ui(panel, ptr, cap)`,
+which writes the ops into that buffer and returns their byte length (`-2` when
+they do not fit, so the host retries with a larger buffer). The host parses the
+ops exactly as it parses a JavaScript panel's. Interaction state is pulled back
+through `ui_activated` and `ui_value`, so a button or slider reads its result the
+way the JS `ui` handle does. `ui_panel` ids are module-local; the host lays a
+module's panels out contiguously after the JavaScript ones and offsets the
+arguments, so the ids the window uses are the frame's global ones.
 
 ## Hot reload (`--watch`)
 
@@ -367,7 +381,8 @@ an **Extensions** screen listing the table with toggles that write the config.
 - `editor::extension::wasm` — the WASM host: `decode`/`validate`, link the
   `noctis` imports (default-deny), instantiate, call `noctis_abi`/`noctis_init`,
   and drive `noctis_update` each frame — queueing `log`/`edit`/`run` through the
-  same ordered bridge as the JS host.
+  same ordered bridge as the JS host. It also draws WASM panels (`ui_panel` +
+  `noctis_alloc`/`noctis_ui` + `ui_activated`/`ui_value`).
 - `editor::window` — the windowed UI: panels rendered as egui windows (buttons,
   checkboxes and sliders are live), the `"update"` hook each frame, a console
   with a scrollback, and an Extensions screen whose toggles write the config.
@@ -383,8 +398,7 @@ an **Extensions** screen listing the table with toggles that write the config.
 3. **Windowed UI**: `noctis.ui.panel`/`menu` in `EditorDriver::ui`, the console,
    and the Extensions screen writing the config. *(shipped)*
 4. **WASM execution**: instantiate a module, drive `noctis_update`, provide the
-   imports above. *(shipped for `log`/`editor_json`/`edit`/`run`; the
-   `noctis_alloc`/`ui_panel` buffer and panel ABI remain)*
+   imports above, and draw panels through the buffer/panel ABI. *(shipped)*
 5. **Dev loop**: `--watch` reload (reusing `notify`); a change to a watched
    extension directory rebuilds the host from a fresh discovery. *(shipped)*
 6. **Distributed extensions**: `.zip` archives with `extension.json` at the root.
