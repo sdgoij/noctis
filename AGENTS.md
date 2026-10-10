@@ -179,7 +179,12 @@ needed.
   (`log`/`editor_json`/`edit`/`run`) — default-deny by the linker, no WASI — and
   exports `noctis_abi`/`noctis_init`/`noctis_update`, driven once per frame, and
   draws panels through `noctis_alloc`/`noctis_ui` with `ui_panel` and
-  `ui_activated`/`ui_value`.
+  `ui_activated`/`ui_value`. All JavaScript extensions share **one** Slag context
+  (one `noctis` global); per-extension contexts and a worker-thread host are
+  blocked by Slag's `Context` model — many `embed::Context`s crash
+  (`STATUS_ACCESS_VIOLATION`) and a `Context` is `!Send`; the route is a
+  migration to `slag::api::Isolate` + realms. See `docs/extensions.md`
+  ("Contexts and threads").
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

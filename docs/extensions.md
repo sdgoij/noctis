@@ -404,6 +404,39 @@ an **Extensions** screen listing the table with toggles that write the config.
 6. **Distributed extensions**: `.zip` archives with `extension.json` at the root.
    *(shipped)*
 
+## Contexts and threads
+
+All JavaScript extensions share **one** Slag context: one `noctis` global, one
+verb/hook/panel registry. Isolation is the private wrapper plus `noctis.freeze()`
+— the Goat model — rather than a realm each.
+
+A context per extension is the obvious refinement (Slag's embedding docs say "a
+`Context` per agent/realm"), but the two direct routes are blocked, so it is not
+built yet:
+
+- **Many `embed::Context`s do not work.** Each `slag::Context::new()` builds its
+own `Agent`, and holding two of them live and evaluating in the first crashes the
+process with a hard access violation (not a catchable error):
+
+  ```rust
+  let mut a = slag::Context::new()?;
+  let mut b = slag::Context::new()?; // a second agent
+  a.eval("1 + 1")?;                  // STATUS_ACCESS_VIOLATION
+  ```
+
+- **A thread cannot own a context.** `Context`/`Agent` hold `Rc<RefCell<…>>`, so
+they are `!Send`; a context can only be created and used on the thread that owns
+the editor, which is single-threaded by design. A worker would have to own the
+entire host (isolate included) and talk to the editor only through the
+snapshot/queue bridge — an actor split the [`Bridge`] is already shaped for, but
+which is not built.
+
+The supported multi-realm route is the V8-shaped surface: one
+`slag::api::Isolate` with many `slag::api::Context` realms, which does hold
+several realms at once. Migrating the host onto it (host functions as
+`FunctionTemplate`s, `Local` handles and scopes instead of `JsValue`) is the
+prerequisite for per-extension contexts.
+
 ## Non-goals for v1
 
 - Extending the runtime (`noctis run`); extensions are editor-only here.
@@ -418,6 +451,9 @@ an **Extensions** screen listing the table with toggles that write the config.
 
 ## Open questions
 
+- Per-extension contexts and a worker-thread extension host: blocked by the Slag
+  `Context` model above; the route is a migration to `slag::api::Isolate` +
+  realms. Worth doing once the single-context host is stable enough to split.
 - Does the Extensions screen live in a project, globally, or both — and does a
   project `[extensions]` `disabled` list override the user config? (Design: they
   union; a project cannot *force-enable* what the user disabled.)
