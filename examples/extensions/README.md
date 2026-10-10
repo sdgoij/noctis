@@ -44,6 +44,14 @@ noctis editor --headless --extensions examples/extensions \
 The reply goes to stderr; stdout is the resulting scene, now with five entities.
 Drop `--headless` to open the editor window with the extension loaded.
 
+While developing an extension, pass `--watch` to a windowed run: editing
+`extension.js` (or a manifest, module or asset) rebuilds the host from a fresh
+discovery, so a new verb or panel appears without a restart:
+
+```sh
+noctis editor --extensions examples/extensions --watch
+```
+
 An extension is found by default in `$NOCTIS_EXTENSIONS`, `extensions/` beside
 the executable, `extensions/` in the working directory, and a project's
 `[extensions].dirs`. The `--extensions` flag replaces that set.
