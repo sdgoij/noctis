@@ -378,6 +378,7 @@ an **Extensions** screen listing the table with toggles that write the config.
 - `editor::extension` — the JS host: the `noctis` global
   (`on`/`command`/`edit`/`editor`/`ui`/`log`/`freeze`), loading, `"ready"`, verb
   dispatch, `"update"`, panel drawing, and edit batching through `Editor::apply`.
+  Each extension gets its own Slag context (a realm each).
 - `editor::extension::wasm` — the WASM host: `decode`/`validate`, link the
   `noctis` imports (default-deny), instantiate, call `noctis_abi`/`noctis_init`,
   and drive `noctis_update` each frame — queueing `log`/`edit`/`run` through the
@@ -403,39 +404,38 @@ an **Extensions** screen listing the table with toggles that write the config.
    extension directory rebuilds the host from a fresh discovery. *(shipped)*
 6. **Distributed extensions**: `.zip` archives with `extension.json` at the root.
    *(shipped)*
+7. **Per-extension contexts**: one Slag context (realm) each, host-level built-ins
+   and panel-id offsets. *(shipped; a worker-thread host remains open)*
 
 ## Contexts and threads
 
-All JavaScript extensions share **one** Slag context: one `noctis` global, one
-verb/hook/panel registry. Isolation is the private wrapper plus `noctis.freeze()`
-— the Goat model — rather than a realm each.
+Each JavaScript extension runs in **its own Slag context** — its own `noctis`
+global, its own verb, hook and panel registries. One extension cannot see
+another's globals or verbs, and a throw that leaks past a wrapper cannot corrupt
+another's realm. The host owns the contexts (`ExtensionHost::extensions`), keeps
+the load order, and provides the cross-cutting built-ins:
 
-A context per extension is the obvious refinement (Slag's embedding docs say "a
-`Context` per agent/realm"), but the two direct routes are blocked, so it is not
-built yet:
+- `help` aggregates every context's verbs (`__noctis_verb_names()`), sorted;
+- `extensions` is answered from the host's id list;
+- a verb line is offered to each context in load order, and the first match wins
+  (`noctis.run` from inside an extension dispatches within that extension only);
+- `"ready"`/`"update"` fire on every context, and panels are drawn per context.
 
-- **Many `embed::Context`s do not work.** Each `slag::Context::new()` builds its
-own `Agent`, and holding two of them live and evaluating in the first crashes the
-process with a hard access violation (not a catchable error):
+Panel ids are context-local: the host lays the contexts' panels out contiguously
+and offsets `ui` indices by `panel_base`, so a click maps back to its source (the
+JS and WASM hosts share this mechanism).
 
-  ```rust
-  let mut a = slag::Context::new()?;
-  let mut b = slag::Context::new()?; // a second agent
-  a.eval("1 + 1")?;                  // STATUS_ACCESS_VIOLATION
-  ```
+Per-extension contexts depend on a Slag fix: an earlier rev crashed the process
+(`STATUS_ACCESS_VIOLATION`) when two `embed::Context`s were live and the first was
+evaluated. That is fixed in the pinned rev; the isolation is covered by the
+`editor::extension` tests (`each_extension_runs_in_its_own_context`).
 
-- **A thread cannot own a context.** `Context`/`Agent` hold `Rc<RefCell<…>>`, so
+**Threads are still out of reach.** `Context`/`Agent` hold `Rc<RefCell<…>>`, so
 they are `!Send`; a context can only be created and used on the thread that owns
-the editor, which is single-threaded by design. A worker would have to own the
-entire host (isolate included) and talk to the editor only through the
-snapshot/queue bridge — an actor split the [`Bridge`] is already shaped for, but
-which is not built.
-
-The supported multi-realm route is the V8-shaped surface: one
-`slag::api::Isolate` with many `slag::api::Context` realms, which does hold
-several realms at once. Migrating the host onto it (host functions as
-`FunctionTemplate`s, `Local` handles and scopes instead of `JsValue`) is the
-prerequisite for per-extension contexts.
+the editor, which is single-threaded by design. Moving the host to a worker would
+mean the worker owning the whole host (isolate included) and exchanging only the
+[`Bridge`] with the editor — the read snapshot in, the edits/logs/reply/panels
+out — an actor split the bridge is already shaped for, but which is not built.
 
 ## Non-goals for v1
 

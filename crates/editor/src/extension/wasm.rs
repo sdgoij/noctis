@@ -121,9 +121,6 @@ pub(crate) struct WasmHost {
     bridge: Rc<RefCell<Bridge>>,
     /// Panels registered by modules, in registration order.
     panels: Vec<RegisteredPanel>,
-    /// The global index of the panel instance currently being drawn; a module's
-    /// `ui_activated`/`ui_value` arguments are offset by it.
-    panel_base: usize,
     next_token: u64,
     errors: Vec<String>,
 }
@@ -149,7 +146,6 @@ impl WasmHost {
             tokens: HashMap::new(),
             bridge,
             panels: Vec::new(),
-            panel_base: 0,
             next_token: 1,
             errors: Vec::new(),
         }
@@ -254,7 +250,8 @@ impl WasmHost {
                 .filter(|panel| panel.instance == instance)
                 .map(|panel| panel.title.clone())
                 .collect();
-            self.panel_base = self.bridge.borrow().panels.len();
+            let base = self.bridge.borrow().panels.len();
+            self.bridge.borrow_mut().panel_base = base;
             for (local, title) in titles.iter().enumerate() {
                 let panel = match self.draw_panel(instance, local, title) {
                     Ok(panel) => panel,
@@ -270,7 +267,6 @@ impl WasmHost {
                 self.bridge.borrow_mut().panels.push(panel);
             }
         }
-        self.panel_base = 0;
     }
 
     /// Take the errors from loading or running modules.
@@ -415,7 +411,7 @@ impl WasmHost {
             }
             Some(Abi::UiActivated) => {
                 let hit = global_widget(
-                    self.panel_base,
+                    bridge.panel_base,
                     i32_of(request.args.first().copied().unwrap_or(Value::I32(-1))),
                     i32_of(request.args.get(1).copied().unwrap_or(Value::I32(-1))),
                 )
@@ -424,7 +420,7 @@ impl WasmHost {
             }
             Some(Abi::UiValue) => {
                 let value = global_widget(
-                    self.panel_base,
+                    bridge.panel_base,
                     i32_of(request.args.first().copied().unwrap_or(Value::I32(-1))),
                     i32_of(request.args.get(1).copied().unwrap_or(Value::I32(-1))),
                 )

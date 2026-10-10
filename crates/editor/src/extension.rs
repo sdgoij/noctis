@@ -1,16 +1,22 @@
 //! Editor extensions: the `noctis` JavaScript global, loading, and verb dispatch.
 //!
 //! This is the host half of `docs/extensions.md`. The pure loader
-//! ([`extensions`]) discovers and reads extensions; here they are evaluated in
-//! the Slag engine against a single versioned global, `noctis`, and their edits
-//! are replayed through [`Editor::apply_json`] — the same validated, undoable
-//! path the CLI and an AI agent use.
+//! ([`extensions`]) discovers and reads extensions; here each one is evaluated in
+//! its own Slag [`Context`](slag::Context) — Slag's "one context per realm"
+//! model — against a versioned `noctis` global, and their edits are replayed
+//! through [`Editor::apply_json`], the same validated, undoable path the CLI and
+//! an AI agent use.
 //!
 //! The global is defined *in JavaScript* (the [`BOOTSTRAP`] source): it holds the
 //! registered verbs and hooks and calls a handful of Rust primitives
 //! (`__host_edit`, `__host_reads`, ...) for the things that need the editor. That
 //! mirrors how the Goat mod API wraps the scene in a bootstrap script: the Rust
 //! side stays small and the JS side owns the registry.
+//!
+//! A context per extension isolates them: one extension cannot see another's
+//! verbs, hooks or globals, and a throw that leaks past a wrapper cannot corrupt
+//! another's realm. The host keeps the ordering and the cross-cutting built-ins
+//! (`help`, `extensions`) and iterates the contexts for the per-frame work.
 //!
 //! JS gets no filesystem: an extension can only touch the editor through
 //! `noctis.edit` (an `EditorCommand` batch) and the read snapshots. It cannot
@@ -39,7 +45,6 @@ const BOOTSTRAP: &str = r#"
   var RESERVED = ["help", "extensions", "run", "quit", "exit"];
   var current = null;
   var frozen = false;
-  var extensions = {};
   var commands = {};
   var hooks = {};
 
@@ -51,7 +56,7 @@ const BOOTSTRAP: &str = r#"
     freeze: function () { current = null; frozen = true; },
     on: function (event, fn) {
       if (frozen) { throw new Error("registration is closed"); }
-      (hooks[event] = hooks[event] || []).push({ id: current, fn: fn });
+      (hooks[event] = hooks[event] || []).push(fn);
       return function () {};
     },
     off: function () {},
@@ -61,7 +66,7 @@ const BOOTSTRAP: &str = r#"
         __host_log("extension " + current + " may not shadow the built-in verb '" + name + "'");
         return;
       }
-      commands[name] = { id: current, fn: fn };
+      commands[name] = fn;
     },
     fail: function (message) { __host_log("extension " + current + " failed: " + message); },
     log: function () { __host_log(Array.prototype.slice.call(arguments).join(" ")); },
@@ -87,45 +92,44 @@ const BOOTSTRAP: &str = r#"
   };
   globalThis.noctis = noctis;
 
-  globalThis.__noctis_register_extension = function (id, info) {
-    extensions[id] = JSON.parse(info);
+  globalThis.__noctis_register_extension = function (id, details) {
+    noctis.extension = JSON.parse(details);
+  };
+
+  // The host aggregates these across contexts for the `help` verb.
+  globalThis.__noctis_verb_names = function () {
+    return JSON.stringify(Object.keys(commands).sort());
   };
 
   globalThis.__noctis_fire = function (event, arg) {
     var fns = hooks[event] || [];
     for (var i = 0; i < fns.length; i++) {
-      noctis.extension = extensions[fns[i].id] || null;
-      try { fns[i].fn(arg); } catch (e) { __host_log("hook '" + event + "' threw: " + e); }
+      try { fns[i](arg); } catch (e) { __host_log("hook '" + event + "' threw: " + e); }
     }
   };
 
+  // Dispatch within this extension's own context. The console, the `help`
+  // built-in and other extensions' verbs are host-level; an extension sees only
+  // its own verbs.
   globalThis.__noctis_dispatch = function (line) {
     var text = String(line).trim();
     var parts = text.length ? text.split(/\s+/) : [];
     var verb = parts[0] || "";
     var reply;
-    if (verb === "help" || verb === "") {
-      reply = "ok verbs: " + Object.keys(commands).sort().join(", ");
-    } else if (verb === "extensions") {
-      reply = "ok extensions: " + JSON.parse(__host_ids()).join(", ");
-    } else {
-      var observers = hooks["command"] || [];
-      for (var i = 0; i < observers.length; i++) {
-        noctis.extension = extensions[observers[i].id] || null;
+    var observers = hooks["command"] || [];
+    for (var i = 0; i < observers.length; i++) {
+      try {
+        var observed = observers[i](text, parts);
+        if (typeof observed === "string") { reply = observed; break; }
+      } catch (e) { __host_log("command observer threw: " + e); }
+    }
+    if (reply === undefined) {
+      var handler = commands[verb];
+      if (handler) {
         try {
-          var observed = observers[i].fn(text, parts);
-          if (typeof observed === "string") { reply = observed; break; }
-        } catch (e) { __host_log("command observer threw: " + e); }
-      }
-      if (reply === undefined) {
-        var entry = commands[verb];
-        if (entry) {
-          noctis.extension = extensions[entry.id] || null;
-          try {
-            var out = entry.fn(parts, text);
-            reply = (typeof out === "string") ? out : "";
-          } catch (e) { reply = "error: verb '" + verb + "' threw: " + e; }
-        }
+          var out = handler(parts, text);
+          reply = (typeof out === "string") ? out : "";
+        } catch (e) { reply = "error: verb '" + verb + "' threw: " + e; }
       }
     }
     return (reply === undefined || reply === null) ? null : String(reply);
@@ -286,8 +290,6 @@ struct Bridge {
     queued: Vec<Queued>,
     /// The read snapshot (scene, mode, entities, selection) as JSON.
     reads: String,
-    /// The loaded extension ids, as JSON.
-    ids: String,
     /// Messages from `noctis.log`/`noctis.fail` and caught handler errors.
     logs: Vec<String>,
     /// The reply from the last dispatch (`None` means "no verb matched").
@@ -296,11 +298,22 @@ struct Bridge {
     panels: Vec<Panel>,
     /// The (panel, widget) activations and value changes from the previous frame.
     interactions: Interactions,
+    /// The global index of the context currently drawing; a context's panel-local
+    /// `ui` ids are offset by it (see [`ExtensionHost::draw_panels`]).
+    panel_base: usize,
 }
 
-/// The JavaScript host for editor extensions.
-pub struct ExtensionHost {
+/// One extension's JavaScript realm.
+struct Extension {
+    /// The extension id (for errors and reload).
+    id: String,
+    /// Its Slag context — its own `noctis` global, verbs, hooks and panels.
     context: slag::Context,
+}
+
+/// The JavaScript host for editor extensions: one [`Extension`] context each.
+pub struct ExtensionHost {
+    extensions: Vec<Extension>,
     bridge: Rc<RefCell<Bridge>>,
     wasm: WasmHost,
     ids: Vec<String>,
@@ -312,7 +325,7 @@ impl std::fmt::Debug for ExtensionHost {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ExtensionHost")
-            .field("ids", &self.ids)
+            .field("extensions", &self.extensions.len())
             .field("wasm", &self.wasm)
             .field("errors", &self.errors)
             .finish_non_exhaustive()
@@ -320,22 +333,18 @@ impl std::fmt::Debug for ExtensionHost {
 }
 
 impl ExtensionHost {
-    /// Start the engine, install the primitives, and define the `noctis` global.
+    /// Create the host. Each extension gets its own context when it is loaded.
     pub fn new() -> Result<Self, String> {
-        let context = slag::Context::new().map_err(|error| error.to_string())?;
         let bridge = Rc::new(RefCell::new(Bridge::default()));
         let wasm = WasmHost::new(Rc::clone(&bridge));
-        let mut host = Self {
-            context,
+        Ok(Self {
+            extensions: Vec::new(),
             bridge,
             wasm,
             ids: Vec::new(),
             entries: Vec::new(),
             errors: Vec::new(),
-        };
-        host.install()?;
-        host.eval(BOOTSTRAP)?;
-        Ok(host)
+        })
     }
 
     /// The ids of the extensions that were loaded.
@@ -358,8 +367,10 @@ impl ExtensionHost {
         std::mem::take(&mut self.bridge.borrow_mut().logs)
     }
 
-    /// Load every extension in `loader` for which `enabled` is true, evaluating
-    /// its entry inside a private wrapper, then close registration.
+    /// Load every extension in `loader` for which `enabled` is true.
+    ///
+    /// Each JavaScript entry gets its own context, evaluated inside a private
+    /// wrapper; a failure is recorded against its id and the others still load.
     pub fn load(&mut self, loader: &Loader, enabled: impl Fn(&str) -> bool) {
         self.entries = loader
             .extensions()
@@ -380,53 +391,64 @@ impl ExtensionHost {
             .iter()
             .map(|manifest| manifest.id.clone())
             .collect();
-        self.bridge.borrow_mut().ids =
-            serde_json::to_string(&self.ids).unwrap_or_else(|_| "[]".to_string());
 
         for manifest in &manifests {
-            let info = serde_json::json!({
-                "id": manifest.id,
-                "name": manifest.name,
-                "version": manifest.version,
-            })
-            .to_string();
-            let program = format!(
-                "__noctis_register_extension({}, {});",
-                json_literal(&manifest.id),
-                json_literal(&info)
-            );
-            if let Err(error) = self.eval(&program) {
+            if let Some(source) = &manifest.entry_source
+                && let Err(error) = self.load_javascript(manifest, source)
+            {
                 self.errors.push(format!("{}: {error}", manifest.id));
-                continue;
             }
-
-            if let Some(source) = &manifest.entry_source {
-                let program = format!(
-                    "(function (noctis) {{\n\"use strict\";\n{source}\n}})(noctis.begin({}));",
-                    json_literal(&manifest.id)
-                );
-                if let Err(error) = self.eval(&program) {
-                    self.errors.push(format!("{}: {error}", manifest.id));
-                }
-            }
-
             if let Some(module) = &manifest.wasm
                 && let Err(error) = self.wasm.load(&module.bytes)
             {
                 self.errors.push(format!("{}: {error}", manifest.id));
             }
         }
-
-        if let Err(error) = self.eval("noctis.freeze();") {
-            self.errors.push(format!("freeze: {error}"));
-        }
     }
 
-    /// Fire the `"ready"` hook and apply any edits it queued.
+    /// Build a context for `manifest`, evaluate its entry, and freeze it.
+    fn load_javascript(&mut self, manifest: &Manifest, source: &str) -> Result<(), String> {
+        let info = serde_json::json!({
+            "id": manifest.id,
+            "name": manifest.name,
+            "version": manifest.version,
+        })
+        .to_string();
+        let mut context = slag::Context::new().map_err(|error| error.to_string())?;
+        install(&mut context, Rc::clone(&self.bridge))?;
+        context.eval(BOOTSTRAP).map_err(|error| error.to_string())?;
+        let register = format!(
+            "__noctis_register_extension({}, {});",
+            json_literal(&manifest.id),
+            json_literal(&info)
+        );
+        context.eval(&register).map_err(|error| error.to_string())?;
+        let program = format!(
+            "(function (noctis) {{\n\"use strict\";\n{source}\n}})(noctis.begin({}));",
+            json_literal(&manifest.id)
+        );
+        context.eval(&program).map_err(|error| error.to_string())?;
+        context
+            .eval("noctis.freeze();")
+            .map_err(|error| error.to_string())?;
+        self.extensions.push(Extension {
+            id: manifest.id.clone(),
+            context,
+        });
+        Ok(())
+    }
+
+    /// Fire the `"ready"` hook on every context and apply any edits it queued.
     pub fn ready(&mut self, editor: &mut Editor) -> Vec<String> {
         self.snapshot(editor);
-        if let Err(error) = self.eval("__noctis_fire(\"ready\", undefined);") {
-            self.errors.push(format!("ready: {error}"));
+        for index in 0..self.extensions.len() {
+            if let Err(error) = self.extensions[index]
+                .context
+                .eval("__noctis_fire(\"ready\", undefined);")
+            {
+                let id = self.extensions[index].id.clone();
+                self.errors.push(format!("{id}: ready: {error}"));
+            }
         }
         self.apply_queued(editor)
     }
@@ -441,23 +463,58 @@ impl ExtensionHost {
     }
 
     /// Dispatch a verb line, queueing — but not applying — the work it makes.
+    ///
+    /// The built-ins (`help`, `extensions`) are host-level; anything else is
+    /// offered to each context in load order, and the first match wins.
     fn dispatch_line(&mut self, editor: &mut Editor, line: &str) -> Result<String, String> {
         self.snapshot(editor);
-        self.bridge.borrow_mut().reply = None;
-        let program = format!("__noctis_dispatch_line({});", json_literal(line));
-        self.eval(&program)?;
-        match self.bridge.borrow_mut().reply.take() {
-            Some(reply) => Ok(reply),
-            None => Err(format!("no extension verb matched {line:?}")),
+        let verb = line.split_whitespace().next().unwrap_or("");
+        if verb.is_empty() || verb == "help" {
+            return Ok(format!("ok verbs: {}", self.verb_names().join(", ")));
         }
+        if verb == "extensions" {
+            return Ok(format!("ok extensions: {}", self.ids.join(", ")));
+        }
+        for index in 0..self.extensions.len() {
+            self.bridge.borrow_mut().reply = None;
+            let program = format!("__noctis_dispatch_line({});", json_literal(line));
+            if let Err(error) = self.extensions[index].context.eval(&program) {
+                let id = self.extensions[index].id.clone();
+                self.errors.push(format!("{id}: dispatch: {error}"));
+                continue;
+            }
+            if let Some(reply) = self.bridge.borrow_mut().reply.take() {
+                return Ok(reply);
+            }
+        }
+        Err(format!("no extension verb matched {line:?}"))
     }
 
-    /// Fire the `"update"` hook for this frame and apply any edits it queued.
+    /// Every verb registered by any context, sorted and deduplicated.
+    fn verb_names(&mut self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for index in 0..self.extensions.len() {
+            if let Ok(value) = self.extensions[index].context.eval("__noctis_verb_names()")
+                && let Some(text) = value.as_string()
+                && let Ok(mut list) = serde_json::from_str::<Vec<String>>(&text)
+            {
+                names.append(&mut list);
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Fire the `"update"` hook on every context and apply any edits it queued.
     pub fn update(&mut self, editor: &mut Editor, dt: f32) -> Vec<String> {
         self.snapshot(editor);
-        let program = format!("__noctis_fire(\"update\", {dt});");
-        if let Err(error) = self.eval(&program) {
-            self.errors.push(format!("update: {error}"));
+        for index in 0..self.extensions.len() {
+            let program = format!("__noctis_fire(\"update\", {dt});");
+            if let Err(error) = self.extensions[index].context.eval(&program) {
+                let id = self.extensions[index].id.clone();
+                self.errors.push(format!("{id}: update: {error}"));
+            }
         }
         self.wasm.update(dt);
         for error in self.wasm.take_errors() {
@@ -474,11 +531,20 @@ impl ExtensionHost {
             bridge.panels.clear();
             bridge.interactions = interactions.clone();
         }
-        if let Err(error) = self.eval("__noctis_draw_panels();") {
-            self.errors.push(format!("panels: {error}"));
+        // Each context draws its own panels; the host offsets their panel-local
+        // ids into the frame's global array so a click maps back to its source.
+        for index in 0..self.extensions.len() {
+            let base = self.bridge.borrow().panels.len();
+            self.bridge.borrow_mut().panel_base = base;
+            if let Err(error) = self.extensions[index]
+                .context
+                .eval("__noctis_draw_panels();")
+            {
+                let id = self.extensions[index].id.clone();
+                self.errors.push(format!("{id}: panels: {error}"));
+            }
         }
-        // WebAssembly panels are appended after the JavaScript ones, so a
-        // module's local panel ids map onto the global list the window renders.
+        // WebAssembly panels follow the JavaScript ones the same way.
         self.wasm.draw();
         for error in self.wasm.take_errors() {
             self.errors.push(error);
@@ -549,125 +615,130 @@ impl ExtensionHost {
         editor.end_interactive_edit();
         results
     }
+}
 
-    fn install(&mut self) -> Result<(), String> {
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_edit",
-            1,
-            Box::new(move |call| {
-                let json = arg_string(call, 0).unwrap_or_default();
-                let count = {
-                    let mut bridge = b.borrow_mut();
-                    bridge.queued.push(Queued::Edit(json));
-                    bridge.queued.len()
-                };
-                Ok(slag::JsValue::number(count as f64))
-            }),
-        )?;
+/// Install the host primitives on a freshly created context, all sharing one
+/// [`Bridge`] so the queued edits, replies, panels and interactions are common.
+fn install(context: &mut slag::Context, bridge: Rc<RefCell<Bridge>>) -> Result<(), String> {
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_edit",
+        1,
+        Box::new(move |call| {
+            let json = arg_string(call, 0).unwrap_or_default();
+            let count = {
+                let mut bridge = b.borrow_mut();
+                bridge.queued.push(Queued::Edit(json));
+                bridge.queued.len()
+            };
+            Ok(slag::JsValue::number(count as f64))
+        }),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_reads",
-            0,
-            Box::new(move |_call| Ok(slag::JsValue::string(b.borrow().reads.clone()))),
-        )?;
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_reads",
+        0,
+        Box::new(move |_call| Ok(slag::JsValue::string(b.borrow().reads.clone()))),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_log",
-            1,
-            Box::new(move |call| {
-                let message = arg_string(call, 0).unwrap_or_default();
-                b.borrow_mut().logs.push(message);
-                Ok(slag::JsValue::undefined())
-            }),
-        )?;
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_log",
+        1,
+        Box::new(move |call| {
+            let message = arg_string(call, 0).unwrap_or_default();
+            b.borrow_mut().logs.push(message);
+            Ok(slag::JsValue::undefined())
+        }),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_ids",
-            0,
-            Box::new(move |_call| Ok(slag::JsValue::string(b.borrow().ids.clone()))),
-        )?;
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_reply",
+        2,
+        Box::new(move |call| {
+            let ok = arg_number(call, 0).unwrap_or(0.0);
+            let text = arg_string(call, 1).unwrap_or_default();
+            b.borrow_mut().reply = if ok != 0.0 { Some(text) } else { None };
+            Ok(slag::JsValue::undefined())
+        }),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_reply",
-            2,
-            Box::new(move |call| {
-                let ok = arg_number(call, 0).unwrap_or(0.0);
-                let text = arg_string(call, 1).unwrap_or_default();
-                b.borrow_mut().reply = if ok != 0.0 { Some(text) } else { None };
-                Ok(slag::JsValue::undefined())
-            }),
-        )?;
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_panel",
+        2,
+        Box::new(move |call| {
+            let title = arg_string(call, 0).unwrap_or_default();
+            let ops = arg_string(call, 1).unwrap_or_default();
+            b.borrow_mut().panels.push(Panel {
+                title,
+                widgets: parse_ops(&ops),
+            });
+            Ok(slag::JsValue::undefined())
+        }),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_panel",
-            2,
-            Box::new(move |call| {
-                let title = arg_string(call, 0).unwrap_or_default();
-                let ops = arg_string(call, 1).unwrap_or_default();
-                b.borrow_mut().panels.push(Panel {
-                    title,
-                    widgets: parse_ops(&ops),
-                });
-                Ok(slag::JsValue::undefined())
-            }),
-        )?;
-
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_activated",
-            2,
-            Box::new(move |call| {
-                let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
-                let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
-                let hit = b
-                    .borrow()
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_activated",
+        2,
+        Box::new(move |call| {
+            let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
+            let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
+            let hit = {
+                let bridge = b.borrow();
+                bridge
                     .interactions
                     .activations
-                    .contains(&(panel, widget));
-                Ok(slag::JsValue::number(if hit { 1.0 } else { 0.0 }))
-            }),
-        )?;
+                    .contains(&(bridge.panel_base + panel, widget))
+            };
+            Ok(slag::JsValue::number(if hit { 1.0 } else { 0.0 }))
+        }),
+    )?;
 
-        let b = Rc::clone(&self.bridge);
-        self.register(
-            "__host_value",
-            2,
-            Box::new(move |call| {
-                let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
-                let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
-                let value = b
-                    .borrow()
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_value",
+        2,
+        Box::new(move |call| {
+            let panel = arg_number(call, 0).unwrap_or(0.0) as usize;
+            let widget = arg_number(call, 1).unwrap_or(0.0) as usize;
+            let value = {
+                let bridge = b.borrow();
+                bridge
                     .interactions
                     .values
                     .iter()
-                    .find(|(key, _)| *key == (panel, widget))
-                    .map_or(f64::NAN, |(_, value)| *value);
-                Ok(slag::JsValue::number(value))
-            }),
-        )?;
+                    .find(|(key, _)| *key == (bridge.panel_base + panel, widget))
+                    .map_or(f64::NAN, |(_, value)| *value)
+            };
+            Ok(slag::JsValue::number(value))
+        }),
+    )?;
 
-        Ok(())
-    }
+    Ok(())
+}
 
-    fn register(&mut self, name: &str, arity: u32, f: slag::HostFn) -> Result<(), String> {
-        self.context
-            .register_fn(name, arity, f)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    fn eval(&mut self, program: &str) -> Result<(), String> {
-        self.context
-            .eval(program)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
+/// Register one host function on `context`.
+fn register(
+    context: &mut slag::Context,
+    name: &str,
+    arity: u32,
+    f: slag::HostFn,
+) -> Result<(), String> {
+    context
+        .register_fn(name, arity, f)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// A JSON string literal (a valid JS string literal).
@@ -1652,6 +1723,55 @@ mod tests {
             },
         );
         assert!(see(&panels, "off"), "index 0 is not the module: {panels:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn each_extension_runs_in_its_own_context() {
+        let root = temp_dir("isolate");
+        write_extension(
+            &root,
+            "alpha",
+            "com.example.alpha",
+            r#"
+            globalThis.polluted = 42;
+            noctis.command("alpha", function () { return "ok alpha"; });
+            "#,
+        );
+        write_extension(
+            &root,
+            "beta",
+            "com.example.beta",
+            r#"
+            noctis.command("beta", function () {
+              var leak = (typeof globalThis.polluted === "number") ? "shared" : "isolated";
+              var cross = noctis.run("alpha");
+              return "ok " + leak + " cross=" + String(cross);
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        let mut editor = Editor::new();
+
+        // Each verb is reachable through the host's per-context dispatch.
+        assert_eq!(host.dispatch(&mut editor, "alpha").unwrap(), "ok alpha");
+
+        // beta sees neither alpha's global nor alpha's verb: separate realms.
+        assert_eq!(
+            host.dispatch(&mut editor, "beta").unwrap(),
+            "ok isolated cross=null"
+        );
+
+        // The built-ins aggregate across contexts.
+        let help = host.dispatch(&mut editor, "help").unwrap();
+        assert!(help.contains("alpha") && help.contains("beta"), "{help}");
+        assert_eq!(
+            host.dispatch(&mut editor, "extensions").unwrap(),
+            "ok extensions: com.example.alpha, com.example.beta"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }
