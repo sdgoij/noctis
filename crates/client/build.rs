@@ -13,6 +13,13 @@ use std::path::Path;
 fn main() {
     println!("cargo:rerun-if-env-changed=NOCTIS_EMBED_PACK");
 
+    // The game host runs a JavaScript engine (Slag), which recurses while parsing
+    // and evaluating a script. Reserve a large main-thread stack on Windows, whose
+    // default is only 1 MiB (Linux and macOS already give the main thread 8 MiB).
+    if env::var("CARGO_CFG_WINDOWS").is_ok() {
+        println!("cargo:rustc-link-arg-bins=/STACK:16777216");
+    }
+
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR is set by cargo");
     let dest = Path::new(&out_dir).join("embedded.rs");
 

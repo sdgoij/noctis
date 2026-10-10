@@ -65,7 +65,7 @@ pub fn build_tool(project: &Project, profile: Profile) -> Result<PathBuf, String
     let dir = project.dir(TOOL_DIR);
     let manifest = tool_manifest(&name, &info.noctis_dir, &info);
     let main = tool_main(&info.plugin_path);
-    generate(&dir, &name, &manifest, &main, &[])?;
+    generate(&dir, &name, &manifest, &main, &[("build.rs", BUILD_RS)])?;
     cargo_build(&dir, &name, profile)
 }
 
@@ -88,7 +88,7 @@ pub fn build_client(
         &name,
         &manifest,
         &main,
-        &[("embedded.rs", embedded.as_str())],
+        &[("embedded.rs", embedded.as_str()), ("build.rs", BUILD_RS)],
     )?;
     cargo_build(&dir, &name, profile)
 }
@@ -320,6 +320,17 @@ fn client_main(plugin_path: &str) -> String {
          &{plugin_path}(),\n    )\n}}\n"
     )
 }
+
+/// A generated crate's `build.rs`: on Windows, reserve a large main-thread stack,
+/// because the editor's extension host and the game's scripting run a
+/// stack-hungry JavaScript engine (the Windows default main-thread stack is
+/// only 1 MiB).
+const BUILD_RS: &str = r#"fn main() {
+    if std::env::var("CARGO_CFG_WINDOWS").is_ok() {
+        println!("cargo:rustc-link-arg-bins=/STACK:16777216");
+    }
+}
+"#;
 
 /// The generated client's `embedded.rs`: the scripts baked into the binary by
 /// absolute path, so a release game carries no loose `scripts/`.
