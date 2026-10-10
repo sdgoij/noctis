@@ -52,8 +52,8 @@ extensions/
     extension.wasm
 ```
 
-An extension is a directory containing `extension.json`. `.zip` archives (a
-`extension.json` at the root) are a planned addition, not v1.
+An extension is a directory containing `extension.json`, or a `.zip` archive with
+`extension.json` at its root. Both forms are read the same way.
 
 ### `extension.json`
 
@@ -102,8 +102,10 @@ The editor scans, in order, the union of:
 
 `--no-extensions` skips discovery entirely. Every immediate subdirectory of a
 scanned directory that contains an `extension.json` is an extension; a directory
-without one is ignored, so `extensions/.disabled/` parks one. A duplicate `id`
-across directories is a warning and the first discovered wins.
+without one is ignored, so `extensions/.disabled/` parks one. A `*.zip` file in
+a scanned directory is an extension when it holds `extension.json` at its root;
+its entries are read into memory under the same path rules and caps. A duplicate
+`id` across directories is a warning and the first discovered wins.
 
 The manifest is parsed strictly (`deny_unknown_fields`): a typo is an error, not
 forward compatibility — the same rule `noctis.toml` follows.
@@ -314,6 +316,9 @@ explicit `--extensions` limits the search set.
 - **No `fs`** in the JS engine; JS gets no path. Assets are opaque names.
 - The loader refuses a relative path that escapes the extension directory and
   caps the manifest (`256 KiB`), an entry (`4 MiB`), and an asset (`64 MiB`).
+- A `.zip` extension is read into memory under the same rules, with a per-entry
+  cap and a total-expansion cap (`256 MiB`, `1024` files) so a decompression bomb
+  cannot exhaust memory.
 - A manifest that fails, or a handler that throws, is reported under the
   extension's id and isolated; `noctis.fail` is the explicit form.
 - JS runs on the editor's thread; the host is not `Send`. WASM runs in the same
@@ -339,8 +344,9 @@ an **Extensions** screen listing the table with toggles that write the config.
 
 ## What already exists
 
-- `crates/extensions` — discovery, `extension.json`, ordering, caps, assets, and
-  the enablement config, purely (no Slag, no editor) and unit-tested.
+- `crates/extensions` — discovery (directories and `.zip` archives),
+  `extension.json`, ordering, caps, assets, and the enablement config, purely
+  (no Slag, no editor) and unit-tested.
 - `noctis.toml` — the `[extensions]` table (`dirs`, `disabled`).
 - `editor::extension` — the JS host: the `noctis` global
   (`on`/`command`/`edit`/`editor`/`ui`/`log`/`freeze`), loading, `"ready"`, verb
@@ -367,6 +373,8 @@ an **Extensions** screen listing the table with toggles that write the config.
    imports above. *(shipped for `log`/`editor_json`/`edit`/`run`; the
    `noctis_alloc`/`ui_panel` buffer and panel ABI remain)*
 5. **Dev loop**: `--watch` hot-reload per extension (reusing `notify`).
+6. **Distributed extensions**: `.zip` archives with `extension.json` at the root.
+   *(shipped)*
 
 ## Non-goals for v1
 
@@ -378,12 +386,10 @@ an **Extensions** screen listing the table with toggles that write the config.
 - Native dynamic libraries.
 - Replacing the editor's own panels. Extensions add panels; they do not take over
   the outliner or the inspector.
-- `.zip` archives and per-extension settings.
+- Per-extension settings.
 
 ## Open questions
 
-- Should a `.zip` extension be supported, and if so, is it one directory per zip
-  or a zip-as-directory? (The loader is written to take a source abstraction.)
 - Does the Extensions screen live in a project, globally, or both — and does a
   project `[extensions]` `disabled` list override the user config? (Design: they
   union; a project cannot *force-enable* what the user disabled.)

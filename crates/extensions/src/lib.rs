@@ -18,10 +18,13 @@
 
 pub mod config;
 mod manifest;
+mod source;
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use source::Source;
 
 pub use config::{ExtensionConfig, config_dir, default_config_path};
 pub use manifest::{Asset, Manifest, WasmModule};
@@ -38,6 +41,10 @@ pub const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 pub const MAX_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
 /// A single declared asset.
 pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+/// The most files one extension archive may hold.
+pub const MAX_FILES_PER_EXTENSION: usize = 1024;
+/// The total decompressed size of one extension archive.
+pub const MAX_EXTENSION_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Why an extension directory was refused or skipped. Collected rather than
 /// fatal: one bad extension must never stop the others.
@@ -95,17 +102,32 @@ impl Loader {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_dir() || !path.join(manifest::MANIFEST).is_file() {
+                let source = if path.is_dir() {
+                    if !path.join(manifest::MANIFEST).is_file() {
+                        continue;
+                    }
+                    Source::dir(path)
+                } else if is_zip(&path) {
+                    match Source::zip(path.clone()) {
+                        Ok(source) if source.has(manifest::MANIFEST) => source,
+                        Ok(_) => continue,
+                        Err(message) => {
+                            errors.push(LoadError { path, message });
+                            continue;
+                        }
+                    }
+                } else {
                     continue;
-                }
+                };
+
                 if extensions.len() >= MAX_EXTENSIONS {
                     errors.push(LoadError {
-                        path,
+                        path: source.origin().to_path_buf(),
                         message: format!("over the {MAX_EXTENSIONS} extension limit"),
                     });
                     break 'dirs;
                 }
-                match manifest::load(&path) {
+                match manifest::load(&source) {
                     Ok(extension) => {
                         if seen.contains(&extension.id) {
                             let first = first_dir
@@ -113,7 +135,7 @@ impl Loader {
                                 .map(|p| p.display().to_string())
                                 .unwrap_or_default();
                             errors.push(LoadError {
-                                path,
+                                path: source.origin().to_path_buf(),
                                 message: format!(
                                     "duplicate id {:?}; keeping the one in {first}",
                                     extension.id
@@ -121,11 +143,14 @@ impl Loader {
                             });
                         } else {
                             seen.insert(extension.id.clone());
-                            first_dir.insert(extension.id.clone(), path);
+                            first_dir.insert(extension.id.clone(), source.origin().to_path_buf());
                             extensions.push(extension);
                         }
                     }
-                    Err(message) => errors.push(LoadError { path, message }),
+                    Err(message) => errors.push(LoadError {
+                        path: source.origin().to_path_buf(),
+                        message,
+                    }),
                 }
             }
         }
@@ -182,6 +207,12 @@ impl Loader {
         dirs.retain(|dir| seen.insert(dir.clone()));
         dirs
     }
+}
+
+/// Whether `path` looks like a `.zip` archive (by extension, case-insensitively).
+fn is_zip(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
 }
 
 /// Order extensions: by `id`, then topologically by `loadAfter` (id as the
@@ -360,5 +391,51 @@ mod tests {
         let loader = Loader::discover(&[PathBuf::from("this/does/not/exist")]);
         assert!(loader.extensions().is_empty());
         assert!(loader.errors().is_empty());
+    }
+
+    #[test]
+    fn a_zip_archive_is_discovered_and_read() {
+        use std::io::Write;
+
+        let root = temp_dir("zip");
+        let path = root.join("packed.zip");
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("extension.json", options).unwrap();
+        writer
+            .write_all(
+                br#"{ "id": "com.example.zip", "name": "Zip", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+            )
+            .unwrap();
+        writer.start_file("extension.js", options).unwrap();
+        writer
+            .write_all(b"noctis.command('zip', function () { return 'ok'; });")
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        std::fs::write(&path, bytes).unwrap();
+
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        assert!(loader.errors().is_empty(), "{:?}", loader.errors());
+        assert_eq!(loader.ids(), ["com.example.zip"]);
+        let manifest = loader.get("com.example.zip").expect("loaded");
+        assert_eq!(manifest.dir, path);
+        assert!(
+            manifest
+                .entry_source
+                .as_deref()
+                .is_some_and(|source| source.contains("noctis.command"))
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_corrupt_zip_is_reported_and_skipped() {
+        let root = temp_dir("badzip");
+        std::fs::write(root.join("broken.zip"), b"not a zip at all").unwrap();
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        assert!(loader.extensions().is_empty());
+        assert_eq!(loader.errors().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

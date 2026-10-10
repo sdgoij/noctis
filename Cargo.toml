@@ -94,3 +94,7 @@ log = "0.4"
 
 # Filesystem watching (development script hot reload)
 notify = "8"
+
+# Editor-extension archives (.zip). Store + deflate only: that covers ordinary
+# archives without pulling in the bzip2/zstd/lzma/crypto trees.
+zip = { version = "9", default-features = false, features = ["deflate"] }

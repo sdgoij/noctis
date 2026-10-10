@@ -5,10 +5,11 @@
 //! reported for that extension only; the others still load.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::source::Source;
 use crate::{EXTENSION_API, MAX_ASSET_BYTES, MAX_ENTRY_BYTES, MAX_MANIFEST_BYTES};
 
 /// The manifest file name every extension directory holds.
@@ -62,7 +63,7 @@ pub struct Manifest {
     pub wasm: Option<WasmModule>,
     /// The declared assets.
     pub assets: Vec<Asset>,
-    /// The extension's directory.
+    /// The extension's directory, or the archive it was read from.
     pub dir: PathBuf,
 }
 
@@ -102,9 +103,10 @@ struct RawWasm {
     module: String,
 }
 
-/// Read and validate the extension in `dir`, loading its entry, module and assets.
-pub(crate) fn load(dir: &Path) -> Result<Manifest, String> {
-    let text = read_capped(&dir.join(MANIFEST), MAX_MANIFEST_BYTES, MANIFEST)?;
+/// Read and validate the extension in `source`, loading its entry, module and
+/// assets.
+pub(crate) fn load(source: &Source) -> Result<Manifest, String> {
+    let text = source.read(MANIFEST, MAX_MANIFEST_BYTES, MANIFEST)?;
     let text = String::from_utf8(text).map_err(|e| format!("{MANIFEST} is not UTF-8: {e}"))?;
     let raw: RawManifest = serde_json::from_str(&text).map_err(|e| format!("{MANIFEST}: {e}"))?;
 
@@ -129,8 +131,7 @@ pub(crate) fn load(dir: &Path) -> Result<Manifest, String> {
 
     let entry_source = match &raw.entry {
         Some(relative) => {
-            let path = safe_join(dir, relative)?;
-            let bytes = read_capped(&path, MAX_ENTRY_BYTES, "entry")?;
+            let bytes = source.read(relative, MAX_ENTRY_BYTES, "entry")?;
             Some(
                 String::from_utf8(bytes)
                     .map_err(|e| format!("entry {relative:?} is not UTF-8: {e}"))?,
@@ -141,8 +142,7 @@ pub(crate) fn load(dir: &Path) -> Result<Manifest, String> {
 
     let wasm = match &raw.wasm {
         Some(wasm) => {
-            let path = safe_join(dir, &wasm.module)?;
-            let bytes = read_capped(&path, MAX_ENTRY_BYTES, "wasm module")?;
+            let bytes = source.read(&wasm.module, MAX_ENTRY_BYTES, "wasm module")?;
             if !bytes.starts_with(b"\0asm") {
                 return Err(format!("{:?} is not a WebAssembly module", wasm.module));
             }
@@ -159,8 +159,7 @@ pub(crate) fn load(dir: &Path) -> Result<Manifest, String> {
         if slot.trim().is_empty() {
             return Err("an asset slot name is empty".into());
         }
-        let path = safe_join(dir, file)?;
-        let bytes = read_capped(&path, MAX_ASSET_BYTES, "asset")?;
+        let bytes = source.read(file, MAX_ASSET_BYTES, "asset")?;
         assets.push(Asset {
             slot: slot.clone(),
             name: format!("ext:{}:{}", raw.id, slot),
@@ -180,7 +179,7 @@ pub(crate) fn load(dir: &Path) -> Result<Manifest, String> {
         entry_source,
         wasm,
         assets,
-        dir: dir.to_path_buf(),
+        dir: source.origin().to_path_buf(),
     })
 }
 
@@ -194,37 +193,6 @@ fn valid_id(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-}
-
-/// Resolve `relative` against `dir`, refusing anything that leaves it.
-///
-/// Every component must be a plain name; an absolute path, a `..`, or a `.` for
-/// the whole path is refused.
-fn safe_join(dir: &Path, relative: &str) -> Result<PathBuf, String> {
-    let rel = Path::new(relative);
-    if rel.is_absolute() || relative.is_empty() {
-        return Err(format!("{relative:?} must be a relative path"));
-    }
-    for component in rel.components() {
-        if !matches!(component, Component::Normal(_)) {
-            return Err(format!("{relative:?} escapes the extension directory"));
-        }
-    }
-    Ok(dir.join(rel))
-}
-
-/// Read a file, refusing one over `max` bytes.
-fn read_capped(path: &Path, max: u64, what: &str) -> Result<Vec<u8>, String> {
-    let metadata =
-        std::fs::metadata(path).map_err(|e| format!("{what} {}: {e}", path.display()))?;
-    if metadata.len() > max {
-        return Err(format!(
-            "{what} {} is {} bytes, over the {max} byte cap",
-            path.display(),
-            metadata.len()
-        ));
-    }
-    std::fs::read(path).map_err(|e| format!("{what} {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -243,6 +211,12 @@ mod tests {
             std::fs::create_dir_all(parent).expect("parent");
         }
         std::fs::write(path, text).expect("write");
+    }
+
+    /// Load a directory as a [`Source`] and parse its manifest. Shadows the
+    /// imported `load` so the tests below read a directory by path.
+    fn load(dir: &Path) -> Result<Manifest, String> {
+        super::load(&Source::dir(dir.to_path_buf()))
     }
 
     #[test]
