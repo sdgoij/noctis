@@ -246,6 +246,41 @@ impl App {
     }
 }
 
+/// A project's (or application's) Rust extension: custom components and systems.
+///
+/// A *plugin* is linked into a binary and registered by the runtime before the
+/// scene loads. `register` runs first — components must exist before a scene that
+/// uses them is loaded — and `build` runs after the runtime's own systems are
+/// scheduled, so a plugin's systems run after the engine's within each stage.
+///
+/// ```ignore
+/// use ecs::prelude::*;
+///
+/// #[derive(Default)]
+/// struct Game;
+///
+/// impl Plugin for Game {
+///     fn register(&self, components: &mut ComponentRegistry) {
+///         components.register::<Health>();
+///     }
+///     fn build(&self, app: &mut App) {
+///         app.on_update("regen", |ctx| { /* ... */ });
+///     }
+/// }
+/// ```
+pub trait Plugin {
+    /// Register custom components, before any scene is loaded.
+    fn register(&self, _components: &mut crate::reflect::ComponentRegistry) {}
+    /// Add systems and resources to the app.
+    fn build(&self, _app: &mut App) {}
+}
+
+/// The plugin for an application that has none.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NullPlugin;
+
+impl Plugin for NullPlugin {}
+
 fn run_stage(stage: &mut Stage, context: &mut EngineContext) {
     for (_, system) in stage.systems.iter_mut() {
         system(context);

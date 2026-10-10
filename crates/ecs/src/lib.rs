@@ -34,7 +34,7 @@ pub use ecs_macros::Component;
 
 /// The most commonly used imports.
 pub mod prelude {
-    pub use crate::app::{App, EngineContext, EngineEvent, Stage, System};
+    pub use crate::app::{App, EngineContext, EngineEvent, NullPlugin, Plugin, Stage, System};
     pub use crate::assets::{
         AssetHandle, AssetId, AssetRegistry, Assets, AudioClip, FontAsset, HdrTexture, Material,
         Mesh, ScriptAsset, Texture, TextureFormat, Vertex,

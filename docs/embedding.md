@@ -43,8 +43,8 @@ pub struct Health {
 
 impl Component for Health {
     const NAME: &'static str = "Health";
-    fn fields() -> &'static [Field] {
-        &[Field::number("current"), Field::number("max")]
+    fn fields() -> Vec<Field> {
+        vec![Field::number("current"), Field::number("max")]
     }
 }
 
@@ -52,8 +52,12 @@ impl Component for Health {
 pub struct MyGame;
 
 impl Plugin for MyGame {
+    // Components first: a scene that uses them must resolve when it loads.
+    fn register(&self, components: &mut ComponentRegistry) {
+        components.register::<Health>();
+    }
+    // Systems after: they run after the engine's own within each stage.
     fn build(&self, app: &mut App) {
-        app.register_component::<Health>();
         app.on_update("regen", |ctx| {
             for (entity, health) in ctx.scene.world.query_mut::<Health>() {
                 health.current = (health.current + 1.0).min(health.max);
@@ -280,13 +284,18 @@ of the first cut, and is called out in the ABI documentation when added.
    host-registered component (a hand-written impl and a derived one); no project Rust
    yet. Still to do: the bundler scan of `Custom` references (needs the registry at
    the bundler, which arrives with the plugin in phase 2).
-2. **The `Plugin` seam and `[rust]`.** The plugin binary the tool builds and runs,
-   for `run` first, then `editor`, then `build`. Also wires the registry into the
-   bundler.
+2. **The `Plugin` seam.** *(Seam shipped; `[rust]` build integration pending.)* The
+   `Plugin` trait and `NullPlugin` (`ecs::app`); `runtime::cli::run_cli_with_plugin`
+   and `build_runtime` register the plugin's components before the scene loads and
+   schedule its systems after; the editor's `run_cli_with_plugin` gives `Editor` the
+   registry so scenes that use custom components load, save, and instantiate from
+   prefabs; the inspector draws the schema-driven form and lists custom names in the
+   Add menu. Still to do: the `[rust]` manifest and the generated per-project binary
+   the tool builds and runs for `run`/`editor`/`build`, and the bundler scan of
+   `Custom` references (which needs the registry at the bundler).
 3. **Script reflection.** `has/get/set/remove_component` plus
    `ScriptCommand::SetComponent`, for JavaScript.
-4. **Editor inspector** for custom components (schema-driven form, Add menu).
-5. **WebAssembly reflection** over the memory ABI.
+4. **WebAssembly reflection** over the memory ABI.
 
 ## Open questions
 

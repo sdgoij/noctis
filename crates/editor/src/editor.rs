@@ -29,6 +29,7 @@ use ecs::components::{
     Active, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
     LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, Text, Visible,
 };
+use ecs::reflect::{ComponentRegistry, Field};
 use ecs::scene::{Prefab, Scene, SceneDesc, SceneMode, set_parent};
 use ecs::world::{Entity, World};
 use math::{Quat, Transform, Vec3, degrees, radians, vec3, zero3};
@@ -155,6 +156,9 @@ fn add3(a: Vec3, b: Vec3) -> Vec3 {
 pub struct Editor {
     scene: Scene,
     assets: AssetRegistry,
+    /// The custom (plugin) components the editor knows about: scenes load, save,
+    /// and edit them by name through this registry.
+    components: ComponentRegistry,
     prefabs: HashMap<String, Prefab>,
     selection: Vec<Entity>,
     undo_stack: Vec<SceneDesc>,
@@ -192,16 +196,31 @@ impl Editor {
     /// A new editor with an empty scene named `"Untitled"` and the engine's
     /// default placeholder assets (`$default` material, `$white`/`$normal`
     /// textures).
+    ///
+    /// No custom components: use [`Editor::with_component_registry`] for a
+    /// project whose plugin registers some.
     pub fn new() -> Self {
+        Self::with_component_registry(ComponentRegistry::new())
+    }
+
+    /// Like [`Editor::new`], but with the registry of custom (plugin) components
+    /// the editor knows about, so scenes that use them load, save, and edit.
+    pub fn with_component_registry(components: ComponentRegistry) -> Self {
         Self {
-            scene: Scene::new("Untitled"),
+            scene: Scene::new("Untitled").with_component_registry(components.clone()),
             assets: AssetRegistry::with_builtins(),
+            components,
             prefabs: HashMap::new(),
             selection: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             interactive: None,
         }
+    }
+
+    /// The custom (plugin) components the editor knows about.
+    pub fn components(&self) -> &ComponentRegistry {
+        &self.components
     }
 
     /// Load a scene from `path`, replacing the current scene and history.
@@ -241,8 +260,8 @@ impl Editor {
 
     /// Load a scene from a JSON string, replacing the current scene and history.
     pub fn load_json(&mut self, json: &str) -> Result<(), EditorError> {
-        let scene =
-            Scene::from_json(json, &self.assets).map_err(|e| EditorError::Scene(e.to_string()))?;
+        let scene = Scene::from_json_with(json, &self.assets, &self.components)
+            .map_err(|e| EditorError::Scene(e.to_string()))?;
         self.scene = scene;
         self.selection.clear();
         self.undo_stack.clear();
@@ -286,7 +305,7 @@ impl Editor {
     /// Undoable.
     pub fn new_scene_with_mode(&mut self, name: impl Into<String>, mode: SceneMode) {
         let before = self.snapshot();
-        self.scene = Scene::with_mode(name, mode);
+        self.scene = Scene::with_mode(name, mode).with_component_registry(self.components.clone());
         self.selection.clear();
         self.push_history(before);
     }
@@ -419,7 +438,7 @@ impl Editor {
         let names = self.selection_names();
         let current = self.snapshot();
         self.redo_stack.push(current);
-        self.scene = Scene::from_desc(&previous, &self.assets);
+        self.scene = Scene::from_desc_with(&previous, &self.assets, &self.components);
         self.restore_selection(names);
         true
     }
@@ -433,7 +452,7 @@ impl Editor {
         let names = self.selection_names();
         let current = self.snapshot();
         self.undo_stack.push(current);
-        self.scene = Scene::from_desc(&next, &self.assets);
+        self.scene = Scene::from_desc_with(&next, &self.assets, &self.components);
         self.restore_selection(names);
         true
     }
@@ -480,7 +499,7 @@ impl Editor {
             }
             Err(err) => {
                 let names = self.selection_names();
-                self.scene = Scene::from_desc(&before, &self.assets);
+                self.scene = Scene::from_desc_with(&before, &self.assets, &self.components);
                 self.restore_selection(names);
                 Err(err)
             }
@@ -500,7 +519,8 @@ impl Editor {
     fn dispatch(&mut self, command: &EditorCommand) -> Result<CommandOutcome, EditorError> {
         match command {
             EditorCommand::NewScene { name } => {
-                self.scene = Scene::new(name.clone());
+                self.scene =
+                    Scene::new(name.clone()).with_component_registry(self.components.clone());
                 self.selection.clear();
                 Ok(CommandOutcome::None)
             }
@@ -1105,6 +1125,98 @@ impl Editor {
     }
 
     // -----------------------------------------------------------------------
+    // Custom (plugin) components
+    // -----------------------------------------------------------------------
+
+    /// The names of the custom (registered) components the editor knows about,
+    /// sorted.
+    pub fn custom_components(&self) -> Vec<&'static str> {
+        self.components.names()
+    }
+
+    /// Whether `entity` carries the custom component `name`.
+    pub fn has_custom_component(&self, entity: Entity, name: &str) -> bool {
+        self.components.has_on(&self.scene.world, entity, name)
+    }
+
+    /// The JSON data of the custom component `name` on `entity`, if present.
+    pub fn custom_component_json(&self, entity: Entity, name: &str) -> Option<serde_json::Value> {
+        self.components.serialize(&self.scene.world, entity, name)
+    }
+
+    /// The reflection schema for the custom component `name`, if registered.
+    pub fn custom_component_fields(&self, name: &str) -> Option<Vec<Field>> {
+        self.components.fields(name)
+    }
+
+    /// Insert a default `name` custom component, recording one undo step.
+    ///
+    /// Returns `false` (recording nothing) for a dead entity or an unregistered
+    /// name.
+    pub fn insert_custom_component(&mut self, entity: Entity, name: &str) -> bool {
+        if !self.scene.world.is_alive(entity) || !self.components.has(name) {
+            return false;
+        }
+        let before = self.snapshot();
+        if self
+            .components
+            .insert_default(&mut self.scene.world, entity, name)
+            .is_err()
+        {
+            return false;
+        }
+        self.record_history(before);
+        true
+    }
+
+    /// Remove the custom component `name`, recording one undo step.
+    ///
+    /// Returns `false` if the entity does not carry it.
+    pub fn remove_custom_component(&mut self, entity: Entity, name: &str) -> bool {
+        let before = self.snapshot();
+        if self.components.remove(&mut self.scene.world, entity, name) {
+            self.record_history(before);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set one field of a custom component from a JSON value, recording one undo
+    /// step.
+    ///
+    /// Returns `false` (recording nothing) if the entity does not carry the
+    /// component, or `field` is not a key in its data.
+    pub fn set_custom_component_field(
+        &mut self,
+        entity: Entity,
+        name: &str,
+        field: &str,
+        value: serde_json::Value,
+    ) -> bool {
+        let Some(mut data) = self.custom_component_json(entity, name) else {
+            return false;
+        };
+        let Some(object) = data.as_object_mut() else {
+            return false;
+        };
+        if !object.contains_key(field) {
+            return false;
+        }
+        object.insert(field.to_string(), value);
+        let before = self.snapshot();
+        if self
+            .components
+            .deserialize(&mut self.scene.world, entity, name, &data)
+            .is_err()
+        {
+            return false;
+        }
+        self.record_history(before);
+        true
+    }
+
+    // -----------------------------------------------------------------------
     // Asset ops
     // -----------------------------------------------------------------------
 
@@ -1232,7 +1344,12 @@ impl Editor {
     /// Instantiate a prefab without touching history (used by the command path,
     /// which records history itself).
     fn instantiate_prefab_raw(&mut self, prefab: &Prefab, parent: Option<Entity>) -> Vec<Entity> {
-        let entities = prefab.instantiate(&mut self.scene.world, &self.assets, parent);
+        let entities = prefab.instantiate_with(
+            &mut self.scene.world,
+            &self.assets,
+            parent,
+            &self.components,
+        );
         self.scene.update_transforms();
         entities
     }
@@ -1889,6 +2006,76 @@ mod tests {
 
     fn editor() -> Editor {
         Editor::new()
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    fn health_registry() -> ComponentRegistry {
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Health>();
+        registry
+    }
+
+    #[test]
+    fn custom_components_insert_edit_and_undo() {
+        let mut ed = Editor::with_component_registry(health_registry());
+        let entity = ed.spawn("Hero", None);
+
+        assert!(!ed.has_custom_component(entity, "Health"));
+        assert!(ed.insert_custom_component(entity, "Health"));
+        assert!(ed.has_custom_component(entity, "Health"));
+
+        assert!(ed.set_custom_component_field(entity, "Health", "max", serde_json::json!(42.0)));
+        assert_eq!(
+            ed.custom_component_json(entity, "Health").unwrap()["max"],
+            serde_json::json!(42.0)
+        );
+
+        // The field edit and then the insert each undo in one step.
+        assert!(ed.undo());
+        assert_eq!(
+            ed.custom_component_json(entity, "Health").unwrap()["max"],
+            serde_json::json!(0.0)
+        );
+        assert!(ed.undo());
+        assert!(!ed.has_custom_component(entity, "Health"));
+    }
+
+    #[test]
+    fn unknown_custom_component_operations_are_no_ops() {
+        let mut ed = Editor::with_component_registry(health_registry());
+        let entity = ed.spawn("Hero", None);
+        assert!(!ed.insert_custom_component(entity, "Nope"));
+        assert!(!ed.remove_custom_component(entity, "Health"));
+        assert!(!ed.set_custom_component_field(entity, "Health", "max", serde_json::json!(1.0)));
+        // The insert/remove/edit recorded nothing, so only the spawn is undoable.
+        assert_eq!(ed.history_len(), 1);
+    }
+
+    #[test]
+    fn a_custom_component_round_trips_through_the_editor() {
+        let mut ed = Editor::with_component_registry(health_registry());
+        let entity = ed.spawn("Hero", None);
+        assert!(ed.insert_custom_component(entity, "Health"));
+        assert!(ed.set_custom_component_field(entity, "Health", "current", serde_json::json!(7.0)));
+
+        let json = ed.to_json();
+        assert!(json.contains("\"name\": \"Health\""), "{json}");
+
+        // A fresh editor with the same registry loads the custom component back.
+        let mut reopened = Editor::with_component_registry(health_registry());
+        reopened.load_json(&json).expect("reload");
+        let reopened_entity = reopened.list_entities()[0].entity;
+        assert_eq!(
+            reopened
+                .custom_component_json(reopened_entity, "Health")
+                .unwrap()["current"],
+            serde_json::json!(7.0)
+        );
     }
 
     #[test]

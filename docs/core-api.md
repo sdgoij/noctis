@@ -185,6 +185,11 @@ round-trip through a scene like a built-in. `World` already stores any
   are **not** required to be `Send`/`Sync` — a system may own single-threaded
   state (e.g. a JavaScript engine). Component *types* are still
   `Send + Sync + 'static`.
+- `Plugin { register(&self, &mut ComponentRegistry), build(&self, &mut App) }` and
+  `NullPlugin` — an application's (or project's) Rust extension. `register` runs
+  before any scene loads, so a scene using the plugin's custom components resolves;
+  `build` runs after the runtime's own systems are scheduled, so plugin systems run
+  after the engine's within each stage. See `docs/embedding.md`.
 - `ecs::scene`: `Scene { name, mode, world }`, `SceneMode { TwoD, ThreeD }`
   (`as_str`, `is_2d`, `FromStr`; the presentation hint stored in `SceneDesc.mode`),
   `Scene::with_mode`, `Scene::try_from_desc` (errors on a missing asset

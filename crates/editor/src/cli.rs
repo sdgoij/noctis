@@ -19,6 +19,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use ecs::app::{NullPlugin, Plugin};
+use ecs::reflect::ComponentRegistry;
 use ecs::scene::SceneMode;
 use platform::WindowConfig;
 use project::Project;
@@ -71,19 +73,28 @@ enum CliError {
 
 /// Run the editor command line and return the process exit code.
 pub fn run_cli(args: Vec<String>) -> ExitCode {
+    run_cli_with_plugin(args, &NullPlugin)
+}
+
+/// Run the editor command line with a project's [`Plugin`].
+///
+/// The per-project binary a `[rust]` build produces calls this: the plugin's
+/// custom components are registered so the editor loads, edits, and saves scenes
+/// that use them, and lists them in the Add-component menu.
+pub fn run_cli_with_plugin(args: Vec<String>, plugin: &dyn Plugin) -> ExitCode {
     let options = match parse_args(&args) {
         Ok(options) => options,
         Err(error) => return report(error),
     };
 
     if opens_a_window(&options) {
-        return match run_windowed(&options) {
+        return match run_windowed(&options, plugin) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => report(error),
         };
     }
 
-    match run(&args) {
+    match run(&args, plugin) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
@@ -129,7 +140,7 @@ struct Options {
     help: bool,
 }
 
-fn run(args: &[String]) -> Result<String, CliError> {
+fn run(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
     let options = parse_args(args)?;
 
     if options.help {
@@ -141,7 +152,7 @@ fn run(args: &[String]) -> Result<String, CliError> {
             .map_err(|e| CliError::Message(format!("failed to render schema: {e}")));
     }
 
-    let editor = build_editor(&options, open_project(&options)?.as_ref())?;
+    let editor = build_editor(&options, open_project(&options)?.as_ref(), plugin)?;
     let entities = editor.list_entities();
     serde_json::to_string_pretty(&entities)
         .map_err(|e| CliError::Message(format!("failed to serialize entities: {e}")))
@@ -150,8 +161,16 @@ fn run(args: &[String]) -> Result<String, CliError> {
 /// Build the editor for the options: a `--testscene`, a scene (from `--scene`,
 /// resolved against `--project`, or the project's default), then any command
 /// batch, saving when `--out` is given.
-fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, CliError> {
-    let mut editor = Editor::new();
+fn build_editor(
+    options: &Options,
+    project: Option<&Project>,
+    plugin: &dyn Plugin,
+) -> Result<Editor, CliError> {
+    // The plugin's custom components must be registered before any scene that
+    // uses them loads, and are what the Add-component menu lists.
+    let mut components = ComponentRegistry::new();
+    plugin.register(&mut components);
+    let mut editor = Editor::with_component_registry(components.clone());
 
     // A project owns one shared asset registry: import every asset file up front
     // so the scene's references resolve. Without a project the editor keeps the
@@ -185,7 +204,7 @@ fn build_editor(options: &Options, project: Option<&Project>) -> Result<Editor, 
 
     if options.testscene {
         let (scene, assets) = testscene::build();
-        *editor.scene_mut() = scene;
+        *editor.scene_mut() = scene.with_component_registry(components.clone());
         *editor.assets_mut() = assets;
         editor.scene_mut().update_transforms();
     } else if let Some(scene) = resolve_scene(options, project) {
@@ -413,9 +432,9 @@ fn project_controls_path(project: Option<&Project>) -> Option<String> {
 }
 
 /// Build the scene from the options, then run it in a window until closed.
-fn run_windowed(options: &Options) -> Result<(), CliError> {
+fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> {
     let project = open_project(options)?;
-    let editor = build_editor(options, project.as_ref())?;
+    let editor = build_editor(options, project.as_ref(), plugin)?;
     let config = window_config(project.as_ref());
 
     // `--controls` wins over the project's `[input].controls`.
@@ -461,6 +480,11 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `run` with the null plugin, for the tests that do not exercise one.
+    fn run_default(list: &[&str]) -> Result<String, CliError> {
+        run(&args(list), &NullPlugin)
     }
 
     #[test]
@@ -574,7 +598,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let out = dir.join("menu.scene.json");
 
-        run(&args(&["--mode", "2d", "--out", out.to_str().unwrap()])).unwrap();
+        run_default(&["--mode", "2d", "--out", out.to_str().unwrap()]).unwrap();
         let json = std::fs::read_to_string(&out).expect("scene written");
         assert!(json.contains("\"mode\": \"2d\""), "{json}");
 
@@ -588,7 +612,7 @@ mod tests {
 
     #[test]
     fn save_prefabs_without_a_project_is_a_usage_error() {
-        let err = run(&args(&["--save-prefabs"])).unwrap_err();
+        let err = run_default(&["--save-prefabs"]).unwrap_err();
         assert!(matches!(err, CliError::Usage(_)));
     }
 
@@ -615,18 +639,14 @@ mod tests {
         // No options is not an error: it opens an empty scene and prints `[]`.
         let options = parse_args(&args(&[])).unwrap();
         assert!(options.scene.is_none());
-        let output = run(&args(&[])).unwrap();
+        let output = run_default(&[]).unwrap();
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value.as_array().unwrap().len(), 0);
     }
 
     #[test]
     fn run_applies_inline_commands_and_returns_entities() {
-        let output = run(&args(&[
-            "--command",
-            r#"[{ "op": "spawn", "name": "Sun" }]"#,
-        ]))
-        .unwrap();
+        let output = run_default(&["--command", r#"[{ "op": "spawn", "name": "Sun" }]"#]).unwrap();
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(value.as_array().unwrap().len(), 1);
         assert_eq!(value[0]["name"], "Sun");
@@ -634,23 +654,23 @@ mod tests {
 
     #[test]
     fn run_reports_bad_command_json() {
-        let err = run(&args(&["--command", "not json"])).unwrap_err();
+        let err = run_default(&["--command", "not json"]).unwrap_err();
         assert!(matches!(err, CliError::Message(_)));
     }
 
     #[test]
     fn run_reports_unknown_entity() {
-        let err = run(&args(&[
+        let err = run_default(&[
             "--command",
             r#"[{ "op": "rename", "entity": { "name": "ghost" }, "name": "x" }]"#,
-        ]))
+        ])
         .unwrap_err();
         assert!(matches!(err, CliError::Message(_)));
     }
 
     #[test]
     fn print_schema_returns_valid_json() {
-        let output = run(&args(&["--print-schema"])).unwrap();
+        let output = run_default(&["--print-schema"]).unwrap();
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(value["commands"].is_array());
     }

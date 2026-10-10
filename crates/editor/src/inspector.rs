@@ -11,9 +11,11 @@ use ecs::components::{
     Active, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind, MeshRenderer,
     Projection, RigidBody, Script, Text, TextAnchor, Visible,
 };
+use ecs::reflect::{Field, FieldKind};
 use ecs::world::Entity;
 use math::{Quat, Vec3, degrees, radians, vec3};
 use platform::egui;
+use serde_json::{Value, json};
 
 use crate::command::ComponentName;
 use crate::editor::Editor;
@@ -89,6 +91,8 @@ pub(crate) fn show(
     if editor.has_component(entity, ComponentName::Text) {
         text_section(editor, entity, ui);
     }
+
+    custom_sections(editor, entity, ui);
 
     add_component_row(editor, entity, state, ui);
     import_section(editor, state, ui)
@@ -600,6 +604,122 @@ fn script_section(editor: &mut Editor, entity: Entity, ui: &mut egui::Ui) {
 }
 
 // ---------------------------------------------------------------------------
+// Custom (plugin) components
+// ---------------------------------------------------------------------------
+
+/// Draw a schema-driven form for every registered custom component on `entity`.
+fn custom_sections(editor: &mut Editor, entity: Entity, ui: &mut egui::Ui) {
+    for name in editor.custom_components() {
+        if editor.has_custom_component(entity, name) {
+            custom_section(editor, entity, name, ui);
+        }
+    }
+}
+
+/// One custom component: a header with a Remove button, then a widget per
+/// reflected field.
+fn custom_section(editor: &mut Editor, entity: Entity, name: &str, ui: &mut egui::Ui) {
+    if section_header(ui, name) {
+        editor.remove_custom_component(entity, name);
+        return;
+    }
+    let Some(fields) = editor.custom_component_fields(name) else {
+        return;
+    };
+    for field in fields {
+        let Some(current) = editor
+            .custom_component_json(entity, name)
+            .and_then(|data| data.get(field.name).cloned())
+        else {
+            continue;
+        };
+        if let Some(value) = custom_field(ui, name, field, current) {
+            editor.set_custom_component_field(entity, name, field.name, value);
+        }
+    }
+}
+
+/// A widget for one reflected field. Returns the new JSON value when it changed.
+fn custom_field(ui: &mut egui::Ui, component: &str, field: Field, current: Value) -> Option<Value> {
+    match field.kind {
+        FieldKind::Number => {
+            let mut value = current.as_f64().unwrap_or(0.0) as f32;
+            f32_row(ui, field.name, &mut value, 0.01).then(|| json!(value))
+        }
+        FieldKind::Integer => {
+            let mut value = current.as_i64().unwrap_or(0);
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.name);
+                    ui.add(egui::DragValue::new(&mut value)).changed()
+                })
+                .inner;
+            changed.then(|| json!(value))
+        }
+        FieldKind::Boolean => {
+            let mut value = current.as_bool().unwrap_or(false);
+            ui.checkbox(&mut value, field.name)
+                .changed()
+                .then(|| json!(value))
+        }
+        FieldKind::Text | FieldKind::Asset => {
+            let mut value = current.as_str().unwrap_or_default().to_string();
+            let changed = ui
+                .horizontal(|ui| {
+                    ui.label(field.name);
+                    ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY))
+                        .changed()
+                })
+                .inner;
+            changed.then(|| json!(value))
+        }
+        FieldKind::Vec3 => {
+            let mut value = json_vec3(&current);
+            vec3_row(ui, field.name, &mut value, 0.01).then(|| json!([value.x, value.y, value.z]))
+        }
+        FieldKind::Color => {
+            let mut value = json_vec4(&current);
+            rgba_row(ui, field.name, &mut value).then(|| json!(value))
+        }
+        FieldKind::Enum(options) => {
+            let value = current.as_str().unwrap_or_default().to_string();
+            let mut chosen = None;
+            ui.horizontal(|ui| {
+                ui.label(field.name);
+                egui::ComboBox::from_id_salt(format!("custom_{component}_{}", field.name))
+                    .selected_text(value.clone())
+                    .show_ui(ui, |ui| {
+                        for option in options {
+                            if ui.selectable_label(value == *option, *option).clicked() {
+                                chosen = Some((*option).to_string());
+                            }
+                        }
+                    });
+            });
+            chosen.map(|choice| json!(choice))
+        }
+    }
+}
+
+fn json_vec3(value: &Value) -> Vec3 {
+    let at = |index: usize| json_at(value, index);
+    vec3(at(0), at(1), at(2))
+}
+
+fn json_vec4(value: &Value) -> [f32; 4] {
+    let at = |index: usize| json_at(value, index);
+    [at(0), at(1), at(2), at(3)]
+}
+
+fn json_at(value: &Value, index: usize) -> f32 {
+    value
+        .as_array()
+        .and_then(|array| array.get(index))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as f32
+}
+
+// ---------------------------------------------------------------------------
 // Material editor (textures live on the material asset)
 // ---------------------------------------------------------------------------
 
@@ -727,18 +847,37 @@ fn add_component_row(
     ui: &mut egui::Ui,
 ) {
     ui.separator();
+    // The combo lists the built-in kinds followed by the project's registered
+    // custom components, so a plugin's components are addable like any other.
+    let custom = editor.custom_components();
+    let total = ADDABLE.len() + custom.len();
+    if state.add_index >= total {
+        state.add_index = 0;
+    }
+    let selected = if state.add_index < ADDABLE.len() {
+        ADDABLE[state.add_index].as_str().to_string()
+    } else {
+        custom[state.add_index - ADDABLE.len()].to_string()
+    };
+
     ui.horizontal(|ui| {
         ui.label("Add component");
-        let selected = ADDABLE[state.add_index];
         egui::ComboBox::from_id_salt("inspector_add_component")
-            .selected_text(selected.as_str())
+            .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (index, name) in ADDABLE.iter().enumerate() {
                     ui.selectable_value(&mut state.add_index, index, name.as_str());
                 }
+                for (offset, name) in custom.iter().enumerate() {
+                    ui.selectable_value(&mut state.add_index, ADDABLE.len() + offset, *name);
+                }
             });
         if ui.button("Add").clicked() {
-            add_component(editor, entity, ADDABLE[state.add_index]);
+            if state.add_index < ADDABLE.len() {
+                add_component(editor, entity, ADDABLE[state.add_index]);
+            } else if let Some(name) = custom.get(state.add_index - ADDABLE.len()) {
+                editor.insert_custom_component(entity, name);
+            }
         }
     });
 }
@@ -1035,6 +1174,34 @@ mod tests {
     fn renders_an_entity_with_nothing_selected() {
         let mut editor = Editor::new();
         let entity = editor.spawn("Bare", None);
+        let mut state = InspectorState::default();
+        run_one_frame(&mut editor, entity, &mut state);
+        assert_eq!(editor.entity_count(), 1);
+    }
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize, ecs::Component)]
+    struct Health {
+        current: f32,
+        #[field(boolean)]
+        alive: bool,
+    }
+
+    fn registry_with_health() -> ecs::reflect::ComponentRegistry {
+        let mut registry = ecs::reflect::ComponentRegistry::new();
+        registry.register::<Health>();
+        registry
+    }
+
+    #[test]
+    fn lists_and_renders_a_custom_component() {
+        let mut editor = Editor::with_component_registry(registry_with_health());
+        let entity = editor.spawn("Hero", None);
+        assert!(editor.insert_custom_component(entity, "Health"));
+
+        // The Add-component menu lists registered custom names beside the built-ins.
+        assert_eq!(editor.custom_components(), vec!["Health"]);
+
+        // A frame renders the schema-driven form without panicking.
         let mut state = InspectorState::default();
         run_one_frame(&mut editor, entity, &mut state);
         assert_eq!(editor.entity_count(), 1);

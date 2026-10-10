@@ -13,7 +13,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ecs::app::{NullPlugin, Plugin};
 use ecs::assets::AssetRegistry;
+use ecs::reflect::ComponentRegistry;
 use ecs::scene::Scene;
 use math::vec3;
 use platform::WindowConfig;
@@ -152,12 +154,9 @@ impl Args {
     }
 }
 
-/// Run the game command line and return the process exit code.
-///
-/// Used by both `noctis run` and the `noctis-game` binary an export ships.
-/// Run the game command line (`noctis run`) with no embedded scripts.
+/// Run the game command line (`noctis run`) with no embedded scripts or plugin.
 pub fn run_cli(args: Vec<String>) -> ExitCode {
-    run_cli_with(args, &[])
+    run_cli_with_plugin(args, &[], &NullPlugin)
 }
 
 /// Run the game command line, seeding `embedded` into the asset registry.
@@ -166,6 +165,19 @@ pub fn run_cli(args: Vec<String>) -> ExitCode {
 /// an empty slice and loads scripts from disk (and watches them). See
 /// `docs/scripts.md`.
 pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> ExitCode {
+    run_cli_with_plugin(args, embedded, &NullPlugin)
+}
+
+/// Run the game command line with a project's [`Plugin`].
+///
+/// The per-project binary a `[rust]` build produces calls this: the plugin's
+/// components are registered before the scene loads, and its systems are added to
+/// the app.
+pub fn run_cli_with_plugin(
+    args: Vec<String>,
+    embedded: &'static [EmbeddedScript],
+    plugin: &dyn Plugin,
+) -> ExitCode {
     init_logging();
 
     let args = match Args::parse(args.into_iter()) {
@@ -183,7 +195,7 @@ pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> E
 
     // A window is the default; `--export` never opens one.
     if !args.headless && args.export.is_none() {
-        return match run_windowed(&args, embedded) {
+        return match run_windowed(&args, embedded, plugin) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => fail(&message),
         };
@@ -203,7 +215,7 @@ pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> E
         };
     }
 
-    match run(&args, embedded) {
+    match run(&args, embedded, plugin) {
         Ok(summary) => {
             if args.print_summary || !args.quiet {
                 println!("{summary}");
@@ -269,7 +281,11 @@ fn build_runtime(
     args: &Args,
     project: Option<&Project>,
     embedded: &'static [EmbeddedScript],
+    plugin: &dyn Plugin,
 ) -> Result<Runtime<Host>, String> {
+    // The plugin's components must exist before the scene that uses them loads.
+    let mut components = ComponentRegistry::new();
+    plugin.register(&mut components);
     let mut config = RuntimeConfig {
         audio: args.audio,
         timestep: args.dt,
@@ -323,11 +339,15 @@ fn build_runtime(
         let seeded = crate::embed::seed(&mut assets, embedded);
         log::info!("seeded {seeded} embedded script(s)");
     }
-    let scene = load_scene(args, project, &mut assets)?;
+    let scene = load_scene(args, project, &mut assets, &components)?;
 
     let host = make_host()?;
 
     let mut runtime: Runtime<Host> = Runtime::from_parts(scene, assets, config, host);
+
+    // The plugin's systems are scheduled after the engine's own, so within each
+    // stage the engine runs first and the plugin can observe the result.
+    plugin.build(runtime.app_mut());
 
     if args.render {
         // Anti-alias the headless render at the manifest's sample count.
@@ -363,9 +383,10 @@ fn load_scene(
     args: &Args,
     project: Option<&Project>,
     assets: &mut AssetRegistry,
+    components: &ComponentRegistry,
 ) -> Result<Scene, String> {
     if args.demo {
-        return Ok(demo::demo_scene(assets));
+        return Ok(demo::demo_scene(assets).with_component_registry(components.clone()));
     }
 
     let path = args
@@ -379,18 +400,18 @@ fn load_scene(
         .or_else(bundled_next_to_exe);
     let Some(path) = path else {
         log::info!("no scene specified; using the built-in demo scene");
-        return Ok(demo::demo_scene(assets));
+        return Ok(demo::demo_scene(assets).with_component_registry(components.clone()));
     };
     if !path.is_file() {
         log::warn!(
             "scene '{}' not found; using the built-in demo scene",
             path.display()
         );
-        return Ok(demo::demo_scene(assets));
+        return Ok(demo::demo_scene(assets).with_component_registry(components.clone()));
     }
     let json = fs::read_to_string(&path)
         .map_err(|err| format!("failed to read scene '{}': {err}", path.display()))?;
-    Scene::from_json(&json, assets)
+    Scene::from_json_with(&json, assets, components)
         .map_err(|err| format!("failed to load scene '{}': {err}", path.display()))
 }
 
@@ -518,21 +539,29 @@ fn window_config(args: &Args, project: Option<&Project>) -> WindowConfig {
 }
 
 /// Load the scene and run the loop headlessly. Returns the run summary.
-fn run(args: &Args, embedded: &'static [EmbeddedScript]) -> Result<RunSummary, String> {
+fn run(
+    args: &Args,
+    embedded: &'static [EmbeddedScript],
+    plugin: &dyn Plugin,
+) -> Result<RunSummary, String> {
     let project = open_project(args)?;
-    let mut runtime = build_runtime(args, project.as_ref(), embedded)?;
+    let mut runtime = build_runtime(args, project.as_ref(), embedded, plugin)?;
     Ok(runtime.run_headless(args.frames, args.dt))
 }
 
 /// Run the scene in a window until it is closed.
-fn run_windowed(args: &Args, embedded: &'static [EmbeddedScript]) -> Result<(), String> {
+fn run_windowed(
+    args: &Args,
+    embedded: &'static [EmbeddedScript],
+    plugin: &dyn Plugin,
+) -> Result<(), String> {
     // `--frames`/`--dt` only shape a headless run: a window runs on wall-clock
     // time until it is closed, so say so rather than silently ignoring them.
     if args.frames_given || args.dt_given {
         log::warn!("--frames/--dt only apply to a headless run and are ignored in a window");
     }
     let project = open_project(args)?;
-    let mut runtime = build_runtime(args, project.as_ref(), embedded)?;
+    let mut runtime = build_runtime(args, project.as_ref(), embedded, plugin)?;
     // A development run loads scripts from disk; watch them so an edit reloads
     // on the next frame. An embedded build needs no watching.
     if embedded.is_empty()
@@ -641,5 +670,76 @@ mod tests {
         assert!(given.frames_given && given.dt_given);
         assert_eq!(given.frames, 10);
         assert!((given.dt - 0.02).abs() < 1e-9);
+    }
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    impl ecs::reflect::Component for Health {
+        const NAME: &'static str = "Health";
+    }
+
+    /// A plugin that registers `Health`, standing in for a project's Rust.
+    struct HealthPlugin;
+
+    impl Plugin for HealthPlugin {
+        fn register(&self, components: &mut ComponentRegistry) {
+            components.register::<Health>();
+        }
+    }
+
+    const HEALTH_SCENE: &str = r#"{
+        "name": "Custom",
+        "entities": [{
+            "id": 0,
+            "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+            "components": [
+                { "type": "custom", "name": "Health", "data": { "current": 3.0, "max": 10.0 } }
+            ]
+        }]
+    }"#;
+
+    /// Write `HEALTH_SCENE` to a fresh temp file and return `--scene <path>` args.
+    fn health_scene_args() -> (Vec<String>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "noctis-plugin-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let scene = dir.join("scene.json");
+        std::fs::write(&scene, HEALTH_SCENE).expect("write scene");
+        (
+            vec!["--scene".into(), scene.to_string_lossy().into_owned()],
+            dir,
+        )
+    }
+
+    #[test]
+    fn a_plugin_registers_its_components_before_the_scene_loads() {
+        let (argv, dir) = health_scene_args();
+        let args = Args::parse(argv.into_iter()).unwrap().unwrap();
+
+        let runtime = build_runtime(&args, None, &[], &HealthPlugin).expect("plugin loads");
+        assert_eq!(runtime.scene().world.entities_with::<Health>().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_scene_needing_an_absent_plugin_fails_to_load() {
+        let (argv, dir) = health_scene_args();
+        let args = Args::parse(argv.into_iter()).unwrap().unwrap();
+
+        let error = build_runtime(&args, None, &[], &NullPlugin).unwrap_err();
+        assert!(error.contains("Health"), "{error}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
