@@ -273,12 +273,20 @@ from the snapshot/bridge (`crates/script/src/bridge.rs`, which snapshots each
 registered component's JSON per entity at the start of a call) and writes become
 `ScriptCommand::SetComponent`/`RemoveComponent` the runtime applies after the
 callback, exactly like `translate`/`set_scale`. A bad JSON body or type mismatch is
-a logged script error, never a panic. Reflection is **shipped** for JavaScript;
-WebAssembly is a follow-up (see the phasing).
+a logged script error, never a panic.
 
-Native WebAssembly scripts use a fixed import ABI (`wasm_host::Abi`). Generic
-reflection there needs a JSON-over-linear-memory call; it is a follow-up, not part
-of the first cut, and is called out in the ABI documentation when added.
+Native WebAssembly scripts reach the same registry through the import ABI
+(`wasm_host::Abi`), with **JSON over linear memory**:
+
+- `has_component(entity, name_ptr, name_len) -> i32`
+- `get_component(entity, name_ptr, name_len, out_ptr, out_cap) -> i32` — writes the
+  JSON into the module's exported `memory` and returns its byte length, or `-1`
+  (absent) / `-2` (buffer too small)
+- `set_component(entity, name_ptr, name_len, json_ptr, json_len)`
+- `remove_component(entity, name_ptr, name_len) -> i32`
+
+Both backends share one path on the engine side, so a custom component's JSON is
+identical whichever language reads it.
 
 ## Rejected alternatives
 
@@ -320,11 +328,14 @@ of the first cut, and is called out in the ABI documentation when added.
    and the per-project **client** under `.noctis/client/` for `noctis build` (a
    plugin-linked game with no editor; scripts baked in for a release build).
    `project::referenced_files_with` bundles a custom component's asset references.
-3. **Script reflection.** *(Shipped for JavaScript.)* `has/get/set/remove_component`
-   plus `ScriptCommand::SetComponent`/`RemoveComponent`, over the scene's
-   `ComponentRegistry` (a project's custom components). Native WebAssembly
-   reflection over the memory ABI is the follow-up.
-4. **WebAssembly reflection** over the memory ABI.
+3. **Script reflection.** *(Shipped for JavaScript and WebAssembly.)*
+   `has/get/set/remove_component` plus `ScriptCommand::SetComponent`/`RemoveComponent`,
+   over the scene's `ComponentRegistry` (a project's custom components). JavaScript
+   uses globals with JSON strings; WebAssembly uses the import ABI with JSON over
+   linear memory.
+4. **Generic built-in reflection.** Reflection today covers a project's
+   registered (custom) components; built-ins keep their dedicated bindings. Covering
+   them generically needs reflection impls for the built-in components.
 
 ## Open questions
 

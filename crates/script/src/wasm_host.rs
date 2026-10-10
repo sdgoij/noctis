@@ -29,6 +29,10 @@
 //! | `find_entity` | `(i32, i32) -> i32` | handle of the entity with that name |
 //! | `add_script` | `(i32, i32, i32) -> ()` | attach `memory[ptr..ptr+len]` as a script |
 //! | `instantiate_prefab` | `(i32, i32, i32) -> ()` | instantiate a prefab JSON under a parent |
+//! | `has_component` | `(i32, i32, i32) -> i32` | is the named component present |
+//! | `get_component` | `(i32, i32, i32, i32, i32) -> i32` | write the component's JSON to `memory[out_ptr..]` (`out_cap` bytes); returns the byte length, `-1` when absent, `-2` when the buffer is too small |
+//! | `set_component` | `(i32, i32, i32, i32, i32) -> ()` | set the component from `memory[json_ptr..json_ptr+len]` |
+//! | `remove_component` | `(i32, i32, i32) -> i32` | remove the component; `1` if it was present |
 //! | `key_down` | `(i32, i32) -> i32` | is the named key held |
 //! | `mouse_down` | `(i32, i32) -> i32` | is the named button held |
 //! | `time_delta` | `() -> f32` | seconds since the last frame |
@@ -96,6 +100,10 @@ enum Abi {
     FindEntity,
     AddScript,
     InstantiatePrefab,
+    HasComponent,
+    GetComponent,
+    SetComponent,
+    RemoveComponent,
     KeyDown,
     MouseDown,
     TimeDelta,
@@ -120,6 +128,10 @@ impl Abi {
             "find_entity" => Abi::FindEntity,
             "add_script" => Abi::AddScript,
             "instantiate_prefab" => Abi::InstantiatePrefab,
+            "has_component" => Abi::HasComponent,
+            "get_component" => Abi::GetComponent,
+            "set_component" => Abi::SetComponent,
+            "remove_component" => Abi::RemoveComponent,
             "key_down" => Abi::KeyDown,
             "mouse_down" => Abi::MouseDown,
             "time_delta" => Abi::TimeDelta,
@@ -151,6 +163,32 @@ impl Abi {
                 vec![ValType::I32, ValType::I32, ValType::I32],
                 vec![ValType::I32],
             ),
+            // Reflection: `has`/`remove` take (entity, name_ptr, name_len),
+            // `get`/`set` add (json/out, len/cap) and `get` returns a length.
+            HasComponent | RemoveComponent => (
+                vec![ValType::I32, ValType::I32, ValType::I32],
+                vec![ValType::I32],
+            ),
+            GetComponent => (
+                vec![
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                ],
+                vec![ValType::I32],
+            ),
+            SetComponent => (
+                vec![
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                    ValType::I32,
+                ],
+                vec![],
+            ),
             TimeDelta | TimeElapsed => (vec![], vec![ValType::F32]),
         };
         FuncType { params, results }
@@ -162,7 +200,7 @@ impl Abi {
         args: &[Value],
         bridge: &mut Bridge,
         handles: &mut Vec<EntityId>,
-        memory: Option<&[u8]>,
+        memory: Option<&StoreMemory<'_>>,
     ) -> Vec<Value> {
         use Abi::*;
         let handle = |index: usize| -> Option<EntityId> {
@@ -262,6 +300,53 @@ impl Abi {
                 let root = bridge.instantiate_prefab(json, handle(2));
                 vec![Value::I32(handle_of(handles, root))]
             }
+            HasComponent => {
+                let has = match (handle(0), memory_string_at(args, memory, 1)) {
+                    (Some(id), Some(name)) => bridge.has_component(id, &name),
+                    _ => false,
+                };
+                vec![Value::I32(i32::from(has))]
+            }
+            GetComponent => {
+                let json = match (handle(0), memory_string_at(args, memory, 1)) {
+                    (Some(id), Some(name)) => bridge.component_json(id, &name),
+                    _ => None,
+                };
+                let Some(json) = json else {
+                    return vec![Value::I32(-1)];
+                };
+                let out_ptr = out_index(args, 3);
+                let out_cap = out_index(args, 4);
+                if json.len() > out_cap {
+                    return vec![Value::I32(-2)];
+                }
+                let wrote = memory.is_some_and(|memory| memory.write(out_ptr, json.as_bytes()));
+                if !wrote {
+                    return vec![Value::I32(-1)];
+                }
+                vec![Value::I32(json.len() as i32)]
+            }
+            SetComponent => {
+                if let (Some(id), Some(name), Some(json)) = (
+                    handle(0),
+                    memory_string_at(args, memory, 1),
+                    memory_string_at(args, memory, 3),
+                ) {
+                    bridge.set_component(id, &name, json);
+                }
+                Vec::new()
+            }
+            RemoveComponent => {
+                let removed = match (handle(0), memory_string_at(args, memory, 1)) {
+                    (Some(id), Some(name)) => {
+                        let present = bridge.has_component(id, &name);
+                        bridge.remove_component(id, &name);
+                        present
+                    }
+                    _ => false,
+                };
+                vec![Value::I32(i32::from(removed))]
+            }
             KeyDown => {
                 let down = memory_string_at(args, memory, 0)
                     .and_then(|name| Key::from_name(&name))
@@ -307,20 +392,51 @@ fn i32_of(value: Value) -> i32 {
 }
 
 /// Read a `(ptr, len)` string from the module's memory, starting at `base`.
-fn memory_string_at(args: &[Value], memory: Option<&[u8]>, base: usize) -> Option<String> {
+fn memory_string_at(
+    args: &[Value],
+    memory: Option<&StoreMemory<'_>>,
+    base: usize,
+) -> Option<String> {
     let memory = memory?;
     let raw = i32_of(args.get(base).copied()?);
     let ptr = usize::try_from(raw).ok()?;
     let len = usize::try_from(i32_of(args.get(base + 1).copied()?)).ok()?;
-    let bytes = memory.get(ptr..ptr.checked_add(len)?)?;
-    Some(String::from_utf8_lossy(bytes).into_owned())
+    let bytes = memory.read(ptr, len)?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The bytes of a module instance's exported `memory`, if it exports one.
-fn memory_bytes(store: &Store, instance: usize) -> Option<&[u8]> {
+/// An argument read as a non-negative byte offset (a `usize`).
+fn out_index(args: &[Value], index: usize) -> usize {
+    usize::try_from(i32_of(args.get(index).copied().unwrap_or(Value::I32(0)))).unwrap_or(0)
+}
+
+/// The memory cell of a module instance's exported `memory`, if it exports one.
+fn memory_cell(store: &Store, instance: usize) -> Option<usize> {
     match store.export(instance, "memory")? {
-        ExternVal::Memory(cell) => store.memory_bytes(cell),
+        ExternVal::Memory(cell) => Some(cell),
         _ => None,
+    }
+}
+
+/// A read/write view of a module instance's exported `memory`, for one call.
+struct StoreMemory<'a> {
+    store: &'a Store,
+    cell: usize,
+}
+
+impl StoreMemory<'_> {
+    /// The bytes `[ptr, ptr+len)` of the memory, if in bounds.
+    fn read(&self, ptr: usize, len: usize) -> Option<Vec<u8>> {
+        let block = self.store.memory_block(self.cell)?;
+        block.read(ptr, len).ok()
+    }
+
+    /// Write `bytes` at `ptr`, returning whether they fit.
+    fn write(&self, ptr: usize, bytes: &[u8]) -> bool {
+        match self.store.memory_block(self.cell) {
+            Some(block) => block.write(ptr, bytes).is_ok(),
+            None => false,
+        }
     }
 }
 
@@ -506,8 +622,11 @@ impl WasmHost {
         };
         // `memory` borrows only `self.store`, so it coexists with the mutable
         // borrow of `self.bridge` below.
-        let memory = memory_bytes(&self.store, instance);
-        Ok(abi.apply(&request.args, &mut self.bridge, handles, memory))
+        let memory = memory_cell(&self.store, instance).map(|cell| StoreMemory {
+            store: &self.store,
+            cell,
+        });
+        Ok(abi.apply(&request.args, &mut self.bridge, handles, memory.as_ref()))
     }
 }
 
@@ -605,6 +724,28 @@ mod tests {
             Abi::InstantiatePrefab.func_type().results,
             vec![ValType::I32]
         );
+        // Reflection imports.
+        assert_eq!(Abi::for_name("has_component"), Some(Abi::HasComponent));
+        assert_eq!(Abi::for_name("get_component"), Some(Abi::GetComponent));
+        assert_eq!(Abi::for_name("set_component"), Some(Abi::SetComponent));
+        assert_eq!(
+            Abi::for_name("remove_component"),
+            Some(Abi::RemoveComponent)
+        );
+        assert_eq!(Abi::HasComponent.func_type().results, vec![ValType::I32]);
+        assert_eq!(Abi::RemoveComponent.func_type().results, vec![ValType::I32]);
+        assert_eq!(
+            Abi::GetComponent.func_type().params,
+            vec![
+                ValType::I32,
+                ValType::I32,
+                ValType::I32,
+                ValType::I32,
+                ValType::I32
+            ]
+        );
+        assert_eq!(Abi::GetComponent.func_type().results, vec![ValType::I32]);
+        assert!(Abi::SetComponent.func_type().results.is_empty());
     }
 
     #[test]

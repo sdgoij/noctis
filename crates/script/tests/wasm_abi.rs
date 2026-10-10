@@ -60,6 +60,26 @@ fn header() -> Vec<u8> {
     vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
 }
 
+/// Signed LEB128, for `i32.const` operands (which are signed).
+fn sleb(mut value: i32, out: &mut Vec<u8>) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        let done = (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0);
+        if done {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+/// An `i32.const` instruction.
+fn i32_const(value: i32, out: &mut Vec<u8>) {
+    out.push(0x41);
+    sleb(value, out);
+}
+
 /// A module with an `(i32, f32) -> ()` import — an ABI signature violation.
 fn wrong_signature_module() -> Vec<u8> {
     let mut out = header();
@@ -374,6 +394,185 @@ fn prefab_module() -> Vec<u8> {
     out
 }
 
+/// A module exercising the reflection ABI: if its entity has `Health`, it reads
+/// the component's JSON into a buffer, checks the JSON starts with `{`, and sets
+/// it to a literal.
+fn reflect_module() -> Vec<u8> {
+    let mut out = header();
+
+    // types: 0 (i32,i32,i32)->i32, 1 (5xi32)->i32, 2 (5xi32)->(), 3 (i32,f32)->()
+    let mut types = Vec::new();
+    leb(4, &mut types);
+    func_type(&[I32, I32, I32], &[I32], &mut types);
+    func_type(&[I32, I32, I32, I32, I32], &[I32], &mut types);
+    func_type(&[I32, I32, I32, I32, I32], &[], &mut types);
+    func_type(&[I32, F32], &[], &mut types);
+    section(1, &types, &mut out);
+
+    // imports: has_component -> 0, get_component -> 1, set_component -> 2
+    let mut imports = Vec::new();
+    leb(3, &mut imports);
+    import("noctis", "has_component", 0, &mut imports);
+    import("noctis", "get_component", 1, &mut imports);
+    import("noctis", "set_component", 2, &mut imports);
+    section(2, &imports, &mut out);
+
+    // one function (on_update), type 3
+    let mut functions = Vec::new();
+    leb(1, &mut functions);
+    leb(3, &mut functions);
+    section(3, &functions, &mut out);
+
+    let mut memory = Vec::new();
+    leb(1, &mut memory);
+    memory.push(0x00);
+    leb(1, &mut memory);
+    section(5, &memory, &mut out);
+
+    let mut exports = Vec::new();
+    leb(2, &mut exports);
+    name("memory", &mut exports);
+    exports.push(0x02);
+    leb(0, &mut exports);
+    name("on_update", &mut exports);
+    exports.push(0x00);
+    leb(3, &mut exports);
+    section(7, &exports, &mut out);
+
+    let mut body = Vec::new();
+    leb(0, &mut body); // no locals
+    // if has_component(entity, 0, 6)
+    body.push(0x20);
+    leb(0, &mut body);
+    i32_const(0, &mut body);
+    i32_const(6, &mut body);
+    body.extend_from_slice(&[0x10, 0x00]);
+    body.extend_from_slice(&[0x04, 0x40]);
+    //   n = get_component(entity, 0, 6, out=64, cap=64)
+    body.push(0x20);
+    leb(0, &mut body);
+    i32_const(0, &mut body);
+    i32_const(6, &mut body);
+    i32_const(64, &mut body);
+    i32_const(64, &mut body);
+    body.extend_from_slice(&[0x10, 0x01]);
+    //   if n > 0
+    i32_const(0, &mut body);
+    body.push(0x4A); // i32.gt_s
+    body.extend_from_slice(&[0x04, 0x40]);
+    //     if load8_u(64) == 123 ('{')
+    i32_const(64, &mut body);
+    body.extend_from_slice(&[0x2D, 0x00, 0x00]); // i32.load8_u
+    i32_const(123, &mut body);
+    body.push(0x46); // i32.eq
+    body.extend_from_slice(&[0x04, 0x40]);
+    //       set_component(entity, 0, 6, json=16, len=23)
+    body.push(0x20);
+    leb(0, &mut body);
+    i32_const(0, &mut body);
+    i32_const(6, &mut body);
+    i32_const(16, &mut body);
+    i32_const(23, &mut body);
+    body.extend_from_slice(&[0x10, 0x02]);
+    body.push(0x0B);
+    body.push(0x0B);
+    body.push(0x0B);
+    body.push(0x0B);
+    let mut code = Vec::new();
+    leb(1, &mut code);
+    leb(body.len() as u32, &mut code);
+    code.extend_from_slice(&body);
+    section(10, &code, &mut out);
+
+    // data: "Health" at 0, the JSON at 16
+    let json = b"{\"current\":7,\"max\":100}";
+    let mut data = Vec::new();
+    leb(2, &mut data);
+    data.push(0x00);
+    data.extend_from_slice(&[0x41, 0x00, 0x0b]);
+    leb(6, &mut data);
+    data.extend_from_slice(b"Health");
+    data.push(0x00);
+    data.extend_from_slice(&[0x41, 0x10, 0x0b]);
+    leb(json.len() as u32, &mut data);
+    data.extend_from_slice(json);
+    section(11, &data, &mut out);
+
+    out
+}
+
+/// A module that removes the `Health` component from its entity.
+fn remove_module() -> Vec<u8> {
+    let mut out = header();
+
+    // types: 0 (i32,i32,i32)->i32, 1 (i32,f32)->()
+    let mut types = Vec::new();
+    leb(2, &mut types);
+    func_type(&[I32, I32, I32], &[I32], &mut types);
+    func_type(&[I32, F32], &[], &mut types);
+    section(1, &types, &mut out);
+
+    let mut imports = Vec::new();
+    leb(2, &mut imports);
+    import("noctis", "has_component", 0, &mut imports);
+    import("noctis", "remove_component", 0, &mut imports);
+    section(2, &imports, &mut out);
+
+    let mut functions = Vec::new();
+    leb(1, &mut functions);
+    leb(1, &mut functions);
+    section(3, &functions, &mut out);
+
+    let mut memory = Vec::new();
+    leb(1, &mut memory);
+    memory.push(0x00);
+    leb(1, &mut memory);
+    section(5, &memory, &mut out);
+
+    let mut exports = Vec::new();
+    leb(2, &mut exports);
+    name("memory", &mut exports);
+    exports.push(0x02);
+    leb(0, &mut exports);
+    name("on_update", &mut exports);
+    exports.push(0x00);
+    leb(2, &mut exports);
+    section(7, &exports, &mut out);
+
+    let mut body = Vec::new();
+    leb(0, &mut body);
+    // if has_component(entity, 0, 6) { remove_component(entity, 0, 6); }
+    body.push(0x20);
+    leb(0, &mut body);
+    i32_const(0, &mut body);
+    i32_const(6, &mut body);
+    body.extend_from_slice(&[0x10, 0x00]);
+    body.extend_from_slice(&[0x04, 0x40]);
+    body.push(0x20);
+    leb(0, &mut body);
+    i32_const(0, &mut body);
+    i32_const(6, &mut body);
+    body.extend_from_slice(&[0x10, 0x01]);
+    body.push(0x1A); // drop the result
+    body.push(0x0B);
+    body.push(0x0B);
+    let mut code = Vec::new();
+    leb(1, &mut code);
+    leb(body.len() as u32, &mut code);
+    code.extend_from_slice(&body);
+    section(10, &code, &mut out);
+
+    let mut data = Vec::new();
+    leb(1, &mut data);
+    data.push(0x00);
+    data.extend_from_slice(&[0x41, 0x00, 0x0b]);
+    leb(6, &mut data);
+    data.extend_from_slice(b"Health");
+    section(11, &data, &mut out);
+
+    out
+}
+
 fn world_with(source: String) -> (World, Entity) {
     let mut world = World::new();
     let entity = world.spawn();
@@ -607,4 +806,72 @@ fn a_wasm_file_registers_as_a_script_asset() {
     assert_eq!(std::fs::read(&path).expect("read back"), demo_module());
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component)]
+struct Health {
+    current: f32,
+    max: f32,
+}
+
+fn health_registry() -> ecs::reflect::ComponentRegistry {
+    let mut registry = ecs::reflect::ComponentRegistry::new();
+    registry.register::<Health>();
+    registry
+}
+
+#[test]
+fn a_wasm_script_reads_and_writes_a_registered_component() {
+    let (mut world, entity) = world_with(wasm_host::encode(&reflect_module()));
+    world.insert(
+        entity,
+        Health {
+            current: 1.0,
+            max: 100.0,
+        },
+    );
+    let assets = AssetRegistry::new();
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+    runtime.set_components(health_registry());
+
+    runtime.run_update(&mut world, &assets, 0.016);
+
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+    // `has_component` gated the work; `get_component` wrote JSON starting with
+    // `{` into the module's buffer; `set_component` applied the literal.
+    assert_eq!(
+        world.get::<Health>(entity),
+        Some(&Health {
+            current: 7.0,
+            max: 100.0
+        })
+    );
+}
+
+#[test]
+fn a_wasm_script_removes_a_registered_component() {
+    let (mut world, entity) = world_with(wasm_host::encode(&remove_module()));
+    world.insert(
+        entity,
+        Health {
+            current: 1.0,
+            max: 100.0,
+        },
+    );
+    let assets = AssetRegistry::new();
+    let mut runtime = ScriptRuntime::with_host(WasmHost::new());
+    runtime.set_components(health_registry());
+
+    runtime.run_update(&mut world, &assets, 0.016);
+
+    assert!(
+        runtime.host().errors().is_empty(),
+        "module errors: {:?}",
+        runtime.host().errors()
+    );
+    assert!(world.get::<Health>(entity).is_none());
 }
