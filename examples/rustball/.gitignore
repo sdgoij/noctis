@@ -1,0 +1,5 @@
+# The plugin crate is its own (detached) cargo workspace, so its build output
+# lands here rather than in the engine's root `target/`. The lock file is
+# generated per build and is not committed for this library crate.
+/rust/target/
+/rust/Cargo.lock

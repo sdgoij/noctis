@@ -116,6 +116,10 @@ component types and nothing from the authoring tool chain.
 A project with no `[rust]` is unchanged: the stock `noctis` binary handles it, and
 `noctis build` ships the stock `noctis-game` client.
 
+A complete worked example is `examples/rustball`: a `Spin` custom component turned
+by a system, a system that flies the active camera from input, and a simulated
+ball that bounces and respawns.
+
 ## Custom components
 
 Storage is already open — `World` is generic over any `C: Send + Sync + 'static`

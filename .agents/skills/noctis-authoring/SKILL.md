@@ -13,6 +13,10 @@ Start from the worked reference: **`examples/showcase/`** is a complete project
 (manifest, scenes, prefabs, scripts, generated assets) that exercises every
 component and the whole scripting API. Copy its shape.
 
+For project **Rust** — a `[rust]` plugin that adds custom components and systems —
+the smaller worked reference is **`examples/rustball/`** (see
+[`docs/embedding.md`](docs/embedding.md)).
+
 ## Where things are
 
 - Scene/component types: `crates/ecs/src/components.rs` and `crates/ecs/src/scene.rs`.
@@ -22,7 +26,8 @@ component and the whole scripting API. Copy its shape.
 - Editor command API + CLI: `crates/editor` (the `noctis editor` command).
 - Runtime/export: `crates/runtime` (the game loop and the stripped `noctis-game`
   binary); the `noctis` tool that drives it all is `crates/noctis`.
-- Worked example project: `examples/showcase` (see its `README.md`).
+- Worked example project: `examples/showcase` (see its `README.md`); a `[rust]`
+  project is `examples/rustball`.
 
 ## Typical flow
 

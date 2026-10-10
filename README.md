@@ -41,6 +41,11 @@ cargo run -- --help                       # every command
 prefabs, scripts, and generated assets exercising every engine feature. See its
 [README](examples/showcase/README.md).
 
+[`examples/rustball`](examples/rustball) is a small project whose gameplay is
+**Rust** rather than a script: a `[rust]` plugin with a custom component and
+systems (see [`docs/embedding.md`](docs/embedding.md) and its
+[README](examples/rustball/README.md)).
+
 Scripting is JavaScript, executed by the Slag engine, which is always built — a
 project's scripts run out of the box. The example project's JavaScript is covered
 directly:

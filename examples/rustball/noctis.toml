@@ -1,0 +1,36 @@
+# Rust Ball — a minimal Noctis project whose gameplay is Rust.
+#
+# The project carries a `[rust]` plugin (the `rust/` crate): it registers a custom
+# component (`Spin`) and installs the systems that turn tagged entities and fly the
+# player camera. See README.md, and docs/embedding.md for the design.
+
+[project]
+name = "Rust Ball"
+version = "0.1.0"
+description = "A bouncing ball and a fly camera, driven by a Rust plugin."
+
+[project.settings]
+default_scene = "scenes/ball.scene.json"
+mode = "3d"
+gravity = [0.0, -9.81, 0.0]
+
+[window]
+title = "Rust Ball"
+width = 1280
+height = 720
+
+[render]
+# The HDR pipeline and 4x MSAA; the ball's silhouette and the shadow edge are
+# smoothed. There is no [render] environment, so image-based lighting is the
+# neutral (fully white) fallback — add an .hdr there for a richer look.
+hdr = true
+sample_count = 4
+
+# The plugin crate and the function returning its `Plugin`.
+[rust]
+crate = "rust"
+plugin = "rustball::plugin"
+
+[[build]]
+name = "rustball"
+scene = "scenes/ball.scene.json"

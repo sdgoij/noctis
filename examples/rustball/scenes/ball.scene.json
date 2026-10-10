@@ -1,0 +1,98 @@
+{
+  "name": "Rust Ball",
+  "format_version": 1,
+  "mode": "3d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Main Camera",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 6.0, 16.0], "rotation": [-0.20928, 0.0, 0.0, 0.97786], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "camera",
+          "projection": { "kind": "perspective", "fov_y": 0.9, "near": 0.1, "far": 200.0 },
+          "is_active": true,
+          "priority": 0,
+          "clear_color": [0.05, 0.06, 0.09, 1.0],
+          "hdr": true
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [6.0, 10.0, 4.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "light",
+          "kind": { "kind": "directional", "direction": [-0.5, -1.0, -0.35] },
+          "color": [1.0, 0.97, 0.9],
+          "intensity": 2.6,
+          "cast_shadows": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [16.0, 1.0, 16.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "$default",
+          "cast_shadows": false,
+          "receive_shadows": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Ball",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 10.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/sphere",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Beacon",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-6.0, 2.5, -6.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [0.8, 1.6, 0.8] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "$default",
+          "cast_shadows": true,
+          "receive_shadows": true
+        },
+        {
+          "type": "custom",
+          "name": "Spin",
+          "data": { "speed": 1.6 }
+        }
+      ]
+    }
+  ]
+}

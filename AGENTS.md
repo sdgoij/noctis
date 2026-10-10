@@ -159,8 +159,10 @@ needed.
   scripts in for a release build. A registered custom component's asset references
   are bundled. The `Component` derive resolves its crate path for both `ecs`
   consumers and `noctis`-only plugin crates, and `noctis`'s `editor` is a default
-  feature so a shipped plugin game can drop it. **Not yet:** script reflection over
-  custom components (phase 3) and native-WebAssembly reflection.
+  feature so a shipped plugin game can drop it. A worked example (a custom `Spin`
+  component, a fly-camera system, and a simulated ball) is `examples/rustball`.
+  **Not yet:** script reflection over custom components (phase 3) and
+  native-WebAssembly reflection.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):
