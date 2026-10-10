@@ -19,7 +19,9 @@
 > can be packaged into a `.zip` **bundle** with `noctis pack` (`Project::bundle`,
 > `vfs::zip_store`); `Project::open_in(ZipStore, root)` reads it back, and
 > `noctis run --bundle <file.zip>` opens and runs one (its default scene). GPU
-> startup is `await`-able (`Renderer::headless_async`/`for_surface_async`). The
+> startup is `await`-able (`Renderer::headless_async`/`for_surface_async`), and a
+> wasm **host** (`platform/src/web.rs`) drives any `AppDriver` on a `<canvas>` via
+> `requestAnimationFrame`. The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -82,13 +84,13 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Core sim | `math`, `ecs`, `physics` | **Clean.** No fs/thread/net; `rapier3d` has real `wasm32` builds. |
 | Asset decode | `render` (CPU side), `project` (parse) | **Clean if fed bytes.** `image`/`gltf`/`ab_glyph` and `toml` are pure Rust. |
 | GPU | `render` | wgpu has a WebGPU backend, and device init is now `await`-able: `Renderer::headless_async`/`for_surface_async` wrap the one `open_device` await point, and the native `headless`/`for_surface` block on them (`pollster::block_on`, `#[cfg(not(target_arch = "wasm32"))]`). |
-| Window / input / UI | `platform` | winit has a wasm backend and `egui-wgpu` paints to a canvas, but this is the least-travelled path; a new web host implements the same `AppDriver` seam. |
+| Window / input / UI | `platform` | A `web-sys` host (`platform/src/web.rs`, `cfg(wasm32)`) drives the same `AppDriver` seam on a `<canvas>` via `requestAnimationFrame`; the winit host is native-only. Input maps `KeyboardEvent.code` → `Key` (the same names winit uses). |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
 | Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend; decoding from bytes is now in place (`audio::load_clip_bytes`), so only the output sink is missing. |
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
-**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, and now **`project` and `audio`**, all compile. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only — it compiles on the web but has no WebAudio sink yet, so decode is what works there. `script` remains blocked **upstream**: Slag's `runtime/src/jit.rs` compiles unconditionally and transmutes a `u64` fn-pointer, which is invalid on 32-bit wasm (the `jit` feature is already dropped on wasm here). `platform` needs winit's web backend features.
+**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, **`project`**, **`audio`**, and now **`platform`**, all compile. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only — it compiles on the web but has no WebAudio sink yet, so decode is what works there. `script` remains blocked **upstream**: Slag's `runtime/src/jit.rs` compiles unconditionally and transmutes a `u64` fn-pointer, which is invalid on 32-bit wasm (the `jit` feature is already dropped on wasm here). `platform` needs winit's web backend features.
 
 ## The seams to introduce
 
@@ -121,7 +123,15 @@ New crates (names provisional; they never leak into the native-only build):
 - **`crates/platform-web`** — a web `AppDriver` host: acquire the canvas, create
   the wgpu surface, run `requestAnimationFrame`, and drive `prepare`/`update`/`ui`
   exactly as the native host does. `egui-wgpu` paints the same UI. The native
-  `platform` stays untouched.
+  `platform` stays untouched. **Shipped (client first):** `platform/src/web.rs`
+  (behind `cfg(target_arch = "wasm32")`) acquires/creates a `#noctis-canvas`,
+  awaits `Renderer::for_surface_async`, and drives the loop with `request_animation_frame`,
+  feeding key/mouse/wheel into `InputState`. It draws **no** egui overlay yet (the
+  browser client needs none); the native winit host moved behind
+  `cfg(not(target_arch = "wasm32"))`, with `WindowConfig` shared in `platform::config`.
+  Note: egui-winit 0.36.2 cannot build for wasm at all (its `DroppedFile` impl uses
+  `bytes`, which the wasm trait replaces with `bytes_async`), which is why the web
+  host uses `web-sys` directly rather than winit.
 - **`crates/web`** (the `noctis-web` module) — the wasm entry point and its JS
   glue: instantiate, expose `start(canvas, bundleUrl)`, and own the runtime. This
   is the generic client; the project comes from the bundle, not the binary.

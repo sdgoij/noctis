@@ -2726,9 +2726,13 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "js-sys",
  "log",
  "math",
  "render",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu",
  "winit",
 ]
