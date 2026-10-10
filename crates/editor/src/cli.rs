@@ -25,6 +25,7 @@ use ecs::scene::SceneMode;
 use platform::WindowConfig;
 use project::Project;
 
+use crate::extension::{ExtensionReload, ExtensionWatch};
 use crate::{Editor, ExtensionHost, command_schema, parse_commands};
 
 /// The prefix on every diagnostic message.
@@ -56,6 +57,7 @@ OPTIONS:
         --extensions <DIR>  Scan only this directory for editor extensions
                             (repeatable; replaces the default search set)
         --no-extensions     Scan no extension directories
+        --watch             Reload extensions when their files change (windowed)
         --run <LINE>        Dispatch an extension verb line, e.g.
                             --run \"scatter 5\" (repeatable)
         --print-schema      Print the JSON command schema and exit
@@ -143,6 +145,7 @@ struct Options {
     save_prefabs: bool,
     extensions: Vec<String>,
     no_extensions: bool,
+    watch: bool,
     run: Vec<String>,
     print_schema: bool,
     help: bool,
@@ -290,7 +293,7 @@ fn attach_extensions(
     editor: &mut Editor,
     options: &Options,
     project: Option<&Project>,
-) -> Result<Option<(ExtensionHost, extensions::ExtensionConfig, PathBuf)>, CliError> {
+) -> Result<Option<LoadedExtensions>, CliError> {
     if options.no_extensions {
         return Ok(None);
     }
@@ -329,7 +332,9 @@ fn attach_extensions(
         .extensions()
         .iter()
         .any(|manifest| enabled(&manifest.id));
-    if !any_enabled && options.run.is_empty() {
+    // Under `--watch`, keep the (possibly empty) host so a newly created
+    // extension is picked up by the watcher without a restart.
+    if !any_enabled && options.run.is_empty() && !options.watch {
         return Ok(None);
     }
 
@@ -358,7 +363,24 @@ fn attach_extensions(
         eprintln!("{PROGRAM}: warning: extension {error}");
     }
 
-    Ok(Some((host, config, config_path)))
+    Ok(Some(LoadedExtensions {
+        host,
+        config: config.clone(),
+        config_path: config_path.clone(),
+        dirs,
+        disabled: project_disabled.clone(),
+    }))
+}
+
+/// The loaded extension host plus the inputs a windowed `--watch` needs.
+struct LoadedExtensions {
+    host: ExtensionHost,
+    config: extensions::ExtensionConfig,
+    config_path: PathBuf,
+    /// The directories the host was discovered from.
+    dirs: Vec<PathBuf>,
+    /// The ids the project disables.
+    disabled: Vec<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<Options, CliError> {
@@ -439,6 +461,10 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
                 reject_inline(&inline, &flag)?;
                 options.no_extensions = true;
             }
+            "--watch" => {
+                reject_inline(&inline, &flag)?;
+                options.watch = true;
+            }
             "--run" => {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.run.push(value);
@@ -453,6 +479,12 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
         }
 
         index += 1;
+    }
+
+    if options.watch && options.headless {
+        return Err(CliError::Usage(
+            "--watch needs a window; drop --headless".into(),
+        ));
     }
 
     Ok(options)
@@ -557,14 +589,15 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
     finalize(&mut editor, options, project.as_ref())?;
     let config = window_config(project.as_ref());
 
-    let attached =
-        extensions.map(
-            |(host, config, config_path)| crate::window::AttachedExtensions {
-                host,
-                config,
-                config_path,
-            },
-        );
+    let attached = extensions.map(|loaded| {
+        let reload = watch_extensions(options, &loaded);
+        crate::window::AttachedExtensions {
+            host: loaded.host,
+            config: loaded.config,
+            config_path: loaded.config_path,
+            reload,
+        }
+    });
 
     // `--controls` wins over the project's `[input].controls`.
     let controls = options
@@ -581,6 +614,24 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
         }
         None => crate::window::run(editor, config, project, attached)
             .map_err(|e| CliError::Message(e.to_string())),
+    }
+}
+
+/// Start the `--watch` watcher over the loaded extension directories, if asked.
+fn watch_extensions(options: &Options, loaded: &LoadedExtensions) -> Option<ExtensionReload> {
+    if !options.watch {
+        return None;
+    }
+    match ExtensionWatch::new(&loaded.dirs) {
+        Ok(watch) => Some(ExtensionReload {
+            watch,
+            dirs: loaded.dirs.clone(),
+            disabled: loaded.disabled.clone(),
+        }),
+        Err(error) => {
+            eprintln!("{PROGRAM}: warning: extension watch: {error}");
+            None
+        }
     }
 }
 
@@ -819,6 +870,12 @@ mod tests {
         assert_eq!(options.extensions, ["a", "b"]);
         assert!(options.no_extensions);
         assert_eq!(options.run, ["scatter 3", "help"]);
+    }
+
+    #[test]
+    fn watch_is_parsed_and_needs_a_window() {
+        assert!(parse_args(&args(&["--watch"])).unwrap().watch);
+        assert!(parse_args(&args(&["--watch", "--headless"])).is_err());
     }
 
     #[test]

@@ -4,8 +4,8 @@
 > WebAssembly. The pure loader is `crates/extensions`; the host lives in
 > `crates/editor` (`editor::extension`, with the WASM half in
 > `editor::extension::wasm`). The headless slice (load, discover,
-> `noctis.command`, `noctis.edit`, `--run`), the windowed UI (`noctis.ui`) and
-> native WASM execution are implemented; the remaining phase is `--watch`.
+> `noctis.command`, `noctis.edit`, `--run`), the windowed UI (`noctis.ui`),
+> native WASM execution and `--watch` reload are implemented.
 
 An **extension** is a directory of JavaScript, WebAssembly, JSON and assets. It is
 discovered by the editor, evaluated against the open scene, and talks to the
@@ -286,6 +286,18 @@ handed to the host; JS never sees them. The host instantiates the module, calls
 work the host replays after the call, in the order the module issued it, as one
 undo step. `log` is served from the frame's read snapshot.
 
+## Hot reload (`--watch`)
+
+A windowed run may pass `--watch`: the extension directories are watched
+recursively (on a `notify` background thread), and a change seen during the frame
+rebuilds the host from a fresh discovery. A rebuild is a full reload — the
+previous host is dropped and every enabled extension is evaluated again — so
+JavaScript module state is reset, exactly as a page reload resets a script. Scene
+edits an extension already made are not undone; they live on in the editor's own
+undo history. A newly created extension appears on the next change; removing or
+disabling one drops it. `--watch` needs a window; `--headless` with it is a usage
+error.
+
 ## Persistence
 
 Enablement is remembered. A single user config, at
@@ -331,13 +343,14 @@ declares the major it targets; a mismatch is a load error with a clear message.
 Within a major, additions keep existing names' meaning. A name scheduled for
 removal logs a one-time warning and is removed no sooner than the next minor.
 
-## Command line (planned)
+## Command line
 
 | Flag | Effect |
 | --- | --- |
 | `--extensions <dir>` | Scan only this directory (repeatable). |
 | `--no-extensions` | Scan nothing. |
 | `--run <line>` | Dispatch a verb line after loading (repeatable). |
+| `--watch` | Reload extensions when their files change (windowed). |
 
 The windowed editor gains a console line that dispatches the same vocabulary, and
 an **Extensions** screen listing the table with toggles that write the config.
@@ -358,7 +371,7 @@ an **Extensions** screen listing the table with toggles that write the config.
 - `editor::window` — the windowed UI: panels rendered as egui windows (buttons,
   checkboxes and sliders are live), the `"update"` hook each frame, a console
   with a scrollback, and an Extensions screen whose toggles write the config.
-- `editor` CLI — `--extensions`, `--no-extensions`, `--run`.
+- `editor` CLI — `--extensions`, `--no-extensions`, `--run`, `--watch`.
 - A fixture at `examples/extensions/`.
 
 ## Phasing
@@ -372,7 +385,8 @@ an **Extensions** screen listing the table with toggles that write the config.
 4. **WASM execution**: instantiate a module, drive `noctis_update`, provide the
    imports above. *(shipped for `log`/`editor_json`/`edit`/`run`; the
    `noctis_alloc`/`ui_panel` buffer and panel ABI remain)*
-5. **Dev loop**: `--watch` hot-reload per extension (reusing `notify`).
+5. **Dev loop**: `--watch` reload (reusing `notify`); a change to a watched
+   extension directory rebuilds the host from a fresh discovery. *(shipped)*
 6. **Distributed extensions**: `.zip` archives with `extension.json` at the root.
    *(shipped)*
 

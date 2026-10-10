@@ -171,14 +171,15 @@ needed.
   `editor`/`ui`) in the Slag engine. The pure loader is `crates/extensions`; the
   host is `editor::extension` (JS) and `editor::extension::wasm` (native WASM),
   and the windowed UI is `editor::window`.
-  `--extensions`/`--no-extensions` scope discovery and `--run` dispatches a verb;
+  `--extensions`/`--no-extensions` scope discovery, `--run` dispatches a verb, and
+  `--watch` rebuilds the host when a watched extension directory changes;
   the windowed editor draws extension panels, a console with a scrollback, and an
   Extensions screen whose toggles persist to a config file. A worked example is
   `examples/extensions`. A `.wasm` module links the `noctis` imports
   (`log`/`editor_json`/`edit`/`run`) — default-deny by the linker, no WASI — and
   exports `noctis_abi`/`noctis_init`/`noctis_update`, driven once per frame.
   **Not yet:** the `noctis_alloc`/`ui_panel` buffer and panel ABI (WASM does not
-  draw panels) and hot reload.
+  draw panels).
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

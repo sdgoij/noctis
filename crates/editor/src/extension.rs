@@ -26,8 +26,11 @@ use crate::Editor;
 use crate::info::EntityDto;
 
 mod wasm;
+mod watch;
 
 use wasm::WasmHost;
+
+pub use watch::{ExtensionReload, ExtensionWatch};
 
 /// The `noctis` global, defined in JavaScript. See the module docs.
 const BOOTSTRAP: &str = r#"

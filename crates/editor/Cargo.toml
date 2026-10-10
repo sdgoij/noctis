@@ -23,5 +23,8 @@ log.workspace = true
 # the `script` crate's feature set so the dependency graph unifies.
 slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, features = ["wasm", "jit"] }
 
+# `--watch`: reload extensions when their files change.
+notify.workspace = true
+
 [dev-dependencies]
 image.workspace = true

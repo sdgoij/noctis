@@ -15,7 +15,7 @@ use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
-use crate::extension::{ExtensionHost, Interactions, Widget};
+use crate::extension::{ExtensionHost, ExtensionReload, Interactions, Widget};
 use crate::gizmo;
 use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
@@ -104,6 +104,8 @@ pub struct EditorDriver {
     extensions: Option<ExtensionHost>,
     /// The enablement config and the file it is written to.
     extension_config: Option<(ExtensionConfig, PathBuf)>,
+    /// When `--watch` was passed: the watcher and the inputs to rebuild the host.
+    extension_reload: Option<ExtensionReload>,
     /// UI interactions from the last frame, fed to panels on the next draw.
     pending_interactions: Interactions,
     /// The console's input line and scrollback.
@@ -154,6 +156,7 @@ impl EditorDriver {
             project: None,
             extensions: None,
             extension_config: None,
+            extension_reload: None,
             pending_interactions: Interactions::default(),
             console_line: String::new(),
             console_log: Vec::new(),
@@ -168,15 +171,17 @@ impl EditorDriver {
         self
     }
 
-    /// Attach an extension host, its enablement config, and the file the
-    /// Extensions screen writes it to.
+    /// Attach an extension host, its enablement config, the file the Extensions
+    /// screen writes it to, and (under `--watch`) the reload inputs.
     pub fn with_extensions(
         mut self,
         host: ExtensionHost,
         config: ExtensionConfig,
         config_path: PathBuf,
+        reload: Option<ExtensionReload>,
     ) -> Self {
         self.extension_config = Some((config, config_path));
+        self.extension_reload = reload;
         self.extensions = Some(host);
         self
     }
@@ -188,6 +193,7 @@ impl EditorDriver {
 
     /// Fire the extensions' `"update"` hook and apply any edits it queued.
     fn run_extension_update(&mut self, dt: f32) {
+        self.reload_extensions();
         if let Some(host) = self.extensions.as_mut() {
             let lines = host.update(&mut self.editor, dt);
             self.console_log.extend(lines);
@@ -195,6 +201,60 @@ impl EditorDriver {
             self.console_log
                 .extend(logs.into_iter().map(|log| format!("log: {log}")));
         }
+    }
+
+    /// Under `--watch`, rebuild the extensions when a file changed.
+    fn reload_extensions(&mut self) {
+        let Some(reload) = self.extension_reload.as_ref() else {
+            return;
+        };
+        if !reload.watch.changed() {
+            return;
+        }
+        let Some((config, _)) = self.extension_config.clone() else {
+            return;
+        };
+        let disabled = reload.disabled.clone();
+        let dirs = reload.dirs.clone();
+        self.rebuild_extensions(&dirs, &config, &disabled);
+    }
+
+    /// Re-discover `dirs` and evaluate the enabled extensions afresh, replacing
+    /// the host.
+    ///
+    /// A rebuild is a full reload: the old host is dropped and a fresh one
+    /// re-evaluates every extension. Scene edits an extension already made live
+    /// on in the editor's undo history.
+    fn rebuild_extensions(
+        &mut self,
+        dirs: &[PathBuf],
+        config: &ExtensionConfig,
+        disabled: &[String],
+    ) {
+        let loader = extensions::Loader::discover(dirs);
+        for error in loader.errors() {
+            self.console_log
+                .push(format!("ext: {}: {}", error.path.display(), error.message));
+        }
+        let enabled = |id: &str| config.is_enabled(id) && !disabled.iter().any(|d| d == id);
+        let mut host = match ExtensionHost::new() {
+            Ok(host) => host,
+            Err(error) => {
+                self.console_log.push(format!("extensions: {error}"));
+                return;
+            }
+        };
+        host.load(&loader, enabled);
+        let lines = host.ready(&mut self.editor);
+        self.console_log.extend(lines);
+        for error in host.errors() {
+            self.console_log.push(format!("ext: {error}"));
+        }
+        let logs = host.take_logs();
+        self.console_log
+            .extend(logs.into_iter().map(|log| format!("log: {log}")));
+        self.extensions = Some(host);
+        self.console_log.push("extensions reloaded".into());
     }
 
     /// Draw the extension UI: their panels, the console, and the Extensions screen.
@@ -1266,6 +1326,8 @@ pub struct AttachedExtensions {
     pub config: ExtensionConfig,
     /// The file the config is saved to.
     pub config_path: PathBuf,
+    /// The `--watch` reload inputs, when watching.
+    pub reload: Option<ExtensionReload>,
 }
 
 /// Open `editor` in a window with egui panels. Blocks until the window closes.
@@ -1298,7 +1360,8 @@ fn attach(driver: EditorDriver, extensions: Option<AttachedExtensions>) -> Edito
             host,
             config,
             config_path,
-        }) => driver.with_extensions(host, config, config_path),
+            reload,
+        }) => driver.with_extensions(host, config, config_path, reload),
         None => driver,
     }
 }
@@ -1359,5 +1422,70 @@ mod tests {
         assert!(driver.editor_mut().undo());
         let light = driver.editor().component::<Light>(entity).unwrap();
         assert_eq!(light.intensity, 1.0, "the whole drag undoes at once");
+    }
+
+    fn extension_root(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("noctis-window-ext-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn write_extension(root: &Path, dir_name: &str, id: &str) {
+        let dir = root.join(dir_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            format!(
+                r#"{{ "id": "{id}", "name": "{id}", "version": "1.0.0", "api": 1, "entry": "extension.js" }}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("extension.js"), "noctis.log('loaded');").unwrap();
+    }
+
+    #[test]
+    fn rebuilding_extensions_picks_up_and_drops_them() {
+        let root = extension_root("reload");
+        let config = ExtensionConfig::default();
+        let mut driver = EditorDriver::new(Editor::new());
+
+        // A rebuild over an empty directory loads nothing.
+        driver.rebuild_extensions(std::slice::from_ref(&root), &config, &[]);
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().is_empty())
+        );
+
+        // Creating an extension is picked up by the next rebuild.
+        write_extension(&root, "adder", "com.example.adder");
+        driver.rebuild_extensions(std::slice::from_ref(&root), &config, &[]);
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().iter().any(|id| id == "com.example.adder"))
+        );
+
+        // Disabling it keeps it out of the rebuilt host.
+        let disabled = vec!["com.example.adder".to_string()];
+        driver.rebuild_extensions(std::slice::from_ref(&root), &config, &disabled);
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().is_empty())
+        );
+
+        // Removing the directory drops it too.
+        driver.rebuild_extensions(std::slice::from_ref(&root), &config, &[]);
+        std::fs::remove_dir_all(root.join("adder")).unwrap();
+        driver.rebuild_extensions(std::slice::from_ref(&root), &config, &[]);
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().is_empty())
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }
