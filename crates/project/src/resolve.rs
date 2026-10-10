@@ -39,7 +39,9 @@ fn component_references(component: &ComponentDesc) -> Vec<&str> {
         ComponentDesc::AudioSource { clip, .. } => clip.as_deref().into_iter().collect(),
         ComponentDesc::Script { path, .. } => path.as_deref().into_iter().collect(),
         ComponentDesc::Text { font, .. } => font.as_deref().into_iter().collect(),
-        // Cameras, lights, and physics carry no asset references.
+        // Cameras, lights, and physics carry no asset references, and a custom
+        // component's references need the component registry (wired in when the
+        // project's Rust is linked), so they contribute nothing here yet.
         _ => Vec::new(),
     }
 }

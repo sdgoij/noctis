@@ -101,8 +101,8 @@ pub trait Component: Send + Sync + 'static + Serialize + DeserializeOwned + Defa
     /// The stable name used in scene files, the editor, and scripts.
     const NAME: &'static str;
     /// The editor/reflection schema (see `Field`).
-    fn fields() -> &'static [Field] {
-        &[]
+    fn fields() -> Vec<Field> {
+        Vec::new()
     }
     /// Asset references this component contributes to a build (usually derived
     /// from `fields`, where asset fields are declared).
@@ -113,9 +113,11 @@ pub trait Component: Send + Sync + 'static + Serialize + DeserializeOwned + Defa
 ```
 
 Built-in components already serialize through the closed `ComponentDesc` enum and
-stay that way; `Component` is the *extension* path. A `#[derive(Component)]`
-macro generates `NAME` and `fields` from the struct and its `#[field(..)]`
-attributes, with a hand-written impl as the fallback.
+stay that way; `Component` is the *extension* path. The crate also exports the
+`Component`, `ComponentRegistry`, `Field`, and `FieldKind` types from
+`ecs::reflect` (and `ecs::prelude`). A `#[derive(Component)]` macro — not yet
+written — will generate `NAME` and `fields` from the struct and its attributes,
+with a hand-written impl as the fallback (as shipped in phase 1).
 
 ### The registry
 
@@ -126,7 +128,7 @@ impl ComponentRegistry {
     pub fn register<C: Component>(&mut self);
     pub fn names(&self) -> Vec<&'static str>;
     pub fn has(&self, name: &str) -> bool;
-    pub fn fields(&self, name: &str) -> Option<&[Field]>;
+    pub fn fields(&self, name: &str) -> Option<Vec<Field>>;
     // Used by the scene loader/saver, the editor, and the script bridge:
     pub fn insert_default(&self, world: &mut World, entity: Entity, name: &str) -> Result<(), String>;
     pub fn serialize(&self, world: &World, entity: Entity, name: &str) -> Option<serde_json::Value>;
@@ -135,38 +137,44 @@ impl ComponentRegistry {
 }
 ```
 
-The registry is app-scoped and travels with the world the way `AssetRegistry`
-does: construct it, register the plugin's components, then load scenes. The editor
-and the runtime hold the same registry, which is why the plugin is linked into
-each.
+The registry is app-scoped: construct it, register the plugin's components, then
+load scenes. The editor and the runtime hold the same registry, which is why the
+plugin is linked into each.
 
 ### Scene serialization
 
 `ComponentDesc` gains one variant:
 
 ```rust
-ComponentDesc::Custom {
-    #[serde(rename = "type")] type_name: String,
-    data: serde_json::Value,
-}
+ComponentDesc::Custom { name: String, data: serde_json::Value }
+// serialized (internally tagged, like every variant) as:
+// { "type": "custom", "name": "Health", "data": { "current": 10, "max": 20 } }
 ```
+
+(The sketch earlier showed `type_name` spread with the data; serde's internal
+`type` tag makes an explicit `name`/`data` pair the clean form, which keeps every
+component in one `components` list.)
 
 - **Save** (`Scene::to_desc`/`to_json`): after the built-in components,
   `component_descs` appends a `Custom` entry for every registered type the entity
-  has, via `registry.serialize`. Built-ins keep their exact current JSON, so
-  existing files do not change.
-- **Load** (`Scene::from_json`/`try_from_desc`): a `Custom` entry is applied with
-  `registry.deserialize`. An entry naming a type the registry does not have is a
-  **load error** that names the type and the project (the engine already treats a
-  missing reference as loud, never a silent blank) — so a scene that needs the
-  plugin fails clearly when the plugin is absent.
+  has, via `registry.serialize_entity` (sorted by name, so the output stays
+  deterministic). Built-ins keep their exact current JSON, so existing files do not
+  change.
+- **Load** (`Scene::from_json_with`/`try_from_desc_with`): a `Custom` entry is
+  applied with `registry.deserialize`. An entry naming a type the registry does not
+  have is a **load error** (`SceneError::UnknownComponent`) that names the type —
+  so a scene that needs the plugin fails clearly when the plugin is absent.
 - **Prefabs** carry components the same way, so custom components work in prefabs
   unchanged.
 
-Because the registry is required to load or save, the scene entry points gain it as
-a peer of `AssetRegistry` (`Scene::from_json(json, assets, components)`,
-`Scene::to_desc(assets, components)`, and so on). This is a deliberate `ecs`
-contract change and is mirrored in [`docs/core-api.md`](core-api.md).
+The registry travels **on the scene** (`Scene::components`), which keeps
+`to_desc`/`to_json` signatures unchanged. The registry-aware load path is the
+`_with` variants — `Scene::from_json_with`, `from_desc_with`, `try_from_desc_with`,
+`instantiate_into_with`, `Prefab::instantiate_with` — while the plain ones use an
+empty registry (built-ins only). The chosen shape is simpler than threading the
+registry through every call site; the trade is that a scene holds a snapshot of the
+registry it was built with. This is a deliberate, additive `ecs` contract change,
+mirrored in [`docs/core-api.md`](core-api.md).
 
 ### Editor
 
@@ -197,12 +205,14 @@ pub enum FieldKind {
 ### Bundling and export
 
 `project::component_references` (the bundler's reference scan,
-`crates/project/src/resolve.rs`) currently matches the closed enum. It gains the
-registry so a `Custom` component's asset references (the `FieldKind::Asset` fields,
-via `Component::references`) are bundled like a mesh or clip — otherwise a shipped
-game would lose the files a custom component points at. `noctis build` already
-produces a per-project client (the embed pack); it now links the plugin too, so the
-exported game has the component types.
+`crates/project/src/resolve.rs`) matches the closed enum. Once the registry is
+available at the bundler (phase 2, when the plugin is linked), a `Custom`
+component's asset references (`FieldKind::Asset` fields, via `Component::references`)
+are bundled like a mesh or clip — otherwise a shipped game would lose the files a
+custom component points at. In phase 1 a `Custom` entry contributes no references
+(the registry is not yet at the bundler). `noctis build` already produces a
+per-project client (the embed pack); it now links the plugin too, so the exported
+game has the component types.
 
 ## Scripts read and write custom components
 
@@ -258,12 +268,16 @@ of the first cut, and is called out in the ABI documentation when added.
 
 ## Phasing
 
-1. **Component registry + `ComponentDesc::Custom`.** The `Component` trait, the
-   registry, scene round-trip (with the registry passed in), the bundler scan, and
-   the `#[derive(Component)]` macro. Tested with a host-registered component; no
-   project Rust yet.
+1. **Component registry + `ComponentDesc::Custom`.** *(Shipped, except the derive
+   macro.)* The `Component` trait, the `ComponentRegistry`, scene round-trip via the
+   `Scene::components` registry and the `_with` loaders, and `ComponentDesc::Custom`
+   with an unknown-type load error. Tested with a host-registered component; no
+   project Rust yet. Still to do in this phase: the `#[derive(Component)]` macro and
+   the bundler scan of `Custom` references (needs the registry at the bundler, which
+   arrives with the plugin in phase 2).
 2. **The `Plugin` seam and `[rust]`.** The plugin binary the tool builds and runs,
-   for `run` first, then `editor`, then `build`.
+   for `run` first, then `editor`, then `build`. Also wires the registry into the
+   bundler.
 3. **Script reflection.** `has/get/set/remove_component` plus
    `ScriptCommand::SetComponent`, for JavaScript.
 4. **Editor inspector** for custom components (schema-driven form, Add menu).
@@ -271,9 +285,10 @@ of the first cut, and is called out in the ABI documentation when added.
 
 ## Open questions
 
-- **Registry plumbing.** Whether the registry is a parameter beside `AssetRegistry`
-  (recommended, symmetric) or a field on `Scene` (fewer signatures). This touches
-  many call sites either way.
+- **Registry plumbing.** *Resolved for phase 1:* the registry lives on the scene
+  (`Scene::components`) and the registry-aware loaders are `_with` variants; this
+  keeps `to_desc`/`to_json` and every existing call site unchanged. Revisit only if
+  the per-scene snapshot becomes a problem.
 - **Derive vs. manual.** How much `#[derive(Component)]` should infer (field kinds
   from Rust types) before `#[field(as = "asset")]`-style attributes are needed.
 - **Schema stability.** A registered component's `NAME` becomes part of the scene

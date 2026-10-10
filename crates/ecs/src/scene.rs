@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::assets::AssetRegistry;
+use crate::reflect::ComponentRegistry;
 
 // ---------------------------------------------------------------------------
 // Transform hierarchy
@@ -171,6 +172,8 @@ pub struct Scene {
     pub mode: SceneMode,
     /// The entities and components.
     pub world: World,
+    /// The custom component types this scene may carry (see [`ComponentRegistry`]).
+    pub components: ComponentRegistry,
 }
 
 impl Scene {
@@ -180,6 +183,7 @@ impl Scene {
             name: name.into(),
             mode: SceneMode::default(),
             world: World::new(),
+            components: ComponentRegistry::new(),
         }
     }
 
@@ -189,6 +193,12 @@ impl Scene {
             mode,
             ..Self::new(name)
         }
+    }
+
+    /// Carry `components`, so registered custom components load and save.
+    pub fn with_component_registry(mut self, components: ComponentRegistry) -> Self {
+        self.components = components;
+        self
     }
 
     /// Whether this scene is 2D (a presentation hint).
@@ -233,7 +243,7 @@ impl Scene {
             let name = self.world.get::<Name>(*entity).map(|n| n.0.clone());
             let active = self.world.get::<Active>(*entity).is_none_or(|a| a.0);
             let visible = self.world.get::<Visible>(*entity).is_none_or(|v| v.0);
-            let components = component_descs(&self.world, *entity, assets);
+            let components = component_descs(&self.world, *entity, assets, &self.components);
             descs.push(EntityDesc {
                 id: id as u32,
                 name,
@@ -255,9 +265,23 @@ impl Scene {
 
     /// Build a scene from its serializable form, resolving asset paths via
     /// `assets`.
+    ///
+    /// Custom components are not applied; use [`Scene::from_desc_with`] to load a
+    /// scene that carries registered custom components.
     pub fn from_desc(desc: &SceneDesc, assets: &AssetRegistry) -> Scene {
-        let mut scene = Scene::with_mode(desc.name.clone(), desc.mode);
-        instantiate_into(&mut scene.world, desc, assets, None);
+        Scene::from_desc_with(desc, assets, &ComponentRegistry::new())
+    }
+
+    /// Like [`Scene::from_desc`], but with a component registry, so registered
+    /// custom components are instantiated.
+    pub fn from_desc_with(
+        desc: &SceneDesc,
+        assets: &AssetRegistry,
+        components: &ComponentRegistry,
+    ) -> Scene {
+        let mut scene = Scene::with_mode(desc.name.clone(), desc.mode)
+            .with_component_registry(components.clone());
+        instantiate_into_with(&mut scene.world, desc, assets, None, components);
         scene.update_transforms();
         scene
     }
@@ -272,9 +296,19 @@ impl Scene {
     /// Every asset reference must resolve against `assets`: a reference to a
     /// missing asset is an error that names the path, never a silent blank.
     pub fn from_json(json: &str, assets: &AssetRegistry) -> Result<Scene, SceneError> {
+        Scene::from_json_with(json, assets, &ComponentRegistry::new())
+    }
+
+    /// Like [`Scene::from_json`], but with a component registry, so registered
+    /// custom components load.
+    pub fn from_json_with(
+        json: &str,
+        assets: &AssetRegistry,
+        components: &ComponentRegistry,
+    ) -> Result<Scene, SceneError> {
         let desc: SceneDesc =
             serde_json::from_str(json).map_err(|e| SceneError::Parse(e.to_string()))?;
-        Scene::try_from_desc(&desc, assets)
+        Scene::try_from_desc_with(&desc, assets, components)
     }
 
     /// Build a scene from its serializable form, erroring if any asset reference
@@ -284,14 +318,31 @@ impl Scene {
     /// document is loaded (so a broken reference is loud), and the lenient
     /// `from_desc` for restoring snapshots that are known to be resolvable.
     pub fn try_from_desc(desc: &SceneDesc, assets: &AssetRegistry) -> Result<Scene, SceneError> {
+        Scene::try_from_desc_with(desc, assets, &ComponentRegistry::new())
+    }
+
+    /// Like [`Scene::try_from_desc`], but with a component registry.
+    ///
+    /// A custom component naming a type that is not registered is an error that
+    /// names the type — the scene needs the crate that defines it to be linked in.
+    pub fn try_from_desc_with(
+        desc: &SceneDesc,
+        assets: &AssetRegistry,
+        components: &ComponentRegistry,
+    ) -> Result<Scene, SceneError> {
         for entity in &desc.entities {
             for component in &entity.components {
+                if let ComponentDesc::Custom { name, .. } = component
+                    && !components.has(name)
+                {
+                    return Err(SceneError::UnknownComponent(name.clone()));
+                }
                 if let Some(path) = missing_asset(component, assets) {
                     return Err(SceneError::MissingAsset(path.to_string()));
                 }
             }
         }
-        Ok(Scene::from_desc(desc, assets))
+        Ok(Scene::from_desc_with(desc, assets, components))
     }
 }
 
@@ -307,6 +358,8 @@ pub enum SceneError {
     Version(u32),
     /// A component referenced an asset that is not in the registry.
     MissingAsset(String),
+    /// A scene named a custom component whose type is not registered.
+    UnknownComponent(String),
 }
 
 impl std::fmt::Display for SceneError {
@@ -315,6 +368,12 @@ impl std::fmt::Display for SceneError {
             SceneError::Parse(msg) => write!(f, "scene parse error: {msg}"),
             SceneError::Version(v) => write!(f, "unsupported scene format version: {v}"),
             SceneError::MissingAsset(path) => write!(f, "missing asset reference: {path}"),
+            SceneError::UnknownComponent(name) => {
+                write!(
+                    f,
+                    "unknown component type '{name}': is its crate linked in?"
+                )
+            }
         }
     }
 }
@@ -323,12 +382,24 @@ impl std::error::Error for SceneError {}
 
 /// Spawn the entities in `desc` into `world` under an optional `parent`.
 ///
-/// Returns the entities in document order.
+/// Returns the entities in document order. Custom components are not applied; use
+/// [`instantiate_into_with`] when the scene carries registered custom components.
 pub fn instantiate_into(
     world: &mut World,
     desc: &SceneDesc,
     assets: &AssetRegistry,
     parent: Option<Entity>,
+) -> Vec<Entity> {
+    instantiate_into_with(world, desc, assets, parent, &ComponentRegistry::new())
+}
+
+/// Like [`instantiate_into`], but with a component registry.
+pub fn instantiate_into_with(
+    world: &mut World,
+    desc: &SceneDesc,
+    assets: &AssetRegistry,
+    parent: Option<Entity>,
+    components: &ComponentRegistry,
 ) -> Vec<Entity> {
     let mut id_to_entity: HashMap<u32, Entity> = HashMap::new();
     for e in &desc.entities {
@@ -348,7 +419,7 @@ pub fn instantiate_into(
             world.insert(entity, Visible(false));
         }
         for component in &e.components {
-            apply_component(world, entity, component, assets);
+            apply_component(world, entity, component, assets, components);
         }
     }
     // Parent links, then attach the whole subtree to `parent`.
@@ -364,7 +435,12 @@ pub fn instantiate_into(
     desc.entities.iter().map(|e| id_to_entity[&e.id]).collect()
 }
 
-fn component_descs(world: &World, entity: Entity, assets: &AssetRegistry) -> Vec<ComponentDesc> {
+fn component_descs(
+    world: &World,
+    entity: Entity,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> Vec<ComponentDesc> {
     let mut out = Vec::new();
     if let Some(c) = world.get::<Camera>(entity) {
         out.push(ComponentDesc::Camera {
@@ -453,6 +529,13 @@ fn component_descs(world: &World, entity: Entity, assets: &AssetRegistry) -> Vec
             depth_test: t.depth_test,
         });
     }
+    // Registered custom components, sorted by name (deterministic).
+    for (name, data) in components.serialize_entity(world, entity) {
+        out.push(ComponentDesc::Custom {
+            name: name.to_string(),
+            data,
+        });
+    }
     out
 }
 
@@ -483,6 +566,7 @@ fn apply_component(
     entity: Entity,
     desc: &ComponentDesc,
     assets: &AssetRegistry,
+    components: &ComponentRegistry,
 ) {
     match desc {
         ComponentDesc::Camera {
@@ -663,6 +747,11 @@ fn apply_component(
                     depth_test: *depth_test,
                 },
             );
+        }
+        ComponentDesc::Custom { name, data } => {
+            // The strict loader already validated the name; a lenient
+            // `from_desc_with` on an unknown or malformed entry skips it.
+            let _ = components.deserialize(world, entity, name, data);
         }
     }
 }
@@ -1133,6 +1222,15 @@ pub enum ComponentDesc {
         /// Whether geometry in front hides the text.
         depth_test: bool,
     },
+    /// A component defined outside the engine, registered by name.
+    ///
+    /// Serialized as `{ "type": "custom", "name": "Health", "data": { ... } }`.
+    Custom {
+        /// The registered component name.
+        name: String,
+        /// The component's data (its fields).
+        data: serde_json::Value,
+    },
 }
 
 /// A reusable, serializable subtree that can be instantiated into a scene.
@@ -1161,6 +1259,18 @@ impl Prefab {
         parent: Option<Entity>,
     ) -> Vec<Entity> {
         instantiate_into(world, &self.scene, assets, parent)
+    }
+
+    /// Like [`Prefab::instantiate`], but with a component registry, so registered
+    /// custom components in the prefab are instantiated.
+    pub fn instantiate_with(
+        &self,
+        world: &mut World,
+        assets: &AssetRegistry,
+        parent: Option<Entity>,
+        components: &ComponentRegistry,
+    ) -> Vec<Entity> {
+        instantiate_into_with(world, &self.scene, assets, parent, components)
     }
 
     /// Serialize to pretty JSON.
@@ -1496,5 +1606,87 @@ mod tests {
         let children = children_of(&world, root);
         assert_eq!(children.len(), docs_without_parent);
         assert_eq!(spawned.len(), desc.entities.len());
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    impl crate::reflect::Component for Health {
+        const NAME: &'static str = "Health";
+    }
+
+    fn health_registry() -> ComponentRegistry {
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Health>();
+        registry
+    }
+
+    #[test]
+    fn a_custom_component_round_trips_through_json() {
+        let assets = AssetRegistry::with_defaults();
+        let registry = health_registry();
+
+        let mut scene = Scene::new("Custom").with_component_registry(registry.clone());
+        let entity = scene.world.spawn();
+        scene.world.insert(entity, Name::new("Hero"));
+        scene.world.insert(entity, LocalTransform::default());
+        scene.world.insert(
+            entity,
+            Health {
+                current: 3.0,
+                max: 10.0,
+            },
+        );
+
+        let json = scene.to_json(&assets);
+        assert!(json.contains("\"type\": \"custom\""), "{json}");
+        assert!(json.contains("\"name\": \"Health\""), "{json}");
+
+        let reloaded = Scene::from_json_with(&json, &assets, &registry).expect("parse");
+        let hero = reloaded
+            .world
+            .entities_with::<Health>()
+            .into_iter()
+            .next()
+            .expect("the custom component survived");
+        assert_eq!(
+            reloaded.world.get::<Health>(hero),
+            Some(&Health {
+                current: 3.0,
+                max: 10.0
+            })
+        );
+        // A round trip through JSON is byte-identical.
+        assert_eq!(json, reloaded.to_json(&assets));
+    }
+
+    #[test]
+    fn an_unregistered_custom_component_is_a_load_error() {
+        let json = r#"{
+            "name": "S",
+            "entities": [{
+                "id": 0,
+                "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                "components": [
+                    { "type": "custom", "name": "Nope", "data": {} }
+                ]
+            }]
+        }"#;
+        let assets = AssetRegistry::with_defaults();
+        // Without a registry it is unknown; with one that lacks it, too.
+        let Err(err) = Scene::from_json(json, &assets) else {
+            panic!("expected an unknown-component error");
+        };
+        assert!(
+            matches!(err, SceneError::UnknownComponent(ref n) if n == "Nope"),
+            "{err:?}"
+        );
+        let Err(err) = Scene::from_json_with(json, &assets, &health_registry()) else {
+            panic!("expected an unknown-component error");
+        };
+        assert!(matches!(err, SceneError::UnknownComponent(_)), "{err:?}");
     }
 }

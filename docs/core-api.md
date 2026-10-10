@@ -102,6 +102,35 @@ Component types must be `Send + Sync + 'static`.
   entity. `size` is the line height in world units; glyphs are rasterized on
   demand by the renderer.
 
+### Custom components (`ecs::reflect`)
+
+The built-in components are a closed set; a consumer may register its own so they
+round-trip through a scene like a built-in. `World` already stores any
+`Send + Sync + 'static` type — only *reflection* is added. See
+[`docs/embedding.md`](embedding.md).
+
+- `Component` — for a registered type: `const NAME: &'static str`, and
+  `Send + Sync + 'static + Serialize + DeserializeOwned + Default`. Optional
+  `fn fields() -> Vec<Field>` (the editor/reflection schema) and
+  `fn references(&self) -> Vec<String>` (asset references for the bundler).
+- `Field { name: &'static str, kind: FieldKind }`; `FieldKind::Number | Integer |
+  Boolean | Text | Vec3 | Color | Asset | Enum(&'static [&'static str])`, with
+  `Field::number/integer/boolean/text/vec3/color/asset/enumeration` builders.
+- `ComponentRegistry` — `new()`, `register::<C>()`, `has(name)`, `names()` (sorted),
+  `fields(name)`, `insert_default`, `has_on`, `serialize`, `deserialize`, `remove`,
+  `serialize_entity(world, entity)` (sorted — the save path), `references_of(name,
+  data)`. An unknown name is an error, never a panic.
+- `Scene { name, mode, world, components: ComponentRegistry }` — the scene carries a
+  registry snapshot; `Scene::with_component_registry` sets it and
+  `Scene::from_*_with` load one in.
+- `Scene::from_json_with` / `from_desc_with` / `try_from_desc_with`,
+  `instantiate_into_with`, and `Prefab::instantiate_with` take a
+  `&ComponentRegistry`; the plain variants use an empty registry (built-ins only).
+- `SceneDesc` gains `ComponentDesc::Custom { name: String, data: serde_json::Value }`
+  (serialized `{ "type": "custom", "name": ..., "data": ... }`), and
+  `SceneError::UnknownComponent(String)` reports a `Custom` entry whose type is not
+  registered.
+
 ### Assets (`ecs::assets`)
 
 - `AssetId(u32)` — `NONE`, `is_none()`, `Copy + Eq + Ord + Hash`.

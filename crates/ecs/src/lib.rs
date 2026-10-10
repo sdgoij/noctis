@@ -24,6 +24,7 @@ pub mod app;
 pub mod assets;
 pub mod components;
 pub mod primitives;
+pub mod reflect;
 pub mod resources;
 pub mod scene;
 pub mod world;
@@ -40,6 +41,7 @@ pub mod prelude {
         Light, LightKind, LocalTransform, MeshRenderer, Name, Parent, PrefabInstance, Projection,
         RigidBody, Script, Text, TextAnchor, Visible,
     };
+    pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
     pub use crate::resources::{ActionMap, Events, InputState, Key, MouseButton, MouseState, Time};
     pub use crate::scene::{
         Prefab, Scene, SceneDesc, SceneError, SceneMode, children_of, instantiate_into,
