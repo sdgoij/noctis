@@ -18,7 +18,8 @@
 > directory (the path-based entry points remain for the native editor). A project
 > can be packaged into a `.zip` **bundle** with `noctis pack` (`Project::bundle`,
 > `vfs::zip_store`); `Project::open_in(ZipStore, root)` reads it back, and
-> `noctis run --bundle <file.zip>` opens and runs one (its default scene). The
+> `noctis run --bundle <file.zip>` opens and runs one (its default scene). GPU
+> startup is `await`-able (`Renderer::headless_async`/`for_surface_async`). The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -80,7 +81,7 @@ Nothing in this document is implemented; it is the plan and the contract.
 | --- | --- | --- |
 | Core sim | `math`, `ecs`, `physics` | **Clean.** No fs/thread/net; `rapier3d` has real `wasm32` builds. |
 | Asset decode | `render` (CPU side), `project` (parse) | **Clean if fed bytes.** `image`/`gltf`/`ab_glyph` and `toml` are pure Rust. |
-| GPU | `render` | wgpu has a WebGPU backend, but device init is **synchronous today** (`pollster::block_on(request_adapter/request_device)`) — it must become `await`-able. |
+| GPU | `render` | wgpu has a WebGPU backend, and device init is now `await`-able: `Renderer::headless_async`/`for_surface_async` wrap the one `open_device` await point, and the native `headless`/`for_surface` block on them (`pollster::block_on`, `#[cfg(not(target_arch = "wasm32"))]`). |
 | Window / input / UI | `platform` | winit has a wasm backend and `egui-wgpu` paints to a canvas, but this is the least-travelled path; a new web host implements the same `AppDriver` seam. |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
 | Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend; decoding from bytes is now in place (`audio::load_clip_bytes`), so only the output sink is missing. |
@@ -124,7 +125,9 @@ New crates (names provisional; they never leak into the native-only build):
   is the generic client; the project comes from the bundle, not the binary.
 - **`render` async init** — split device creation behind an `async fn` so the web
   host can `await` `request_adapter`/`request_device`; the native path keeps its
-  `pollster::block_on` wrapper.
+  `pollster::block_on` wrapper. **Shipped**: `open_device` (the single await
+  point), `Renderer::headless_async`/`for_surface_async`, and the gated native
+  `headless`/`for_surface` wrappers.
 - **`audio` web backend** — a WebAudio source/sink behind the same engine API
   (`AudioEngine`), with `silent()` already available for a no-audio fallback;
   decoding via a pure-Rust decoder fed bytes.

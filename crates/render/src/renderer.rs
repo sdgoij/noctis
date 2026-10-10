@@ -252,30 +252,57 @@ fn uniform_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer
     })
 }
 
-impl Renderer {
-    /// Create a headless renderer rendering into offscreen textures.
-    ///
-    /// Returns [`RenderError::NoAdapter`] when no graphics adapter is available.
-    pub fn headless(config: RendererConfig) -> Result<Renderer, RenderError> {
-        let instance = wgpu::Instance::default();
-        let options = wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        };
-        let adapter = pollster::block_on(instance.request_adapter(&options))
-            .map_err(|_| RenderError::NoAdapter)?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+/// Request an adapter (optionally one that can present to `compatible_surface`)
+/// and a device.
+///
+/// This is the single await point of GPU startup: a host that runs on an event
+/// loop (the browser) drives it with `.await`, while the native constructors
+/// block on it. Kept as one function so both paths open the device identically.
+async fn open_device(
+    instance: &wgpu::Instance,
+    compatible_surface: Option<&wgpu::Surface<'static>>,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RenderError> {
+    let options = wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface,
+        apply_limit_buckets: false,
+    };
+    let adapter = instance
+        .request_adapter(&options)
+        .await
+        .map_err(|_| RenderError::NoAdapter)?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
             label: Some("noctis.render.device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             ..Default::default()
-        }))
+        })
+        .await
         .map_err(|e| RenderError::RequestDevice(e.to_string()))?;
+    Ok((adapter, device, queue))
+}
 
+impl Renderer {
+    /// Create a headless renderer rendering into offscreen textures, awaiting
+    /// adapter and device acquisition.
+    ///
+    /// The async half of [`Renderer::headless`], for a host that drives GPU
+    /// startup on its event loop. Returns [`RenderError::NoAdapter`] when no
+    /// graphics adapter is available.
+    pub async fn headless_async(config: RendererConfig) -> Result<Renderer, RenderError> {
+        let instance = wgpu::Instance::default();
+        let (_adapter, device, queue) = open_device(&instance, None).await?;
         Ok(Self::build_core(device, queue, config))
+    }
+
+    /// Create a headless renderer rendering into offscreen textures.
+    ///
+    /// Returns [`RenderError::NoAdapter`] when no graphics adapter is available.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn headless(config: RendererConfig) -> Result<Renderer, RenderError> {
+        pollster::block_on(Self::headless_async(config))
     }
 
     /// Shared GPU-resource construction, used by both the headless and the
@@ -1140,39 +1167,39 @@ impl Renderer {
         wgpu::Instance::default()
     }
 
+    /// Create a renderer that presents to a window `surface`, awaiting adapter
+    /// and device acquisition.
+    ///
+    /// The async half of [`Renderer::for_surface`]. The `surface` must have been
+    /// created from the same `instance` (`instance.create_surface(window)`).
+    /// Returns [`RenderError::NoAdapter`] when no adapter can drive the surface.
+    pub async fn for_surface_async(
+        config: RendererConfig,
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<Renderer, RenderError> {
+        let (adapter, device, queue) = open_device(&instance, Some(&surface)).await?;
+        let caps = surface.get_capabilities(&adapter);
+        let format = pick_surface_format(&caps.formats)
+            .ok_or_else(|| RenderError::Unsupported("surface advertises no formats".into()))?;
+
+        let mut renderer = Self::build_core(device, queue, config);
+        renderer.attach_surface(surface, &caps, format)?;
+        Ok(renderer)
+    }
+
     /// Create a renderer that presents to a window `surface`.
     ///
     /// The `surface` must have been created from the same `instance`
     /// (`instance.create_surface(window)`). Returns [`RenderError::NoAdapter`]
     /// when no adapter can drive the surface.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn for_surface(
         config: RendererConfig,
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
     ) -> Result<Renderer, RenderError> {
-        let options = wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-            apply_limit_buckets: false,
-        };
-        let adapter = pollster::block_on(instance.request_adapter(&options))
-            .map_err(|_| RenderError::NoAdapter)?;
-        let caps = surface.get_capabilities(&adapter);
-        let format = pick_surface_format(&caps.formats)
-            .ok_or_else(|| RenderError::Unsupported("surface advertises no formats".into()))?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("noctis.render.device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            ..Default::default()
-        }))
-        .map_err(|e| RenderError::RequestDevice(e.to_string()))?;
-
-        let mut renderer = Self::build_core(device, queue, config);
-        renderer.attach_surface(surface, &caps, format)?;
-        Ok(renderer)
+        pollster::block_on(Self::for_surface_async(config, instance, surface))
     }
 
     fn attach_surface(
@@ -1678,6 +1705,26 @@ mod tests {
         let (center, radius) = scene_bounds(&list);
         assert!(radius > 0.0);
         assert!(math::vec3_approx_eq(center, vec3(0.0, 0.0, 0.0), 1e-6));
+    }
+
+    /// The async constructor opens a device with the requested size (or skips).
+    #[test]
+    fn headless_async_opens_a_device_or_reports_no_adapter() {
+        let config = RendererConfig {
+            width: 32,
+            height: 32,
+            ..Default::default()
+        };
+        let renderer = match pollster::block_on(Renderer::headless_async(config)) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+        let config = renderer.config();
+        assert_eq!((config.width, config.height), (32, 32));
     }
 
     /// The GPU path is exercised only when an adapter exists; otherwise the
