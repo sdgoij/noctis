@@ -203,7 +203,6 @@ impl App {
 
     /// Advance the simulation by one frame with the given raw delta time.
     pub fn tick(&mut self, raw_delta: f32) {
-        self.context.input.begin_frame();
         self.context.time.advance(raw_delta);
 
         let App {
@@ -231,6 +230,10 @@ impl App {
         run_stage(late, context);
 
         context.events.update();
+        // Clear per-frame input *after* the stages consume it, so events fed
+        // between ticks (a window's mouse motion and wheel, key edges) are visible
+        // to this frame's systems. Clearing at the start would discard them.
+        context.input.begin_frame();
     }
 
     /// Run the loop up to `max_frames` frames (or until an exit is requested),
@@ -373,5 +376,41 @@ mod tests {
         app.tick(0.016);
         app.tick(0.016);
         assert_eq!(ticks.get(), 2);
+    }
+
+    #[test]
+    fn input_fed_before_a_tick_reaches_the_update_system() {
+        let mut app = App::new("t");
+        let seen = Arc::new(AtomicU32::new(0));
+        let s = Arc::clone(&seen);
+        app.on_update("read_input", move |ctx| {
+            let w = Key::letter('W').expect("W is a letter key");
+            if ctx.input.key_down(w)
+                && ctx.input.mouse.delta[0] != 0.0
+                && ctx.input.mouse.scroll != 0.0
+            {
+                s.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        let w = Key::letter('W').expect("W is a letter key");
+        app.context.input.press_key(w);
+        app.context.input.set_mouse_position(10.0, 0.0);
+        app.context.input.add_scroll(2.0);
+        app.tick(0.016);
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            1,
+            "the frame's mouse delta and scroll reached the system"
+        );
+
+        // With no new events, the next frame sees the edges cleared.
+        app.tick(0.016);
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            1,
+            "per-frame input is cleared after the frame"
+        );
+        assert!(app.context.input.key_down(w), "held keys survive");
     }
 }

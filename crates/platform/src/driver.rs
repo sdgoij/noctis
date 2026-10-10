@@ -37,11 +37,13 @@ pub trait AppDriver {
     /// The camera entity to render from, if the driver has one.
     fn camera(&self) -> Option<Entity>;
 
-    /// Input state to feed key events into, if the driver accepts them.
+    /// Input state to feed events into, if the driver accepts them.
     ///
-    /// Note that the engine's frame loop clears per-frame edge state
-    /// (`key_pressed`/`key_released`) at the start of each frame; a driver that
-    /// wants edge semantics must sample them itself. `key_down` survives.
+    /// The host feeds window events (keys, mouse motion, wheel, buttons) here
+    /// between frames. The engine's frame loop consumes the batch and then clears
+    /// per-frame state (`key_pressed`/`key_released`, `mouse.delta`/`mouse.scroll`)
+    /// at the end of the tick, so a system running during the tick observes the
+    /// frame's input. Held state (`key_down`, `mouse.is_down`) survives.
     fn input_mut(&mut self) -> Option<&mut InputState> {
         None
     }
