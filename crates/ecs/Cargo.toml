@@ -9,5 +9,10 @@ repository.workspace = true
 
 [dependencies]
 math.workspace = true
+ecs-macros.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -113,6 +113,10 @@ round-trip through a scene like a built-in. `World` already stores any
   `Send + Sync + 'static + Serialize + DeserializeOwned + Default`. Optional
   `fn fields() -> Vec<Field>` (the editor/reflection schema) and
   `fn references(&self) -> Vec<String>` (asset references for the bundler).
+  `#[derive(Component)]` (from the `ecs-macros` crate, re-exported by `ecs`)
+  implements it for a struct with named fields, inferring each field's kind from its
+  Rust type and honouring `#[component(name = "...")]` and
+  `#[field(skip | number | integer | boolean | text | vec3 | color | asset | options = "a, b")]`.
 - `Field { name: &'static str, kind: FieldKind }`; `FieldKind::Number | Integer |
   Boolean | Text | Vec3 | Color | Asset | Enum(&'static [&'static str])`, with
   `Field::number/integer/boolean/text/vec3/color/asset/enumeration` builders.

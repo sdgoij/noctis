@@ -10,6 +10,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 |---|---|---|
 | `math` | `crates/math` | glm-based vectors/matrices + our `Quat`/`Transform`/`Aabb`. |
 | `ecs` | `crates/ecs` | ECS, components, scene + hierarchy, assets, resources, app loop. |
+| `ecs-macros` | `crates/ecs-macros` | `#[derive(Component)]` for custom (registered) components. |
 | `render` | `crates/render` | wgpu 30 PBR renderer: glTF import, IBL, soft shadows, SSAO, HDR tonemapping, gizmos. |
 | `physics` | `crates/physics` | rapier3d 0.36 integration (`PhysicsWorld`). |
 | `audio` | `crates/audio` | rodio 0.22 engine with 3D spatialization. |

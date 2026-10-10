@@ -113,11 +113,16 @@ pub trait Component: Send + Sync + 'static + Serialize + DeserializeOwned + Defa
 ```
 
 Built-in components already serialize through the closed `ComponentDesc` enum and
-stay that way; `Component` is the *extension* path. The crate also exports the
-`Component`, `ComponentRegistry`, `Field`, and `FieldKind` types from
-`ecs::reflect` (and `ecs::prelude`). A `#[derive(Component)]` macro — not yet
-written — will generate `NAME` and `fields` from the struct and its attributes,
-with a hand-written impl as the fallback (as shipped in phase 1).
+stay that way; `Component` is the *extension* path. The `ecs::reflect` types
+(`Component`, `ComponentRegistry`, `Field`, `FieldKind`) are re-exported from
+`ecs::prelude`, and `#[derive(Component)]` (from `ecs-macros`) implements the trait:
+`NAME` is the struct name or `#[component(name = "...")]`; each named field becomes
+a `Field` whose kind is inferred from the Rust type (`f32`/`f64` → number, the
+integer types → integer, `bool` → boolean, `String` → text, `[f32; 3]` → vector,
+`[f32; 4]` → colour, anything else → text), overridable with
+`#[field(number|integer|boolean|text|vec3|color|asset|options = "a, b, c")]`;
+`#[field(skip)]` omits a field; and a `#[field(asset)]` field (a `String` or
+`Option<String>`) is returned from `references`, so the bundler ships it.
 
 ### The registry
 
@@ -268,13 +273,13 @@ of the first cut, and is called out in the ABI documentation when added.
 
 ## Phasing
 
-1. **Component registry + `ComponentDesc::Custom`.** *(Shipped, except the derive
-   macro.)* The `Component` trait, the `ComponentRegistry`, scene round-trip via the
-   `Scene::components` registry and the `_with` loaders, and `ComponentDesc::Custom`
-   with an unknown-type load error. Tested with a host-registered component; no
-   project Rust yet. Still to do in this phase: the `#[derive(Component)]` macro and
-   the bundler scan of `Custom` references (needs the registry at the bundler, which
-   arrives with the plugin in phase 2).
+1. **Component registry + `ComponentDesc::Custom`.** *(Shipped, except the bundler
+   scan.)* The `Component` trait, the `ComponentRegistry`, `#[derive(Component)]`,
+   scene round-trip via the `Scene::components` registry and the `_with` loaders, and
+   `ComponentDesc::Custom` with an unknown-type load error. Tested with a
+   host-registered component (a hand-written impl and a derived one); no project Rust
+   yet. Still to do: the bundler scan of `Custom` references (needs the registry at
+   the bundler, which arrives with the plugin in phase 2).
 2. **The `Plugin` seam and `[rust]`.** The plugin binary the tool builds and runs,
    for `run` first, then `editor`, then `build`. Also wires the registry into the
    bundler.

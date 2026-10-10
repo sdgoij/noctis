@@ -29,6 +29,9 @@ pub mod resources;
 pub mod scene;
 pub mod world;
 
+/// Derive the `Component` trait (see [`reflect::Component`]).
+pub use ecs_macros::Component;
+
 /// The most commonly used imports.
 pub mod prelude {
     pub use crate::app::{App, EngineContext, EngineEvent, Stage, System};
@@ -48,6 +51,7 @@ pub mod prelude {
         propagate_transforms, set_parent,
     };
     pub use crate::world::{Entities, Entity, Query, QueryMut, QueryWith, World};
+    pub use ecs_macros::Component;
     pub use math;
     pub use math::{Aabb, Mat4, Quat, Transform, Vec2, Vec3, Vec4};
 }
