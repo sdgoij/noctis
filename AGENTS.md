@@ -35,9 +35,9 @@ paths and references, import, and build targets — is designed in
 
 Embedding the engine in a Rust application, and carrying Rust in a project (the
 `Plugin` seam, scene-authorable custom components, and script reflection), is
-designed in [`docs/embedding.md`](docs/embedding.md). It is planned, not yet
-implemented; when built, it extends the `ecs` core contract (a component
-registry) and `docs/core-api.md` is updated with it.
+designed in [`docs/embedding.md`](docs/embedding.md). The `Plugin` seam and project
+Rust are shipped (it extends the `ecs` core contract — a component registry — which
+`docs/core-api.md` records); script reflection is not yet built.
 
 ## Commands
 
@@ -141,16 +141,17 @@ needed.
   which works because the script runtime's module cache is keyed by source. Only
   scripts embed for now — scenes, models, textures, audio, fonts, and HDR
   environments stay loose files, so packaging larger assets is still to come.
-- **Project Rust (a `[rust]` plugin)** is partially shipped (see
+- **Project Rust (a `[rust]` plugin)** is shipped (see
   [`docs/embedding.md`](docs/embedding.md)). A project that carries Rust declares a
   plugin crate in `[rust]` (`crate`, `plugin`); `noctis run`/`editor` generate a
-  per-project binary under the project's gitignored `.noctis/tool/` that links it
-  and dispatches the same CLI, so a scene can use the plugin's custom components and
-  its systems run. The `Component` derive resolves its crate path for both `ecs`
-  consumers and `noctis`-only plugin crates. **Not yet:** a plugin-linked
-  `noctis build`/export (it needs a generated *client* crate, not the tool) —
-  `noctis build` errors for a `[rust]` project instead of shipping a plugin-less
-  game; and the bundler scan of a custom component's asset references.
+  per-project **tool** under the project's gitignored `.noctis/tool/` that links it
+  and dispatches the same CLI, and `noctis build` generates a plugin-linked
+  **client** under `.noctis/client/` (runtime + plugin, no editor) to ship, baking
+  scripts in for a release build. A registered custom component's asset references
+  are bundled. The `Component` derive resolves its crate path for both `ecs`
+  consumers and `noctis`-only plugin crates, and `noctis`'s `editor` is a default
+  feature so a shipped plugin game can drop it. **Not yet:** script reflection over
+  custom components (phase 3) and native-WebAssembly reflection.
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
   `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):

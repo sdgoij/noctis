@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use ecs::app::Plugin;
 use project::{AssetPath, Profile, Project};
 use runtime::build::{BuildOptions, build_project};
 
@@ -46,8 +47,10 @@ OPTIONS:
     --project <DIR>      The project directory (a noctis.toml). Required.
     -h, --help           Show this help.";
 
-/// Parse `build`'s options and run the build.
-pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
+/// Parse `build`'s options and run the build. `plugin` is the project's Rust: a
+/// `[rust]` project links it into the exported game and bundles its components'
+/// asset references.
+pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
     let mut project: Option<String> = None;
     let mut target: Option<String> = None;
     let mut options = BuildOptions::default();
@@ -115,23 +118,18 @@ pub(crate) fn build(args: &[String]) -> Result<String, CliError> {
     let project =
         project.ok_or_else(|| CliError::Usage("build requires --project <DIR>".into()))?;
     // Fail fast on a bad project before spending time building the client.
-    let opened = Project::open(PathBuf::from(&project))
-        .map_err(|error| CliError::Message(error.to_string()))?;
-    // A project that carries Rust (custom components and systems) needs a
-    // plugin-linked game client, which the export pipeline does not build yet.
-    // Error rather than ship a game silently missing the plugin's components.
-    if opened.manifest().rust.is_some() {
-        return Err(CliError::Message(
-            "building a project with a [rust] plugin is not supported yet; run it with \
-             `noctis run --project <DIR>` (a plugin-linked build is planned)"
-                .into(),
-        ));
-    }
+    Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
 
-    // `build_project` acquires the stripped game client itself (embedding the
-    // project's scripts for a release build), so `noctis build` is one command.
-    let report = build_project(&PathBuf::from(&project), target.as_deref(), &options)
-        .map_err(CliError::Message)?;
+    // `build_project` acquires the game client itself (embedding the project's
+    // scripts for a release build, and linking the plugin for a `[rust]` project),
+    // so `noctis build` is one command.
+    let report = build_project(
+        &PathBuf::from(&project),
+        target.as_deref(),
+        &options,
+        plugin,
+    )
+    .map_err(CliError::Message)?;
     Ok(report.to_string())
 }
 
@@ -190,6 +188,7 @@ pub(crate) fn rename(args: &[String]) -> Result<String, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ecs::app::NullPlugin;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -198,7 +197,7 @@ mod tests {
     #[test]
     fn build_requires_a_project() {
         assert!(matches!(
-            build(&args(&["--target", "game"])),
+            build(&args(&["--target", "game"]), &NullPlugin),
             Err(CliError::Usage(_))
         ));
     }
@@ -206,34 +205,15 @@ mod tests {
     #[test]
     fn build_reports_a_missing_project() {
         assert!(matches!(
-            build(&args(&["--project", "does-not-exist-xyz"])),
+            build(&args(&["--project", "does-not-exist-xyz"]), &NullPlugin),
             Err(CliError::Message(_))
         ));
     }
 
     #[test]
-    fn build_refuses_a_project_with_rust() {
-        let dir = std::env::temp_dir().join(format!("noctis-build-rust-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        std::fs::write(
-            dir.join("noctis.toml"),
-            "[project]\nname = \"T\"\n\n[rust]\n",
-        )
-        .expect("manifest");
-
-        let err = build(&args(&["--project", dir.to_str().unwrap()])).unwrap_err();
-        match err {
-            CliError::Message(message) => assert!(message.contains("[rust]"), "{message}"),
-            other => panic!("expected a message error, got {other:?}"),
-        }
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn unknown_build_option_is_a_usage_error() {
         assert!(matches!(
-            build(&args(&["--project", "p", "--nope"])),
+            build(&args(&["--project", "p", "--nope"]), &NullPlugin),
             Err(CliError::Usage(_))
         ));
     }

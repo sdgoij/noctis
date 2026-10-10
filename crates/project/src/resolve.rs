@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ecs::reflect::ComponentRegistry;
 use ecs::scene::{ComponentDesc, SceneDesc};
 
 use crate::error::ProjectError;
@@ -39,14 +40,17 @@ fn component_references(component: &ComponentDesc) -> Vec<&str> {
         ComponentDesc::AudioSource { clip, .. } => clip.as_deref().into_iter().collect(),
         ComponentDesc::Script { path, .. } => path.as_deref().into_iter().collect(),
         ComponentDesc::Text { font, .. } => font.as_deref().into_iter().collect(),
-        // Cameras, lights, and physics carry no asset references, and a custom
-        // component's references need the component registry (wired in when the
-        // project's Rust is linked), so they contribute nothing here yet.
+        // Cameras, lights, and physics carry no asset references. A custom
+        // component's references need the registry — see
+        // [`scene_references_with`].
         _ => Vec::new(),
     }
 }
 
 /// Every asset reference in `scene`, in document order (with duplicates).
+///
+/// Built-in components only; a custom component's references need the registry —
+/// use [`scene_references_with`].
 pub fn scene_references(scene: &SceneDesc) -> Vec<&str> {
     scene
         .entities
@@ -54,6 +58,26 @@ pub fn scene_references(scene: &SceneDesc) -> Vec<&str> {
         .flat_map(|entity| entity.components.iter())
         .flat_map(component_references)
         .collect()
+}
+
+/// Every asset reference in `scene`, including a registered custom component's.
+///
+/// A `Custom` entry's references come from the registry
+/// ([`ComponentRegistry::references_of`]), so the files a custom component points
+/// at are bundled like a mesh or a clip. An unregistered name contributes nothing.
+pub fn scene_references_with(scene: &SceneDesc, components: &ComponentRegistry) -> Vec<String> {
+    let mut out = Vec::new();
+    for entity in &scene.entities {
+        for component in &entity.components {
+            match component {
+                ComponentDesc::Custom { name, data } => {
+                    out.extend(components.references_of(name, data));
+                }
+                other => out.extend(component_references(other).into_iter().map(str::to_string)),
+            }
+        }
+    }
+    out
 }
 
 /// Map every asset reference in `scene` to the project file that backs it,
@@ -69,16 +93,26 @@ pub fn referenced_files(
     scene: &SceneDesc,
     lookup: &BTreeMap<String, AssetPath>,
 ) -> Result<Vec<AssetPath>, ProjectError> {
+    referenced_files_with(scene, lookup, &ComponentRegistry::new())
+}
+
+/// Like [`referenced_files`], but including a registered custom component's
+/// asset references (from `components`).
+pub fn referenced_files_with(
+    scene: &SceneDesc,
+    lookup: &BTreeMap<String, AssetPath>,
+    components: &ComponentRegistry,
+) -> Result<Vec<AssetPath>, ProjectError> {
     let mut files: BTreeSet<AssetPath> = BTreeSet::new();
-    for reference in scene_references(scene) {
-        if is_builtin(reference) {
+    for reference in scene_references_with(scene, components) {
+        if is_builtin(&reference) {
             continue;
         }
-        match lookup.get(reference) {
+        match lookup.get(&reference) {
             Some(file) => {
                 files.insert(file.clone());
             }
-            None => return Err(ProjectError::MissingAsset(reference.to_string())),
+            None => return Err(ProjectError::MissingAsset(reference)),
         }
     }
     Ok(files.into_iter().collect())
@@ -87,7 +121,24 @@ pub fn referenced_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ecs::reflect::Component;
     use ecs::scene::SceneDesc;
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    struct Portal {
+        texture: String,
+    }
+
+    impl Component for Portal {
+        const NAME: &'static str = "Portal";
+        fn references(&self) -> Vec<String> {
+            if self.texture.is_empty() {
+                Vec::new()
+            } else {
+                vec![self.texture.clone()]
+            }
+        }
+    }
 
     fn scene_with(component_json: &str) -> SceneDesc {
         let json = format!(
@@ -179,6 +230,32 @@ mod tests {
         );
         assert!(
             referenced_files(&none, &BTreeMap::new())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_custom_component_reference_is_bundled() {
+        let scene = scene_with(
+            r#"{ "type": "custom", "name": "Portal", "data": { "texture": "assets/textures/portal.png" } }"#,
+        );
+        let index = lookup(&[("assets/textures/portal.png", "assets/textures/portal.png")]);
+
+        // Without the registry a custom component contributes nothing.
+        assert!(referenced_files(&scene, &index).unwrap().is_empty());
+
+        // With the component registered, its reference resolves to the file.
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Portal>();
+        assert_eq!(
+            referenced_files_with(&scene, &index, &registry).unwrap(),
+            vec![AssetPath::parse("assets/textures/portal.png").unwrap()]
+        );
+
+        // An unregistered name is skipped, not an error.
+        assert!(
+            referenced_files_with(&scene, &index, &ComponentRegistry::new())
                 .unwrap()
                 .is_empty()
         );

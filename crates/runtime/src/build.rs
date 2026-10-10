@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use ecs::app::Plugin;
+use ecs::reflect::ComponentRegistry;
 use ecs::scene::SceneDesc;
 use project::{AssetKind, AssetPath, BuildTarget, Profile, Project, detect};
 
@@ -34,14 +36,23 @@ pub struct BuildOptions {
 /// Build `project_dir` into a self-contained game folder.
 ///
 /// `target` names a `[[build]]` target; when omitted the ad-hoc defaults apply
-/// (`options`, then the project's `default_scene` and name).
+/// (`options`, then the project's `default_scene` and name). `plugin` is the
+/// project's Rust (a `[rust]` project's plugin, else `&NullPlugin`): its
+/// components' asset references are bundled, and a `[rust]` project's game client
+/// links it.
 pub fn build_project(
     project_dir: &Path,
     target: Option<&str>,
     options: &BuildOptions,
+    plugin: &dyn Plugin,
 ) -> Result<ExportReport, String> {
     let project = Project::open(project_dir)
         .map_err(|error| format!("failed to open project {}: {error}", project_dir.display()))?;
+
+    // The plugin's components are needed to scan a scene's `Custom` references.
+    let mut components = ComponentRegistry::new();
+    plugin.register(&mut components);
+    let is_rust = project.manifest().rust.is_some();
 
     let target: Option<&BuildTarget> = match target {
         Some(name) => Some(
@@ -121,6 +132,7 @@ pub fn build_project(
     if profile == Profile::Dev {
         let client = match &options.runtime {
             Some(runtime) => runtime.clone(),
+            None if is_rust => crate::plugin::build_client(&project, Profile::Dev, &[])?,
             None => game_client(Profile::Dev, None)?,
         };
         let environment = project.manifest().render.environment.clone();
@@ -136,7 +148,7 @@ pub fn build_project(
     }
 
     // A release build embeds the scripts in the client and copies the rest.
-    let bundle = bundle_files(&project, &scene_json, true)?;
+    let bundle = bundle_files(&project, &scene_json, true, &components)?;
     let pack = if bundle.scripts.is_empty() {
         None
     } else {
@@ -144,6 +156,7 @@ pub fn build_project(
     };
     let client = match &options.runtime {
         Some(runtime) => runtime.clone(),
+        None if is_rust => crate::plugin::build_client(&project, profile, &bundle.scripts)?,
         None => game_client(profile, pack.as_deref())?,
     };
     export_game(
@@ -221,6 +234,7 @@ fn bundle_files(
     project: &Project,
     scene_json: &str,
     embed_scripts: bool,
+    components: &ComponentRegistry,
 ) -> Result<Bundle, String> {
     let imported = project
         .import_assets()
@@ -234,7 +248,7 @@ fn bundle_files(
     }
     let desc: SceneDesc = serde_json::from_str(scene_json)
         .map_err(|error| format!("failed to parse the scene for the build: {error}"))?;
-    let referenced = project::referenced_files(&desc, &imported.lookup)
+    let referenced = project::referenced_files_with(&desc, &imported.lookup, components)
         .map_err(|error| format!("cannot bundle the scene: {error}"))?;
     let mut files = Vec::with_capacity(referenced.len());
     let mut scripts = Vec::new();
@@ -287,6 +301,7 @@ fn export_file(project: &Project, asset: &AssetPath) -> Result<ExportFile, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ecs::app::NullPlugin;
 
     fn temp_dir(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -365,6 +380,7 @@ mod tests {
                 runtime: Some(test_runtime()),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("build");
 
@@ -404,7 +420,7 @@ mod tests {
             ..BuildOptions::default()
         };
 
-        let error = build_project(&project, None, &options).expect_err("must fail");
+        let error = build_project(&project, None, &options, &NullPlugin).expect_err("must fail");
         assert!(error.contains("audio/gone.wav"), "{error}");
 
         std::fs::remove_dir_all(&project).ok();
@@ -455,7 +471,7 @@ mod tests {
             runtime: Some(test_runtime()),
             ..BuildOptions::default()
         };
-        let report = build_project(&project, None, &options).expect("build");
+        let report = build_project(&project, None, &options, &NullPlugin).expect("build");
 
         // No scene references it, so bundling it is purely the manifest's doing.
         assert_eq!(report.files, vec!["assets/hdris/sky.hdr".to_string()]);
@@ -477,8 +493,13 @@ mod tests {
     fn an_unknown_target_is_an_error() {
         let project = temp_dir("target");
         write(&project.join("noctis.toml"), MANIFEST);
-        let error =
-            build_project(&project, Some("nope"), &BuildOptions::default()).expect_err("must fail");
+        let error = build_project(
+            &project,
+            Some("nope"),
+            &BuildOptions::default(),
+            &NullPlugin,
+        )
+        .expect_err("must fail");
         assert!(error.contains("no build target named"), "{error}");
         std::fs::remove_dir_all(&project).ok();
     }
@@ -499,7 +520,8 @@ mod tests {
             runtime: Some(test_runtime()),
             ..BuildOptions::default()
         };
-        let report = build_project(&project, Some("release"), &options).expect("build");
+        let report =
+            build_project(&project, Some("release"), &options, &NullPlugin).expect("build");
         // `output` is project-relative; the name comes from the target.
         assert_eq!(report.directory, project.join("out/release"));
         assert_eq!(
@@ -541,7 +563,7 @@ mod tests {
             ..BuildOptions::default()
         };
 
-        let report = build_project(&project, None, &options).expect("build");
+        let report = build_project(&project, None, &options, &NullPlugin).expect("build");
 
         // The script is baked into the client, so it is neither copied into the
         // folder nor listed among the bundled files — but it is in the pack.
@@ -574,6 +596,7 @@ mod tests {
                 runtime: Some(runtime.clone()),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("release build");
         assert_eq!(release.directory, project.join("dist/release"));
@@ -587,6 +610,7 @@ mod tests {
                 profile: Some(Profile::Dev),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("dev build");
         assert_eq!(dev.directory, project.join("dist/dev"));
@@ -613,6 +637,7 @@ mod tests {
                 runtime: Some(test_runtime()),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("build");
         assert_eq!(report.directory, project.join("dist/release/level-one"));
@@ -651,6 +676,7 @@ mod tests {
                 profile: Some(Profile::Dev),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("dev build");
 
@@ -693,6 +719,7 @@ mod tests {
                 runtime: Some(test_runtime()),
                 ..BuildOptions::default()
             },
+            &NullPlugin,
         )
         .expect("build");
 

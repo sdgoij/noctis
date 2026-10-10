@@ -206,7 +206,7 @@ pub fn run_cli_with_plugin(
     }
 
     if let Some(destination) = args.export.clone() {
-        return match do_export(&args, &destination) {
+        return match do_export(&args, &destination, plugin) {
             Ok(report) => {
                 println!("{report}");
                 ExitCode::SUCCESS
@@ -422,7 +422,7 @@ fn bundled_next_to_exe() -> Option<PathBuf> {
 }
 
 /// Export a self-contained game folder for `destination`.
-fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
+fn do_export(args: &Args, destination: &str, plugin: &dyn Plugin) -> Result<ExportReport, String> {
     // A project build bundles the referenced assets and acquires the client
     // itself (embedding the project's scripts for a release build).
     if let Some(dir) = export_project_dir(args) {
@@ -432,7 +432,7 @@ fn do_export(args: &Args, destination: &str) -> Result<ExportReport, String> {
             scene: args.scene.clone(),
             ..BuildOptions::default()
         };
-        return build_project(Path::new(&dir), args.target.as_deref(), &options);
+        return build_project(Path::new(&dir), args.target.as_deref(), &options, plugin);
     }
 
     // A loose scene has no project, so no scripts to embed: ship the stripped

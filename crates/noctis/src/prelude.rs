@@ -12,6 +12,7 @@
 
 pub use audio::AudioEngine;
 pub use ecs::prelude::*;
+#[cfg(feature = "editor")]
 pub use editor::{ComponentName, Editor, EditorCommand, EntityRef};
 pub use physics::{PhysicsConfig, PhysicsWorld};
 pub use render::{Frame, RenderError, Renderer, RendererConfig};

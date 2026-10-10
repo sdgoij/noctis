@@ -43,5 +43,7 @@ pub use manifest::{
 pub use path::{AssetKind, AssetPath, detect};
 pub use project::{MANIFEST_FILE, Project, SceneInfo};
 pub use rename::{RenameReport, rewrite_references};
-pub use resolve::{is_builtin, referenced_files, scene_references};
+pub use resolve::{
+    is_builtin, referenced_files, referenced_files_with, scene_references, scene_references_with,
+};
 pub use settings::{SIDECAR_SUFFIX, TextureImportSettings};

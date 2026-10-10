@@ -72,9 +72,14 @@ enum Route {
     /// Print `text` and exit successfully.
     Print(String),
     /// Hand the remaining arguments to the editor CLI.
+    #[cfg(feature = "editor")]
     Editor(Vec<String>),
     /// Hand the remaining arguments to the game CLI.
     Run(Vec<String>),
+    /// Hand the remaining arguments to the build command.
+    Build(Vec<String>),
+    /// Hand the remaining arguments to the rename command.
+    Rename(Vec<String>),
     /// Fail.
     Fail(CliError),
 }
@@ -86,43 +91,62 @@ fn route(args: &[String]) -> Route {
     let rest = args[1..].to_vec();
     match command.as_str() {
         "-h" | "--help" | "help" => Route::Print(USAGE.to_string()),
+        #[cfg(feature = "editor")]
         "editor" => Route::Editor(rest),
+        #[cfg(not(feature = "editor"))]
+        "editor" => Route::Fail(CliError::Usage(
+            "this build has no editor (the `editor` feature is off)".into(),
+        )),
         "run" => Route::Run(rest),
-        "build" => finish(commands::build(&rest)),
-        "rename" => finish(commands::rename(&rest)),
+        "build" => Route::Build(rest),
+        "rename" => Route::Rename(rest),
         other => Route::Fail(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
 
-fn finish(result: Result<String, CliError>) -> Route {
+/// Print a command's output and turn it into an exit code.
+fn outcome(result: Result<String, CliError>) -> ExitCode {
     match result {
-        Ok(text) => Route::Print(text),
-        Err(error) => Route::Fail(error),
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => report(error),
+    }
+}
+
+fn report(error: CliError) -> ExitCode {
+    match error {
+        CliError::Usage(message) => {
+            eprintln!("noctis: {message}\n");
+            eprintln!("{USAGE}");
+            ExitCode::from(2)
+        }
+        CliError::Message(message) => {
+            eprintln!("noctis: {message}");
+            ExitCode::FAILURE
+        }
     }
 }
 
 /// Dispatch `args`, routing to the crate that implements each subcommand.
 ///
-/// The editor and the game runner receive `plugin`, so a project's Rust (custom
-/// components and systems) is registered before the scene loads. `build`/`rename`
-/// do not consult the plugin.
+/// The editor, the game runner, and the build receive `plugin`, so a project's
+/// Rust (custom components and systems) is registered before the scene loads and
+/// a build bundles the plugin's component asset references. `rename` does not
+/// consult it.
 pub fn dispatch(args: &[String], plugin: &dyn Plugin) -> ExitCode {
     match route(args) {
         Route::Print(text) => {
             println!("{text}");
             ExitCode::SUCCESS
         }
+        #[cfg(feature = "editor")]
         Route::Editor(rest) => editor::cli::run_cli_with_plugin(rest, plugin),
         Route::Run(rest) => runtime::cli::run_cli_with_plugin(rest, &[], plugin),
-        Route::Fail(CliError::Usage(message)) => {
-            eprintln!("noctis: {message}\n");
-            eprintln!("{USAGE}");
-            ExitCode::from(2)
-        }
-        Route::Fail(CliError::Message(message)) => {
-            eprintln!("noctis: {message}");
-            ExitCode::FAILURE
-        }
+        Route::Build(rest) => outcome(commands::build(&rest, plugin)),
+        Route::Rename(rest) => outcome(commands::rename(&rest)),
+        Route::Fail(error) => report(error),
     }
 }
 
