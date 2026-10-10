@@ -133,14 +133,15 @@ needed.
   **not** `Send + Sync`:
   the loop owns them on one thread, which lets a system own a non-thread-safe
   engine. Component types remain `Send + Sync + 'static`.
-  **Component reflection**: JavaScript reads and writes a project's registered
-  (custom) components by name through `has_component`/`get_component` (JSON text)/
-  `set_component`/`remove_component`, backed by the `ComponentRegistry` on the
-  scene (`ScriptCommand::SetComponent`/`RemoveComponent`). Native WebAssembly
-  reaches the same registry through its import ABI with JSON over linear memory
+  **Component reflection**: JavaScript reads and writes components by name through
+  `has_component`/`get_component` (JSON text)/`set_component`/`remove_component`,
+  backed by the scene reflection layer (`ecs::scene`, `ScriptCommand::SetComponent`/
+  `RemoveComponent`). A registered custom component uses its own JSON; a built-in
+  uses its scene-descriptor JSON (`{"type": "rigid_body", ...}`). Native WebAssembly
+  reaches the same layer through its import ABI with JSON over linear memory
   (`has_component`/`get_component` into the module's memory/`set_component`/
-  `remove_component`). Built-in components use their dedicated calls; generic
-  built-in reflection is a follow-up.
+  `remove_component`). The entity-level `LocalTransform`/`Name`/`Active`/`Visible`
+  are not in the reflected list; they keep their dedicated bindings.
 - `noctis build` ships scripts by **profile** (see [`docs/scripts.md`](docs/scripts.md)):
   a `release` build bakes the scene's `.js`/`.wasm` into the `noctis-game` client
   (via `NOCTIS_EMBED_PACK` → `crates/client/build.rs` → `include_bytes!`) and

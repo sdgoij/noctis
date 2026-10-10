@@ -757,6 +757,152 @@ fn apply_component(
 }
 
 // ---------------------------------------------------------------------------
+// Component reflection
+// ---------------------------------------------------------------------------
+//
+// The script bridge reads and writes components by name. A registered custom
+// component's JSON is its own serde form (via `ComponentRegistry`); a built-in
+// component's JSON is its scene descriptor ([`ComponentDesc`]) — the canonical,
+// path-resolving form, since built-ins have no serde impls of their own. Both go
+// through one pair of entry points, so a script sees one uniform API.
+
+/// The reflection name of a scene component descriptor: a built-in's canonical
+/// name (matching
+/// [`ComponentKind`](crate::components::component_index::ComponentKind)) or a
+/// custom component's registered name.
+pub fn desc_name(desc: &ComponentDesc) -> &str {
+    match desc {
+        ComponentDesc::Camera { .. } => "Camera",
+        ComponentDesc::Light { .. } => "Light",
+        ComponentDesc::MeshRenderer { .. } => "MeshRenderer",
+        ComponentDesc::RigidBody { .. } => "RigidBody",
+        ComponentDesc::Collider { .. } => "Collider",
+        ComponentDesc::AudioSource { .. } => "AudioSource",
+        ComponentDesc::Script { .. } => "Script",
+        ComponentDesc::Text { .. } => "Text",
+        ComponentDesc::Custom { name, .. } => name,
+    }
+}
+
+/// The built-in component of `entity` named `name`, in scene-descriptor form.
+///
+/// Only the built-ins that serialize into an entity's `components` array are
+/// reflected; `LocalTransform`/`Name`/`Active`/`Visible` are entity-level and
+/// have their own bindings.
+fn builtin_desc(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    assets: &AssetRegistry,
+) -> Option<ComponentDesc> {
+    component_descs(world, entity, assets, &ComponentRegistry::new())
+        .into_iter()
+        .find(|desc| !matches!(desc, ComponentDesc::Custom { .. }) && desc_name(desc) == name)
+}
+
+/// `true` if `entity` carries the reflected component `name` — a registered
+/// custom (checked through `components`) or a scene-serializable built-in.
+pub fn has_reflected_component(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> bool {
+    if components.has(name) {
+        components.has_on(world, entity, name)
+    } else {
+        builtin_desc(world, entity, name, assets).is_some()
+    }
+}
+
+/// The reflected component `name` on `entity` as JSON: a registered custom's own
+/// JSON, or a built-in's scene-descriptor JSON (`{ "type": "...", ... }`).
+pub fn get_reflected_component(
+    world: &World,
+    entity: Entity,
+    name: &str,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> Option<serde_json::Value> {
+    if components.has(name) {
+        return components.serialize(world, entity, name);
+    }
+    builtin_desc(world, entity, name, assets).and_then(|desc| serde_json::to_value(&desc).ok())
+}
+
+/// Every reflected component on `entity` as `(name, JSON)` — built-ins first,
+/// then registered customs (a custom name shadows a built-in of the same name).
+pub fn reflect_components(
+    world: &World,
+    entity: Entity,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> Vec<(String, serde_json::Value)> {
+    let mut out = Vec::new();
+    for desc in component_descs(world, entity, assets, &ComponentRegistry::new()) {
+        if let Ok(value) = serde_json::to_value(&desc) {
+            out.push((desc_name(&desc).to_string(), value));
+        }
+    }
+    for (name, data) in components.serialize_entity(world, entity) {
+        out.push((name.to_string(), data));
+    }
+    out
+}
+
+/// Set (or insert) the reflected component `name` on `entity` from `value`.
+///
+/// A registered custom is deserialized through `components`; a built-in is parsed
+/// as a [`ComponentDesc`] whose type must match `name`. A parse failure or a type
+/// mismatch is an `Err`, never a panic.
+pub fn set_reflected_component(
+    world: &mut World,
+    entity: Entity,
+    name: &str,
+    value: &serde_json::Value,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> Result<(), String> {
+    if components.has(name) {
+        return components.deserialize(world, entity, name, value);
+    }
+    let desc: ComponentDesc =
+        serde_json::from_value(value.clone()).map_err(|error| format!("set {name:?}: {error}"))?;
+    let actual = desc_name(&desc);
+    if actual != name {
+        return Err(format!("set {name:?}: the JSON is a {actual:?}"));
+    }
+    apply_component(world, entity, &desc, assets, components);
+    Ok(())
+}
+
+/// Remove the reflected component `name` from `entity`.
+///
+/// Returns whether one was removed.
+pub fn remove_reflected_component(
+    world: &mut World,
+    entity: Entity,
+    name: &str,
+    components: &ComponentRegistry,
+) -> bool {
+    if components.has(name) {
+        return components.remove(world, entity, name);
+    }
+    match name {
+        "Camera" => world.remove::<Camera>(entity).is_some(),
+        "Light" => world.remove::<Light>(entity).is_some(),
+        "MeshRenderer" => world.remove::<MeshRenderer>(entity).is_some(),
+        "RigidBody" => world.remove::<RigidBody>(entity).is_some(),
+        "Collider" => world.remove::<Collider>(entity).is_some(),
+        "AudioSource" => world.remove::<AudioSource>(entity).is_some(),
+        "Script" => world.remove::<Script>(entity).is_some(),
+        "Text" => world.remove::<Text>(entity).is_some(),
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Serializable model
 // ---------------------------------------------------------------------------
 
@@ -1622,6 +1768,87 @@ mod tests {
         let mut registry = ComponentRegistry::new();
         registry.register::<Health>();
         registry
+    }
+
+    #[test]
+    fn builtin_reflection_round_trips_through_descriptors() {
+        let assets = AssetRegistry::with_defaults();
+        let registry = ComponentRegistry::new();
+        let mut scene = Scene::new("R");
+        let entity = scene.world.spawn();
+        scene.world.insert(entity, LocalTransform::default());
+        scene.world.insert(
+            entity,
+            RigidBody {
+                mass: 4.0,
+                ..RigidBody::default()
+            },
+        );
+
+        assert!(has_reflected_component(
+            &scene.world,
+            entity,
+            "RigidBody",
+            &assets,
+            &registry
+        ));
+        assert!(!has_reflected_component(
+            &scene.world,
+            entity,
+            "Light",
+            &assets,
+            &registry
+        ));
+
+        let value = get_reflected_component(&scene.world, entity, "RigidBody", &assets, &registry)
+            .expect("present");
+        assert_eq!(value["type"], "rigid_body");
+        assert_eq!(value["mass"], 4.0);
+
+        // The descriptor is listed by `reflect_components` under its name.
+        let listed = reflect_components(&scene.world, entity, &assets, &registry);
+        assert!(listed.iter().any(|(name, _)| name == "RigidBody"));
+
+        // Set a modified copy back.
+        let mut next = value.clone();
+        next["mass"] = serde_json::json!(8.0);
+        set_reflected_component(
+            &mut scene.world,
+            entity,
+            "RigidBody",
+            &next,
+            &assets,
+            &registry,
+        )
+        .expect("set");
+        assert_eq!(scene.world.get::<RigidBody>(entity).unwrap().mass, 8.0);
+
+        // A descriptor of the wrong type is an error, not a silent wrong write.
+        assert!(
+            set_reflected_component(
+                &mut scene.world,
+                entity,
+                "Light",
+                &value,
+                &assets,
+                &registry
+            )
+            .is_err()
+        );
+
+        assert!(remove_reflected_component(
+            &mut scene.world,
+            entity,
+            "RigidBody",
+            &registry
+        ));
+        assert!(!has_reflected_component(
+            &scene.world,
+            entity,
+            "RigidBody",
+            &assets,
+            &registry
+        ));
     }
 
     #[test]

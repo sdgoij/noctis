@@ -245,11 +245,11 @@ custom component points at. `noctis build` for a `[rust]` project builds a
 plugin-linked client (`.noctis/client/`) instead of the stock `noctis-game`, so the
 exported game has the component types.
 
-## Scripts read and write custom components
+## Scripts read and write components
 
 The JavaScript boundary is string/number based (vector getters already return
 `"[x,y,z]"` strings), so reflection is **JSON**, one generic pair, not a binding per
-type:
+type. It works for a registered custom component and a built-in alike:
 
 ```js
 if (has_component(entity, "Health")) {
@@ -265,12 +265,16 @@ if (has_component(entity, "Health")) {
   mismatch is a logged script error, not a panic
 - `remove_component(entity, name)`
 
-These go through the same `ComponentRegistry`, so they work for **any registered
-component** — a plugin's custom components today. (Built-in components have their
-dedicated bindings, `get_position` and friends; generic built-in reflection would
-need reflection impls for them and is a follow-up.) On the engine side, reads come
+These are uniform across **registered custom components and built-in components**:
+a registered custom uses its own JSON (via `ComponentRegistry`); a built-in uses
+its scene descriptor — the canonical, asset-path-resolving `ComponentDesc` JSON
+(`{ "type": "rigid_body", ... }`) — since built-ins have no serde impls of their own
+(`ecs::scene::{reflect_components, has_reflected_component, get_reflected_component,
+set_reflected_component, remove_reflected_component}`). The entity-level
+`LocalTransform`/`Name`/`Active`/`Visible` are not part of that list and keep their
+dedicated bindings (`get_position`, `find_entity`, …). On the engine side, reads come
 from the snapshot/bridge (`crates/script/src/bridge.rs`, which snapshots each
-registered component's JSON per entity at the start of a call) and writes become
+reflected component's JSON per entity at the start of a call) and writes become
 `ScriptCommand::SetComponent`/`RemoveComponent` the runtime applies after the
 callback, exactly like `translate`/`set_scale`. A bad JSON body or type mismatch is
 a logged script error, never a panic.
@@ -328,14 +332,12 @@ identical whichever language reads it.
    and the per-project **client** under `.noctis/client/` for `noctis build` (a
    plugin-linked game with no editor; scripts baked in for a release build).
    `project::referenced_files_with` bundles a custom component's asset references.
-3. **Script reflection.** *(Shipped for JavaScript and WebAssembly.)*
-   `has/get/set/remove_component` plus `ScriptCommand::SetComponent`/`RemoveComponent`,
-   over the scene's `ComponentRegistry` (a project's custom components). JavaScript
-   uses globals with JSON strings; WebAssembly uses the import ABI with JSON over
-   linear memory.
-4. **Generic built-in reflection.** Reflection today covers a project's
-   registered (custom) components; built-ins keep their dedicated bindings. Covering
-   them generically needs reflection impls for the built-in components.
+3. **Script reflection.** *(Shipped for JavaScript and WebAssembly, custom and
+   built-in.)* `has/get/set/remove_component` plus
+   `ScriptCommand::SetComponent`/`RemoveComponent`, over the scene's reflection
+   layer (`ecs::scene`): a registered custom uses its own JSON, a built-in its
+   `ComponentDesc` JSON. JavaScript uses globals with JSON strings; WebAssembly uses
+   the import ABI with JSON over linear memory.
 
 ## Open questions
 
@@ -348,7 +350,7 @@ identical whichever language reads it.
 - **Schema stability.** A registered component's `NAME` becomes part of the scene
   format; renaming it is a scene migration. A `[rust] version` and a documented
   policy are probably warranted.
-- **Reflection cost.** *Resolved for phase 3:* the bridge snapshots every
-  registered component's JSON per entity once per call (`Bridge::begin`). Simple
-  and correct; a per-component cache (only serializing the components a script
-  actually reads) is a later optimization to measure.
+- **Reflection cost.** *Resolved:* the bridge snapshots every reflected component's
+  JSON (built-in descriptors and registered customs) per entity once per call
+  (`Bridge::begin`). Simple and correct; a lazily-populated cache (only the
+  components a script reads) is a later optimization to measure.

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use ecs::components::{LocalTransform, Name};
 use ecs::resources::InputState;
+use ecs::scene::reflect_components;
 use math::{Quat, Vec3, vec3};
 
 use crate::api::{EntityId, ScriptApi, ScriptCommand, ScriptContext, entity_id};
@@ -108,10 +109,9 @@ impl Bridge {
         self.next_placeholder = 0;
         self.commands.clear();
 
-        // The registered components a script can read reflectively. Serializing
-        // them once per call is the cost of the generic path; a per-component
-        // cache is a later optimization (see docs/embedding.md).
-        let component_names = ctx.components.names();
+        // Reflected components (built-ins in scene form, registered customs in
+        // their own JSON) are serialized once per call — the cost of the generic
+        // path; a lazily-populated cache is a later optimization.
         for entity in ctx.world.entities().iter() {
             let id = entity_id(entity);
             if let Some(name) = ctx.world.get::<Name>(entity) {
@@ -122,18 +122,15 @@ impl Bridge {
                 self.rotations.insert(id, euler(t.rotation));
                 self.scales.insert(id, t.scale);
             }
-            if !component_names.is_empty() {
-                let mut map = HashMap::new();
-                for name in &component_names {
-                    if let Some(value) = ctx.components.serialize(&*ctx.world, entity, name)
-                        && let Ok(text) = serde_json::to_string(&value)
-                    {
-                        map.insert((*name).to_string(), text);
-                    }
+            let mut map = HashMap::new();
+            for (name, value) in reflect_components(&*ctx.world, entity, ctx.assets, ctx.components)
+            {
+                if let Ok(text) = serde_json::to_string(&value) {
+                    map.insert(name, text);
                 }
-                if !map.is_empty() {
-                    self.components.insert(id, map);
-                }
+            }
+            if !map.is_empty() {
+                self.components.insert(id, map);
             }
         }
     }

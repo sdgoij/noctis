@@ -199,6 +199,13 @@ round-trip through a scene like a built-in. `World` already stores any
   `instantiate_into(&mut World, &SceneDesc, &AssetRegistry, Option<Entity>)` (the
   lenient primitive; `from_json`/`try_from_desc` are the strict load paths),
   `Prefab`, `SceneDesc`, `SceneError { Parse, Version, MissingAsset }`.
+- Component reflection (`ecs::scene`): `desc_name`, `reflect_components`,
+  `has_reflected_component`, `get_reflected_component`, `set_reflected_component`,
+  `remove_reflected_component` — read/write a component by name for the script
+  bridge. A registered custom uses its own JSON (via `ComponentRegistry`); a
+  built-in uses its `ComponentDesc` JSON (`{"type": ..., ...}`, asset paths
+  resolved). `set_reflected_component` on a built-in errors (never panics) when the
+  JSON is a different type.
 - `ecs::prelude::*` re-exports all of the above plus `math`.
 
 ## Conventions for consumer crates

@@ -147,8 +147,9 @@ pub struct ScriptContext<'a> {
     pub world: &'a mut World,
     /// The asset registry, used to resolve script paths and prefab assets.
     pub assets: &'a AssetRegistry,
-    /// The registered components (`World` stores any type; this is the
-    /// reflection registry) scripts read and write by name.
+    /// The registered custom components scripts read and write by name (the
+    /// reflection registry). Built-in components are reflected too, from the
+    /// scene-form descriptors; this registry holds only the application's customs.
     pub components: &'a ComponentRegistry,
     /// Input state for the current frame.
     pub input: &'a InputState,
@@ -281,24 +282,36 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
 
     // -- registered components (reflection) --------------------------------
 
-    /// `true` if `entity` carries the component registered as `name`.
+    /// `true` if `entity` carries the component registered as `name` (a custom
+    /// component) or the built-in component `name` that serializes into a scene.
     pub fn has_component(&self, id: EntityId, name: &str) -> bool {
-        entity_from_id(self.ctx.world, id)
-            .is_some_and(|entity| self.ctx.components.has_on(&*self.ctx.world, entity, name))
+        entity_from_id(self.ctx.world, id).is_some_and(|entity| {
+            ecs::scene::has_reflected_component(
+                &*self.ctx.world,
+                entity,
+                name,
+                self.ctx.assets,
+                self.ctx.components,
+            )
+        })
     }
 
-    /// The component registered as `name` on `entity`, serialized to a JSON
-    /// string, or `None` when the entity or component is absent.
+    /// The reflected component `name` on `entity` as a JSON string, or `None`
+    /// when the entity or component is absent. A built-in is its scene descriptor;
+    /// a custom is its own JSON.
     pub fn get_component(&self, id: EntityId, name: &str) -> Option<String> {
         let entity = entity_from_id(self.ctx.world, id)?;
-        let value = self
-            .ctx
-            .components
-            .serialize(&*self.ctx.world, entity, name)?;
+        let value = ecs::scene::get_reflected_component(
+            &*self.ctx.world,
+            entity,
+            name,
+            self.ctx.assets,
+            self.ctx.components,
+        )?;
         serde_json::to_string(&value).ok()
     }
 
-    /// Set the component registered as `name` on `entity` from a JSON string.
+    /// Set the reflected component `name` on `entity` from a JSON string.
     ///
     /// A parse failure, an unknown name, or a type/field mismatch is a `String`
     /// error (logged by the host), never a panic. Recorded as
@@ -308,9 +321,14 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
             .ok_or_else(|| format!("set_component: no entity for handle {id}"))?;
         let value: serde_json::Value = serde_json::from_str(json)
             .map_err(|error| format!("set_component {name:?}: {error}"))?;
-        self.ctx
-            .components
-            .deserialize(&mut *self.ctx.world, entity, name, &value)?;
+        ecs::scene::set_reflected_component(
+            &mut *self.ctx.world,
+            entity,
+            name,
+            &value,
+            self.ctx.assets,
+            self.ctx.components,
+        )?;
         self.ctx.commands.push(ScriptCommand::SetComponent {
             entity: id,
             name: name.to_string(),
@@ -319,7 +337,7 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
         Ok(())
     }
 
-    /// Remove the component registered as `name` from `entity`.
+    /// Remove the reflected component `name` from `entity`.
     ///
     /// Returns whether one was removed. Recorded as
     /// [`ScriptCommand::RemoveComponent`].
@@ -327,11 +345,12 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
         let Some(entity) = entity_from_id(self.ctx.world, id) else {
             return false;
         };
-        if self
-            .ctx
-            .components
-            .remove(&mut *self.ctx.world, entity, name)
-        {
+        if ecs::scene::remove_reflected_component(
+            &mut *self.ctx.world,
+            entity,
+            name,
+            self.ctx.components,
+        ) {
             self.ctx.commands.push(ScriptCommand::RemoveComponent {
                 entity: id,
                 name: name.to_string(),
@@ -829,7 +848,6 @@ mod tests {
             ScriptCommand::RemoveComponent { name, .. } if name == "Health"
         )));
 
-        drop(ctx);
         let entity = Entity::from_raw(id as u32, (id >> 32) as u32);
         assert!(
             world.get::<Health>(entity).is_none(),
@@ -862,5 +880,81 @@ mod tests {
         assert!(api.set_component(999_999, "Health", "{}").is_err());
         // None of that recorded a command or mutated the world.
         assert!(!api.has_component(id, "Health"));
+    }
+
+    #[test]
+    fn reflection_reads_and_writes_a_builtin_component() {
+        use ecs::components::RigidBody;
+
+        let mut world = World::new();
+        let assets = AssetRegistry::new();
+        let input = InputState::new();
+        let registry = ComponentRegistry::new();
+        let mut ctx = ScriptContext::new(&mut world, &assets, &registry, &input);
+        let id = ctx.api().spawn(None);
+
+        assert!(!ctx.api().has_component(id, "RigidBody"));
+
+        let json = r#"{"type":"rigid_body","body_type":"dynamic","mass":5.0,"restitution":0.0,"friction":0.5,"gravity_scale":1.0,"linear_velocity":[0.0,0.0,0.0],"angular_velocity":[0.0,0.0,0.0]}"#;
+        {
+            let mut api = ctx.api();
+            api.set_component(id, "RigidBody", json).expect("set");
+            assert!(api.has_component(id, "RigidBody"));
+
+            let read = api.get_component(id, "RigidBody").expect("get");
+            assert!(read.contains("\"type\":\"rigid_body\""), "{read}");
+            assert!(read.contains("\"mass\":5.0"), "{read}");
+
+            // Round-trip: change a field and set it back.
+            let mut value: serde_json::Value = serde_json::from_str(&read).unwrap();
+            value["mass"] = serde_json::json!(9.0);
+            api.set_component(id, "RigidBody", &value.to_string())
+                .expect("re-set");
+
+            // A mismatched type is an error, not a panic.
+            assert!(api.set_component(id, "Light", json).is_err());
+
+            assert!(api.remove_component(id, "RigidBody"));
+            assert!(!api.has_component(id, "RigidBody"));
+        }
+
+        assert!(
+            ctx.commands.iter().any(
+                |c| matches!(c, ScriptCommand::SetComponent { name, .. } if name == "RigidBody")
+            )
+        );
+
+        let entity = Entity::from_raw(id as u32, (id >> 32) as u32);
+        assert!(world.get::<RigidBody>(entity).is_none());
+    }
+
+    #[test]
+    fn a_builtin_mass_survives_a_round_trip() {
+        use ecs::components::RigidBody;
+
+        let mut world = World::new();
+        let assets = AssetRegistry::new();
+        let input = InputState::new();
+        let registry = ComponentRegistry::new();
+        let mut ctx = ScriptContext::new(&mut world, &assets, &registry, &input);
+        let id = ctx.api().spawn(None);
+
+        {
+            let mut api = ctx.api();
+            api.set_component(
+                id,
+                "RigidBody",
+                r#"{"type":"rigid_body","body_type":"fixed","mass":3.0,"restitution":0.2,"friction":0.4,"gravity_scale":0.0,"linear_velocity":[1.0,2.0,3.0],"angular_velocity":[0.0,0.0,0.0]}"#,
+            )
+            .expect("set");
+        }
+
+        let entity = Entity::from_raw(id as u32, (id >> 32) as u32);
+        let body = world
+            .get::<RigidBody>(entity)
+            .expect("the built-in was inserted");
+        assert_eq!(body.body_type, ecs::components::BodyType::Fixed);
+        assert_eq!(body.mass, 3.0);
+        assert_eq!(body.linear_velocity, vec3(1.0, 2.0, 3.0));
     }
 }

@@ -92,9 +92,13 @@ The API (see `crates/script/src/slag.rs` for the exact surface):
 | `remove_component(h, name)` | |
 | `log(message)` | |
 
-The component reflection calls work for any component the project's **plugin**
-registers (a `[rust]` project's custom components); built-in components have their
-dedicated calls (`get_position`, …). Round-trip through JSON:
+The component reflection calls work for any component — a `[rust]` project's
+registered custom components **and** the built-ins that appear in a scene's
+`components` list (`Camera`, `Light`, `MeshRenderer`, `RigidBody`, `Collider`,
+`AudioSource`, `Script`, `Text`). A built-in's JSON is its scene-descriptor form
+(`{"type": "rigid_body", ...}`, asset paths, not handles); the transform and other
+entity-level fields keep their dedicated calls (`get_position`, …). Round-trip
+through JSON:
 
 ```js
 if (has_component(entity, "Health")) {
