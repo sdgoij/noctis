@@ -1,8 +1,9 @@
 //! Runtime configuration.
 
-use ecs::assets::{AssetHandle, HdrTexture};
+use ecs::assets::{AssetHandle, AssetRegistry, HdrTexture};
 use math::{Vec3, vec3};
 use physics::PhysicsConfig;
+use project::Project;
 
 /// Configuration for a [`Runtime`](crate::Runtime).
 ///
@@ -83,6 +84,32 @@ impl RuntimeConfig {
         self.environment = Some(environment);
         self
     }
+
+    /// Apply the settings a project's manifest implies: gravity from
+    /// `[project.settings]` and the IBL environment from `[render] environment`
+    /// (looked up in `assets`, which must already hold the imported HDRIs).
+    ///
+    /// A project that names an environment which did not import is an error — the
+    /// game would silently fall back to the renderer's neutral (fully white) IBL
+    /// and look washed out. Every host that runs a project calls this, so native
+    /// and web cannot diverge.
+    pub fn apply_project(
+        &mut self,
+        project: &Project,
+        assets: &AssetRegistry,
+    ) -> Result<(), String> {
+        let gravity = project.manifest().project.settings.gravity;
+        self.gravity = vec3(gravity[0], gravity[1], gravity[2]);
+        if let Some(path) = project.manifest().render.environment.as_deref() {
+            let handle = assets.hdr.handle(path).ok_or_else(|| {
+                format!(
+                    "the project's [render] environment {path:?} is not an importable .hdr asset"
+                )
+            })?;
+            self.environment = Some(handle);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -118,6 +145,40 @@ mod tests {
         let physics = config.physics_config();
         assert!(vec3_approx_eq(physics.gravity, vec3(0.0, -3.0, 0.0), 1e-6));
         assert!((physics.timestep - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_project_takes_gravity_and_the_environment() {
+        use math::vec3_approx_eq;
+
+        let manifest = project::ProjectManifest::from_toml(
+            "[project]\nname = \"P\"\n[project.settings]\ngravity = [0.0, -3.0, 0.0]\n\
+             [render]\nenvironment = \"assets/sky.hdr\"\n",
+        )
+        .unwrap();
+        let project = project::Project::from_manifest("/tmp/game", manifest);
+
+        let mut assets = AssetRegistry::with_builtins();
+        let handle = assets.hdr.insert_named(
+            "assets/sky.hdr",
+            HdrTexture {
+                name: "sky".into(),
+                width: 2,
+                height: 1,
+                data: vec![0.0; 2 * 3],
+            },
+        );
+
+        let mut config = RuntimeConfig::default();
+        config.apply_project(&project, &assets).expect("apply");
+        assert!(vec3_approx_eq(config.gravity, vec3(0.0, -3.0, 0.0), 1e-6));
+        assert_eq!(config.environment, Some(handle));
+
+        // A named environment that did not import is an error, not a silent
+        // fallback to the white neutral IBL.
+        let empty = AssetRegistry::with_builtins();
+        let mut config = RuntimeConfig::default();
+        assert!(config.apply_project(&project, &empty).is_err());
     }
 
     #[test]

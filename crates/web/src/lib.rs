@@ -81,10 +81,18 @@ async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
     }
 
     let scene = load_scene(&project, &imported.registry)?;
+
+    // Gravity and the `[render] environment` (IBL) the manifest names — without
+    // the latter the renderer falls back to its white neutral IBL and looks
+    // washed out.
+    let mut config = RuntimeConfig::default();
+    config
+        .apply_project(&project, &imported.registry)
+        .map_err(|error| format!("failed to apply the project settings: {error}"))?;
+
     let host =
         EngineHost::new().map_err(|error| format!("failed to start the script engine: {error}"))?;
-    let runtime: Runtime<EngineHost> =
-        Runtime::from_parts(scene, imported.registry, RuntimeConfig::default(), host);
+    let runtime: Runtime<EngineHost> = Runtime::from_parts(scene, imported.registry, config, host);
 
     let config = WindowConfig {
         canvas_id: canvas_id.to_string(),

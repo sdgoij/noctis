@@ -17,7 +17,6 @@ use ecs::app::{NullPlugin, Plugin};
 use ecs::assets::AssetRegistry;
 use ecs::reflect::ComponentRegistry;
 use ecs::scene::Scene;
-use math::vec3;
 use platform::WindowConfig;
 use project::{AssetPath, Profile, Project};
 use render::RendererConfig;
@@ -307,10 +306,6 @@ fn build_runtime(
         timestep: args.dt,
         ..RuntimeConfig::default()
     };
-    if let Some(project) = project {
-        let gravity = project.manifest().project.settings.gravity;
-        config.gravity = vec3(gravity[0], gravity[1], gravity[2]);
-    }
 
     // A project owns one shared asset registry: import every asset file so the
     // scene's references resolve. Without a project, start from the engine's
@@ -337,14 +332,11 @@ fn build_runtime(
         None => AssetRegistry::with_builtins(),
     };
 
-    // The project's `[render] environment` names the `.hdr` the renderer
-    // precomputes image-based lighting from. A named environment that did not
-    // import is an error: the game would silently lose its lighting.
-    if let Some(path) = project.and_then(|p| p.manifest().render.environment.as_deref()) {
-        let handle = assets.hdr.handle(path).ok_or_else(|| {
-            format!("the project's [render] environment {path:?} is not an importable .hdr asset")
-        })?;
-        config.environment = Some(handle);
+    // Gravity and the `[render] environment` (IBL) the manifest names. A named
+    // environment that did not import is an error: the game would silently lose
+    // its lighting and fall back to the renderer's washed-out white IBL.
+    if let Some(project) = project {
+        config.apply_project(project, &assets)?;
     }
 
     register_wasm_modules(args, &mut assets)?;
