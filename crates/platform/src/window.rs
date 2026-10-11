@@ -7,7 +7,7 @@ use render::{RenderError, Renderer, RendererConfig};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -381,6 +381,26 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                 self.driver.drop_file(path);
             }
             other => self.forward_to_egui(other),
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        // While the cursor is captured, winit reports raw, unfiltered motion here
+        // instead of `CursorMoved` (a locked cursor does not move), so this is
+        // what drives mouse-look. Uncapped, `CursorMoved` supplies the delta, so
+        // ignore raw motion to avoid double-counting.
+        if !self.cursor_captured {
+            return;
+        }
+        if let DeviceEvent::MouseMotion { delta } = event
+            && let Some(input) = self.driver.input_mut()
+        {
+            input.add_mouse_motion(delta.0 as f32, delta.1 as f32);
         }
     }
 }

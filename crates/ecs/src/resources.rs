@@ -407,6 +407,16 @@ impl InputState {
         self.mouse.scroll += amount;
     }
 
+    /// Add raw pointer motion (a device delta), updating the frame delta without
+    /// an absolute position.
+    ///
+    /// Used while the cursor is captured, when the OS reports motion as a delta
+    /// rather than as a new cursor position.
+    pub fn add_mouse_motion(&mut self, dx: f32, dy: f32) {
+        self.mouse.delta[0] += dx;
+        self.mouse.delta[1] += dy;
+    }
+
     /// A `-1..=1` axis from two keys: `+1` if `positive` is held, `-1` if
     /// `negative` is held, `0` otherwise.
     pub fn axis(&self, negative: Key, positive: Key) -> f32 {
@@ -577,6 +587,17 @@ mod tests {
         assert!(input.mouse.is_down(MouseButton::Left));
         assert!(!input.mouse.is_pressed(MouseButton::Left));
         assert_eq!(input.mouse.delta, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn raw_mouse_motion_accumulates_into_the_delta() {
+        let mut input = InputState::new();
+        input.set_mouse_position(4.0, 4.0);
+        // Raw motion adds to the same frame delta (the captured-cursor path);
+        // the absolute position is left alone.
+        input.add_mouse_motion(3.0, -2.0);
+        assert_eq!(input.mouse.delta, [7.0, 2.0]);
+        assert_eq!(input.mouse.position, [4.0, 4.0]);
     }
 
     #[test]
