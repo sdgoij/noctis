@@ -139,6 +139,12 @@
           "material": "Copper",
           "cast_shadows": false,
           "receive_shadows": false
+        },
+        {
+          "type": "script",
+          "source": null,
+          "path": "scripts/menu.js",
+          "enabled": true
         }
       ]
     },

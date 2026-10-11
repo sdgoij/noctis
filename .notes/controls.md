@@ -208,5 +208,6 @@ the same three registration files), then **S1 + S3**, then **F4 → S2**, then
   the heading), and `spawner.js` now spawns physical, tumbling crates (mesh +
   dynamic body + collider through `set_component`, a lifetime via `add_script`,
   and a kill-plane despawn) the player can push.
-- **Open:** F4 (runtime scene switching), F5 (sensor events), and S2/S4/S5. The
-  `Esc` → pause → menu behaviour waits on F4.
+- **F4 shipped (dev + engine):** `load_scene(path)` queues a `ScriptCommand::LoadScene`; the runtime swaps the scene at the frame boundary (re-parsing through its own asset registry, rebuilding physics, restarting scripting) via a `set_scene_loader` closure wired by `noctis run` from the open project.
+- **S2 shipped (core):** the showcase's `default_scene` is the menu, and `menu.js` on the Play button calls `load_scene` to start the showcase.
+- **Open:** F5 (sensor events) and S4 (trigger pad); the `Esc` → pause → menu toggle; and bundling **every** scene in `noctis build` (a release export still ships only the target scene, so `load_scene` cannot reach the others there — `--profile dev` runs the project in place and works fully).

@@ -114,6 +114,7 @@ enum Abi {
     ApplyImpulse,
     GetVelocity,
     IsGrounded,
+    LoadScene,
     TimeDelta,
     TimeElapsed,
 }
@@ -150,6 +151,7 @@ impl Abi {
             "apply_impulse" => Abi::ApplyImpulse,
             "get_velocity" => Abi::GetVelocity,
             "is_grounded" => Abi::IsGrounded,
+            "load_scene" => Abi::LoadScene,
             "time_delta" => Abi::TimeDelta,
             "time_elapsed" => Abi::TimeElapsed,
             _ => return None,
@@ -171,6 +173,7 @@ impl Abi {
             ),
             Destroy => (vec![ValType::I32], vec![]),
             DestroyByName => (vec![ValType::I32, ValType::I32], vec![]),
+            LoadScene => (vec![ValType::I32, ValType::I32], vec![]),
             Log => (vec![ValType::I32, ValType::I32], vec![]),
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
@@ -418,6 +421,12 @@ impl Abi {
             IsGrounded => {
                 let grounded = handle(0).is_some_and(|id| bridge.is_grounded(id));
                 vec![Value::I32(i32::from(grounded))]
+            }
+            LoadScene => {
+                if let Some(path) = memory_string_at(args, memory, 0) {
+                    bridge.load_scene(path);
+                }
+                Vec::new()
             }
             TimeDelta => vec![Value::F32(bridge.delta.to_bits())],
             TimeElapsed => vec![Value::F32(bridge.elapsed.to_bits())],

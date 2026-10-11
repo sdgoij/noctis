@@ -416,6 +416,18 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        self.register(
+            "load_scene",
+            1,
+            Box::new(move |call| {
+                if let Some(path) = arg_string(call, 0) {
+                    b.borrow_mut().load_scene(path);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
         let h = Rc::clone(&self.handles);
         self.register(
             "add_script",

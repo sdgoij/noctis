@@ -320,6 +320,11 @@ impl Bridge {
             velocity: impulse,
         });
     }
+
+    /// Queue a scene load (applied by the runtime).
+    pub(crate) fn load_scene(&mut self, path: String) {
+        self.commands.push(ScriptCommand::LoadScene { path });
+    }
 }
 
 /// Replay a call's queued commands against the real world, translating
@@ -385,6 +390,7 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
             ScriptCommand::ApplyImpulse { entity, velocity } => {
                 api.apply_impulse(resolve(&map, entity), velocity);
             }
+            ScriptCommand::LoadScene { path } => api.load_scene(path),
         }
     }
 }

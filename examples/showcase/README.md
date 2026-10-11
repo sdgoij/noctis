@@ -21,7 +21,7 @@ showcase/
     Crate.prefab.json            # a spinning, physical crate
     Lamp.prefab.json             # a post with a light on a child entity
   scripts/
-    spinner.js  bobber.js  spin2d.js  third_person.js  spawner.js
+    spinner.js  bobber.js  spin2d.js  third_person.js  spawner.js  menu.js
   assets/
     models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
     models/palette.glb           # the named PBR material palette the scenes shade with
@@ -38,7 +38,7 @@ showcase/
 The project attaches JavaScript, which the engine always runs. Watch the demo:
 
 ```sh
-# The default scene, in a window (Esc closes it).
+# The default scene (the menu) in a window; Play (Space) loads the showcase.
 cargo run -- run --project examples/showcase
 
 # Headless: import the assets, run 120 frames, print a summary.
@@ -186,7 +186,8 @@ trigger volume you walk over).
 
 **`scenes/menu.scene.json`** — a 2D scene (`"mode": "2d"`) with an orthographic
 camera, a backdrop, a title and subtitle, a `PLAY` button, and a spinning
-prompt driven by `spin2d.js` (rotation about Z).
+prompt driven by `spin2d.js` (rotation about Z). It is the project's default
+scene; `menu.js` on the Play button calls `load_scene` to start the showcase.
 
 ## Scripting
 
@@ -211,8 +212,12 @@ physics by the runtime; `get_velocity` and `is_grounded` read back this frame's
 snapshot), `add_script`, `log`, `instantiate_prefab`, and the component reflection
 calls `has_component`, `get_component`, `set_component`, `remove_component` (any
 component — a Rust project's custom components or a built-in, whose JSON is its
-scene-descriptor form; see `.notes/embedding.md`).
+scene-descriptor form; see `.notes/embedding.md`), and `load_scene`, which replaces
+the running scene with another the project ships (see `.notes/controls.md`).
 
+- `menu.js` — the title screen: pressing **Space**/**Enter** (or clicking) calls
+  `load_scene("scenes/showcase.scene.json")`, so Play hands off to the showcase.
+  The game starts on this scene (the project's default).
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.
 - `spin2d.js` — spins about Z, for a 2D scene.

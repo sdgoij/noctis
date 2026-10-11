@@ -9,7 +9,7 @@ version = "0.1.0"
 description = "An example project exercising every Noctis engine feature."
 
 [project.settings]
-default_scene = "scenes/showcase.scene.json"
+default_scene = "scenes/menu.scene.json"
 mode = "3d"
 gravity = [0.0, -9.81, 0.0]
 

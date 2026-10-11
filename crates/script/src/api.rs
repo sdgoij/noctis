@@ -126,6 +126,14 @@ pub enum ScriptCommand {
         /// The impulse (a change of momentum).
         velocity: Vec3,
     },
+    /// A request to load another scene, replacing the current one.
+    ///
+    /// Queued only: only the runtime owns scene loading and the physics/audio
+    /// that must be rebuilt, so it acts on this at the end of the frame.
+    LoadScene {
+        /// The scene path, resolved by the runtime's scene loader.
+        path: String,
+    },
     /// A script component was added or replaced at runtime.
     AddScript {
         /// The entity.
@@ -615,6 +623,19 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
     /// Whether the entity is grounded, from this frame's snapshot.
     pub fn is_grounded(&self, id: EntityId) -> bool {
         self.ctx.physics.is_some_and(|view| view.is_grounded(id))
+    }
+
+    // -- scenes -------------------------------------------------------------
+
+    /// Ask the runtime to load `path`, replacing the current scene.
+    ///
+    /// Recorded as [`ScriptCommand::LoadScene`]; the runtime performs the swap at
+    /// the end of the frame, because the script API cannot replace the world it
+    /// is running against mid-call.
+    pub fn load_scene(&mut self, path: impl Into<String>) {
+        self.ctx
+            .commands
+            .push(ScriptCommand::LoadScene { path: path.into() });
     }
 
     // -- scenes and prefabs -------------------------------------------------

@@ -357,6 +357,20 @@ fn build_runtime(
     // stage the engine runs first and the plugin can observe the result.
     plugin.build(runtime.app_mut());
 
+    // A project can switch scenes at runtime: a `load_scene` path is read through
+    // the project's store, so a bundled/exported project resolves its scenes too.
+    if let Some(project) = project {
+        let project = project.clone();
+        runtime.set_scene_loader(Box::new(move |path: &str| {
+            let asset = AssetPath::parse(path).map_err(|error| error.to_string())?;
+            match project.read_document(asset.file_path()) {
+                Ok(Some(json)) => Ok(json),
+                Ok(None) => Err(format!("scene {path:?} was not found in the project")),
+                Err(error) => Err(error.to_string()),
+            }
+        }));
+    }
+
     if args.render {
         // Anti-alias the headless render at the manifest's sample count.
         let renderer_config = RendererConfig {

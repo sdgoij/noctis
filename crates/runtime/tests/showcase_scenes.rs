@@ -138,6 +138,37 @@ fn the_third_person_controller_moves_the_player_and_camera() {
 }
 
 #[test]
+fn pressing_play_in_the_menu_loads_the_showcase() {
+    let (scene, assets) = load("scenes/menu.scene.json");
+    let config = RuntimeConfig {
+        audio: false,
+        ..RuntimeConfig::default()
+    };
+    let mut runtime = Runtime::from_parts(scene, assets, config, EngineHost::new().expect("Slag"));
+
+    // The development loader: read the requested scene from the project directory.
+    let dir = showcase_dir();
+    runtime.set_scene_loader(Box::new(move |path: &str| {
+        std::fs::read_to_string(dir.join(path)).map_err(|error| error.to_string())
+    }));
+
+    runtime
+        .input_mut()
+        .expect("the runtime takes input")
+        .press_key(Key::Space);
+    runtime.run_headless(5, 1.0 / 60.0);
+
+    // "Title Label" is unique to the showcase scene.
+    let world = &runtime.scene().world;
+    let switched = world.entities_with::<Name>().into_iter().any(|e| {
+        world
+            .get::<Name>(e)
+            .is_some_and(|n| n.as_str() == "Title Label")
+    });
+    assert!(switched, "Play did not load the showcase scene");
+}
+
+#[test]
 fn the_menu_scene_spinner_rotates_in_the_plane() {
     let runtime = run("scenes/menu.scene.json", 60);
 

@@ -75,6 +75,11 @@ impl std::fmt::Display for RunSummary {
     }
 }
 
+/// Resolves a scene path (as a `load_scene` script call names it) to its JSON
+/// text. The runtime parses it against its own asset registry, so a loader only
+/// has to find the bytes — from a project's store, a bundle, or disk.
+pub type SceneLoader = Box<dyn Fn(&str) -> Result<String, String>>;
+
 /// The game/export loop.
 ///
 /// Generic over the script host so callers can pick a backend; the default is
@@ -93,6 +98,11 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     /// Whether the windowed game currently captures the cursor (mouse-look).
     /// `Esc` toggles it; the menu/pause build ties it to the paused state.
     pub(crate) captured: bool,
+    /// The resolver that turns a `load_scene` path into scene JSON, if any.
+    scene_loader: Option<SceneLoader>,
+    /// A scene requested by `load_scene` this frame, applied at the end of the
+    /// tick (the closure systems cannot mutate the runtime directly).
+    scene_request: Arc<Mutex<Option<String>>>,
     /// The development script watcher, when scripts load from disk.
     #[cfg(not(target_arch = "wasm32"))]
     watch: Option<crate::watch::ScriptWatch>,
@@ -133,6 +143,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         let mut script_runtime = ScriptRuntime::with_host(host);
         script_runtime.set_components(scene.components.clone());
         let script = Arc::new(Mutex::new(script_runtime));
+        let scene_request: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let mut app = App::new(scene.name.clone());
         app.context.scene = scene;
@@ -167,6 +178,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         {
             let scripts = Arc::clone(&script);
             let physics_handle = Arc::clone(&physics);
+            let requests = Arc::clone(&scene_request);
             app.on_update("runtime.script_update", move |ctx| {
                 let dt = ctx.time.delta();
                 // Snapshot what scripts may read (`is_grounded`, `get_velocity`)
@@ -218,6 +230,9 @@ impl<H: ScriptHost + 'static> Runtime<H> {
                                 physics.apply_impulse(&ctx.scene.world, entity, velocity);
                             }
                         }
+                        ScriptCommand::LoadScene { path } => {
+                            *lock(&requests) = Some(path);
+                        }
                         _ => {}
                     }
                 }
@@ -239,6 +254,8 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             renderer: None,
             last_frame: None,
             captured: true,
+            scene_loader: None,
+            scene_request,
             #[cfg(not(target_arch = "wasm32"))]
             watch: None,
         }
@@ -249,7 +266,62 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         #[cfg(not(target_arch = "wasm32"))]
         self.pump_script_watch();
         self.app.tick(dt);
+        // A `load_scene` request acts at the frame boundary, once nothing holds a
+        // borrow of the outgoing world.
+        self.apply_scene_request();
         self.render();
+    }
+
+    /// Provide the resolver `load_scene` uses to turn a path into scene JSON.
+    ///
+    /// Without one, a `load_scene` call is logged and ignored. The runtime parses
+    /// the JSON against its own asset registry, so the loader only finds bytes.
+    pub fn set_scene_loader(&mut self, loader: SceneLoader) {
+        self.scene_loader = Some(loader);
+    }
+
+    /// Perform a scene switch requested by `load_scene` during this tick.
+    ///
+    /// The new scene replaces the current one and physics is rebuilt for it;
+    /// scripting restarts, so the new scene's scripts run `on_start` next frame.
+    /// The outgoing scripts are dropped without `on_destroy` (the whole world is
+    /// going away). A missing loader or a load error is logged, not fatal.
+    fn apply_scene_request(&mut self) {
+        let Some(path) = lock(&self.scene_request).take() else {
+            return;
+        };
+        let json = {
+            let Some(loader) = self.scene_loader.as_ref() else {
+                log::warn!("load_scene({path:?}) ignored: no scene loader is configured");
+                return;
+            };
+            match loader(&path) {
+                Ok(json) => json,
+                Err(err) => {
+                    log::warn!("load_scene({path:?}) failed: {err}");
+                    return;
+                }
+            }
+        };
+        let components = self.app.context.scene.components.clone();
+        let scene = match Scene::from_json_with(&json, &self.app.context.assets, &components) {
+            Ok(scene) => scene,
+            Err(err) => {
+                log::warn!("load_scene({path:?}) failed to parse the scene: {err}");
+                return;
+            }
+        };
+        log::info!("loaded scene {path:?}");
+        self.app.context.scene = scene;
+        propagate_transforms(&mut self.app.context.scene.world);
+        // Rebuild physics for the new bodies.
+        let mut physics = PhysicsWorld::new(self.config.physics_config());
+        physics.sync_from_world(&self.app.context.scene.world);
+        *lock(&self.physics) = physics;
+        // Restart scripting on the new scene (its scripts start next frame).
+        let mut script = lock(&self.script);
+        script.reset();
+        script.set_components(self.app.context.scene.components.clone());
     }
 
     /// Advance one frame using the configured [`RuntimeConfig::timestep`].
@@ -594,6 +666,47 @@ mod tests {
             .linear_velocity_of(ball)
             .expect("the ball has a body");
         assert!(velocity.x > 1.0, "ball velocity = {velocity:?}");
+    }
+
+    /// A different scene, used to prove a switch replaces the world.
+    fn second_scene() -> &'static str {
+        r#"{
+            "name": "Second",
+            "entities": [{
+                "id": 0,
+                "name": "Second",
+                "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                "components": []
+            }]
+        }"#
+    }
+
+    #[test]
+    fn a_script_switches_the_scene() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.load_scene("scenes/next.scene.json");
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+        runtime.set_scene_loader(Box::new(|path: &str| {
+            assert_eq!(path, "scenes/next.scene.json");
+            Ok(second_scene().to_string())
+        }));
+
+        runtime.tick_once();
+
+        assert!(
+            entity_named(&runtime, "Second").is_some(),
+            "the scene did not switch"
+        );
+        assert!(
+            entity_named(&runtime, "Ball").is_none(),
+            "the old scene's entities remain"
+        );
     }
 
     #[test]
