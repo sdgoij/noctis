@@ -257,44 +257,50 @@ impl<H: ScriptHost> ScriptRuntime<H> {
     }
 
     fn run_frame(&mut self, world: &mut World, assets: &AssetRegistry, dt: f32, phase: Phase) {
-        // Snapshot the active scripts *before* running any of them, so
-        // entities spawned (or destroyed) during the frame are handled next
-        // frame.
-        let active: Vec<(Entity, String)> = world
-            .query::<Script>()
-            .filter_map(|(entity, script)| {
-                resolve_source(script, assets).map(|source| (entity, source))
-            })
-            .collect();
+        // Resolve the active scripts and reconcile compiled modules with the
+        // world borrowed only immutably, so a script whose source is unchanged
+        // is never copied (see `resolve_source`). Entities spawned or destroyed
+        // during the frame are handled next frame.
+        let mut active: Vec<Entity> = Vec::new();
+        let mut recreate: Vec<(Entity, String, ModuleId)> = Vec::new();
+        for (entity, script) in world.query::<Script>() {
+            let Some(source) = resolve_source(script, assets) else {
+                continue;
+            };
+            active.push(entity);
+            let module = self.ensure_module(source);
+            let replace = self
+                .instances
+                .get(&entity)
+                .is_none_or(|instance| instance.source != source);
+            if replace {
+                // The only copy: a (re)subscribing instance stores its source so
+                // a later change to the `Script` component is detected.
+                recreate.push((entity, source.to_string(), module));
+            }
+        }
 
         let mut report = RunReport::default();
 
         // Adopt / re-subscribe instances.
-        for (entity, source) in &active {
-            let module = self.ensure_module(source);
-            let replace = self
-                .instances
-                .get(entity)
-                .is_none_or(|instance| instance.source != *source);
-            if replace {
-                if self.instances.contains_key(entity) {
-                    self.invoke(world, assets, *entity, ON_DESTROY, 0.0);
-                    report.destroyed += 1;
-                }
-                self.instances.insert(
-                    *entity,
-                    ScriptInstance {
-                        entity: entity_id(*entity),
-                        module,
-                        source: source.clone(),
-                        started: false,
-                    },
-                );
+        for (entity, source, module) in recreate {
+            if self.instances.contains_key(&entity) {
+                self.invoke(world, assets, entity, ON_DESTROY, 0.0);
+                report.destroyed += 1;
             }
+            self.instances.insert(
+                entity,
+                ScriptInstance {
+                    entity: entity_id(entity),
+                    module,
+                    source,
+                    started: false,
+                },
+            );
         }
 
         // Everything that stopped being an active script gets torn down.
-        let live: HashSet<Entity> = active.iter().map(|(entity, _)| *entity).collect();
+        let live: HashSet<Entity> = active.iter().copied().collect();
         let stale: Vec<Entity> = self
             .instances
             .keys()
@@ -327,7 +333,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
 
         // Update.
         if phase == Phase::Update {
-            for (entity, _) in &active {
+            for entity in &active {
                 if !world.is_alive(*entity) {
                     continue;
                 }
@@ -392,17 +398,21 @@ impl<H: ScriptHost> ScriptRuntime<H> {
     }
 }
 
-/// Resolve a script component's source, or `None` if it is disabled, empty, or
-/// its asset path cannot be resolved.
-fn resolve_source(script: &Script, assets: &AssetRegistry) -> Option<String> {
+/// Resolve a script component's source as a borrow, or `None` if it is disabled
+/// or its asset path cannot be resolved.
+///
+/// Borrowing (rather than cloning, as this once did) keeps the per-frame scan
+/// allocation-free for a script whose source has not changed; the runtime copies
+/// the source only when it first adopts or re-subscribes an instance.
+fn resolve_source<'a>(script: &'a Script, assets: &'a AssetRegistry) -> Option<&'a str> {
     if !script.enabled {
         return None;
     }
     if let Some(source) = &script.source {
-        return Some(source.clone());
+        return Some(source.as_str());
     }
     let path = script.path.as_deref()?;
-    assets.scripts.get_by_path(path).map(|a| a.source.clone())
+    assets.scripts.get_by_path(path).map(|a| a.source.as_str())
 }
 
 #[cfg(test)]
