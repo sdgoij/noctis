@@ -293,8 +293,21 @@ impl EditorDriver {
         self.console_log.push("extensions reloaded".into());
     }
 
-    /// Draw the extension UI: their panels, the console, and the Extensions screen.
+    /// Draw the extension UI: the extensions' own panels, the console, and the
+    /// Extensions screen.
+    ///
+    /// The console and the Extensions screen are editor windows in their own
+    /// right, so they are drawn even with no host attached: the console stays
+    /// reachable and an empty discovery still explains itself. The panels need a
+    /// live host, so they are the only part gated on one.
     fn extension_ui(&mut self, ui: &mut egui::Ui) {
+        self.extension_panels(ui);
+        self.console_window(ui);
+        self.extensions_window(ui);
+    }
+
+    /// Draw each loaded extension's own panel (needs a live host).
+    fn extension_panels(&mut self, ui: &mut egui::Ui) {
         if self.extensions.is_none() {
             return;
         }
@@ -368,9 +381,6 @@ impl EditorDriver {
             self.pending_interactions.activations.extend(clicks);
             self.pending_interactions.values.extend(values);
         }
-
-        self.console_window(ui);
-        self.extensions_window(ui);
     }
 
     /// The console: a scrollback and a line that dispatches the verb vocabulary.
@@ -1618,6 +1628,26 @@ mod tests {
         selectable.expect("the editor UI ran")
     }
 
+    /// Every text run the frame painted, flattened out of the shape tree.
+    fn frame_texts(output: &egui::FullOutput) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().to_string()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
     #[test]
     fn editor_labels_are_not_selectable() {
         let mut driver = EditorDriver::new(Editor::new());
@@ -1627,6 +1657,46 @@ mod tests {
         // frames rather than just the first.
         assert!(!selectable_after_a_frame(&mut driver, &ctx));
         assert!(!selectable_after_a_frame(&mut driver, &ctx));
+    }
+
+    #[test]
+    fn the_console_and_extensions_screen_show_without_a_host() {
+        // No extension was discovered, so there is no host; the console and the
+        // Extensions screen are editor windows and must still draw.
+        let mut driver = EditorDriver::new(Editor::new());
+        driver.show_console = true;
+        driver.show_extensions = true;
+        driver.console_log.push("sentinel-console-line".to_string());
+
+        // A floating window is invisible on its first frame (egui runs a sizing
+        // pass), so drive a second frame before reading the painted text.
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 720.0),
+                )),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(raw, |ui| driver.ui(ui));
+            texts = frame_texts(&output);
+            output.drop_without_applying_deltas();
+        }
+
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("sentinel-console-line")),
+            "the console drew without a host: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("No extensions discovered.")),
+            "the Extensions screen drew without a host: {texts:?}"
+        );
     }
 
     #[test]

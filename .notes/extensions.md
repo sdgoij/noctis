@@ -368,7 +368,10 @@ removal logs a one-time warning and is removed no sooner than the next minor.
 | `--watch` | Reload extensions when their files change (windowed). |
 
 The windowed editor gains a console line that dispatches the same vocabulary, and
-an **Extensions** screen listing the table with toggles that write the config.
+an **Extensions** screen listing the table with toggles that write the config. Both
+are editor windows in their own right, so they are drawn even when no extension was
+discovered (the screen then reports an empty discovery); only the extensions' own
+panels need a live host.
 
 ## What already exists
 
