@@ -214,10 +214,14 @@ calls `has_component`, `get_component`, `set_component`, `remove_component` (any
 component — a Rust project's custom components or a built-in, whose JSON is its
 scene-descriptor form; see `.notes/embedding.md`), and `load_scene`, which replaces
 the running scene with another the project ships (see `.notes/controls.md`).
+`viewport_size()` gives the window size (to map the cursor into a 2D scene) and
+`set_mouse_captured(bool)` captures or releases the OS cursor.
 
-- `menu.js` — the title screen: pressing **Space**/**Enter** (or clicking) calls
-  `load_scene("scenes/showcase.scene.json")`, so Play hands off to the showcase.
-  The game starts on this scene (the project's default).
+- `menu.js` — the title screen: it releases the cursor (`set_mouse_captured(false)`)
+  and drives a custom `Cursor` entity to the pointer, and pressing
+  **Space**/**Enter** (or clicking) calls `load_scene("scenes/showcase.scene.json")`,
+  so Play hands off to the showcase. The game starts on this scene (the project's
+  default).
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.
 - `spin2d.js` — spins about Z, for a 2D scene.

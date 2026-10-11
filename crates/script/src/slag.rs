@@ -428,6 +428,28 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        self.register(
+            "viewport_size",
+            0,
+            Box::new(move |_call| {
+                let v = b.borrow().input.viewport();
+                Ok(slag::JsValue::string(format!("[{},{}]", v[0], v[1])))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "set_mouse_captured",
+            1,
+            Box::new(move |call| {
+                if let Some(captured) = arg_bool(call, 0) {
+                    b.borrow_mut().set_mouse_captured(captured);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
         let h = Rc::clone(&self.handles);
         self.register(
             "add_script",
@@ -573,6 +595,10 @@ fn arg_number(call: &slag::FunctionCall<'_>, index: usize) -> Option<f32> {
     call.arg(index)
         .and_then(|v| v.as_number())
         .map(|n| n as f32)
+}
+
+fn arg_bool(call: &slag::FunctionCall<'_>, index: usize) -> Option<bool> {
+    call.arg(index).and_then(|v| v.as_boolean())
 }
 
 fn arg_vec3(call: &slag::FunctionCall<'_>, index: usize) -> Option<Vec3> {

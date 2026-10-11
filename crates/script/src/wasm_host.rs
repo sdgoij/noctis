@@ -115,6 +115,8 @@ enum Abi {
     GetVelocity,
     IsGrounded,
     LoadScene,
+    ViewportSize,
+    SetMouseCaptured,
     TimeDelta,
     TimeElapsed,
 }
@@ -152,6 +154,8 @@ impl Abi {
             "get_velocity" => Abi::GetVelocity,
             "is_grounded" => Abi::IsGrounded,
             "load_scene" => Abi::LoadScene,
+            "viewport_size" => Abi::ViewportSize,
+            "set_mouse_captured" => Abi::SetMouseCaptured,
             "time_delta" => Abi::TimeDelta,
             "time_elapsed" => Abi::TimeElapsed,
             _ => return None,
@@ -180,6 +184,8 @@ impl Abi {
             // Mouse reads take no arguments; motion/position return two floats.
             MouseMove | MousePosition => (vec![], vec![ValType::F32, ValType::F32]),
             MouseScroll => (vec![], vec![ValType::F32]),
+            ViewportSize => (vec![], vec![ValType::F32, ValType::F32]),
+            SetMouseCaptured => (vec![ValType::I32], vec![]),
             SetVelocity | AddVelocity | ApplyImpulse => (
                 vec![ValType::I32, ValType::F32, ValType::F32, ValType::F32],
                 vec![],
@@ -426,6 +432,15 @@ impl Abi {
                 if let Some(path) = memory_string_at(args, memory, 0) {
                     bridge.load_scene(path);
                 }
+                Vec::new()
+            }
+            ViewportSize => {
+                let v = bridge.input.viewport();
+                vec![Value::F32(v[0].to_bits()), Value::F32(v[1].to_bits())]
+            }
+            SetMouseCaptured => {
+                let captured = i32_of(args.first().copied().unwrap_or(Value::I32(0))) != 0;
+                bridge.set_mouse_captured(captured);
                 Vec::new()
             }
             TimeDelta => vec![Value::F32(bridge.delta.to_bits())],

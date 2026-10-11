@@ -103,6 +103,9 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     /// A scene requested by `load_scene` this frame, applied at the end of the
     /// tick (the closure systems cannot mutate the runtime directly).
     scene_request: Arc<Mutex<Option<String>>>,
+    /// A cursor-capture request from `set_mouse_captured`, applied at the end of
+    /// the tick.
+    capture_request: Arc<Mutex<Option<bool>>>,
     /// The development script watcher, when scripts load from disk.
     #[cfg(not(target_arch = "wasm32"))]
     watch: Option<crate::watch::ScriptWatch>,
@@ -144,6 +147,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         script_runtime.set_components(scene.components.clone());
         let script = Arc::new(Mutex::new(script_runtime));
         let scene_request: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let capture_request: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 
         let mut app = App::new(scene.name.clone());
         app.context.scene = scene;
@@ -179,6 +183,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             let scripts = Arc::clone(&script);
             let physics_handle = Arc::clone(&physics);
             let requests = Arc::clone(&scene_request);
+            let captures = Arc::clone(&capture_request);
             app.on_update("runtime.script_update", move |ctx| {
                 let dt = ctx.time.delta();
                 // Snapshot what scripts may read (`is_grounded`, `get_velocity`)
@@ -233,6 +238,9 @@ impl<H: ScriptHost + 'static> Runtime<H> {
                         ScriptCommand::LoadScene { path } => {
                             *lock(&requests) = Some(path);
                         }
+                        ScriptCommand::SetMouseCaptured { captured } => {
+                            *lock(&captures) = Some(captured);
+                        }
                         _ => {}
                     }
                 }
@@ -256,6 +264,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             captured: true,
             scene_loader: None,
             scene_request,
+            capture_request,
             #[cfg(not(target_arch = "wasm32"))]
             watch: None,
         }
@@ -269,6 +278,10 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         // A `load_scene` request acts at the frame boundary, once nothing holds a
         // borrow of the outgoing world.
         self.apply_scene_request();
+        let requested_capture = lock(&self.capture_request).take();
+        if let Some(captured) = requested_capture {
+            self.captured = captured;
+        }
         self.render();
     }
 
@@ -706,6 +719,28 @@ mod tests {
         assert!(
             entity_named(&runtime, "Ball").is_none(),
             "the old scene's entities remain"
+        );
+    }
+
+    #[test]
+    fn a_script_releases_the_cursor() {
+        use platform::AppDriver;
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.set_mouse_captured(false);
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+        assert!(runtime.cursor_captured(), "captured by default");
+
+        runtime.tick_once();
+
+        assert!(
+            !runtime.cursor_captured(),
+            "the script did not release the cursor"
         );
     }
 

@@ -327,6 +327,9 @@ pub struct InputState {
     keys_down: HashSet<Key>,
     keys_pressed: HashSet<Key>,
     keys_released: HashSet<Key>,
+    /// The window's inner size in logical pixels, so a script can map the cursor
+    /// into a 2D scene. Zero until the platform reports one.
+    viewport: [f32; 2],
     /// The mouse state.
     pub mouse: MouseState,
 }
@@ -415,6 +418,21 @@ impl InputState {
     pub fn add_mouse_motion(&mut self, dx: f32, dy: f32) {
         self.mouse.delta[0] += dx;
         self.mouse.delta[1] += dy;
+    }
+
+    /// Record the window's inner size (logical pixels).
+    pub fn set_viewport(&mut self, width: u32, height: u32) {
+        self.viewport = [width as f32, height as f32];
+    }
+
+    /// The window's inner size in logical pixels, defaulting to `1280x720` until
+    /// the platform reports one.
+    pub fn viewport(&self) -> [f32; 2] {
+        if self.viewport[0] > 0.0 && self.viewport[1] > 0.0 {
+            self.viewport
+        } else {
+            [1280.0, 720.0]
+        }
     }
 
     /// A `-1..=1` axis from two keys: `+1` if `positive` is held, `-1` if
@@ -598,6 +616,14 @@ mod tests {
         input.add_mouse_motion(3.0, -2.0);
         assert_eq!(input.mouse.delta, [7.0, 2.0]);
         assert_eq!(input.mouse.position, [4.0, 4.0]);
+    }
+
+    #[test]
+    fn the_viewport_defaults_and_is_settable() {
+        let mut input = InputState::new();
+        assert_eq!(input.viewport(), [1280.0, 720.0]);
+        input.set_viewport(800, 600);
+        assert_eq!(input.viewport(), [800.0, 600.0]);
     }
 
     #[test]

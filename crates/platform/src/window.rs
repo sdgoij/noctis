@@ -99,6 +99,9 @@ impl<D: AppDriver> WindowHost<D> {
             }
         };
         let size = window.inner_size();
+        if let Some(input) = self.driver.input_mut() {
+            input.set_viewport(size.width, size.height);
+        }
 
         let instance = Renderer::create_instance();
         let surface = match instance.create_surface(window.clone()) {
@@ -324,6 +327,9 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                     && let Err(err) = renderer.resize(size.width, size.height)
                 {
                     log::warn!("resize failed: {err}");
+                }
+                if let Some(input) = self.driver.input_mut() {
+                    input.set_viewport(size.width, size.height);
                 }
             }
             WindowEvent::RedrawRequested => {

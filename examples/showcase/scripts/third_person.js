@@ -25,6 +25,11 @@ let yaw = 0.0; // player heading (radians about world +Y)
 let pitch = 0.25; // camera elevation; positive looks down at the player
 let vy = 0.0; // vertical speed we integrate ourselves (the body is kinematic)
 
+function on_start(entity, dt) {
+  // Capture the cursor for mouse-look (the menu releases it for its own cursor).
+  set_mouse_captured(true);
+}
+
 function on_update(entity, dt) {
   // --- mouse look ---
   const m = pair(mouse_move());

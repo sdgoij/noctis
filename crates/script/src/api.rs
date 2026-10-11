@@ -134,6 +134,14 @@ pub enum ScriptCommand {
         /// The scene path, resolved by the runtime's scene loader.
         path: String,
     },
+    /// A request to capture (hide and lock) or release the cursor.
+    ///
+    /// Queued only; the window host applies it. A menu releases the cursor so a
+    /// cursor can be drawn; gameplay captures it for mouse-look.
+    SetMouseCaptured {
+        /// Whether the cursor should be captured.
+        captured: bool,
+    },
     /// A script component was added or replaced at runtime.
     AddScript {
         /// The entity.
@@ -579,6 +587,11 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
         self.ctx.input.mouse.scroll
     }
 
+    /// The window's inner size in logical pixels (`[width, height]`).
+    pub fn viewport_size(&self) -> [f32; 2] {
+        self.ctx.input.viewport()
+    }
+
     // -- physics ------------------------------------------------------------
 
     /// Overwrite the entity's body linear velocity.
@@ -636,6 +649,17 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
         self.ctx
             .commands
             .push(ScriptCommand::LoadScene { path: path.into() });
+    }
+
+    /// Ask the runtime to capture (`true`) or release (`false`) the cursor.
+    ///
+    /// Recorded as [`ScriptCommand::SetMouseCaptured`]; the window host applies it
+    /// on the next frame. A menu releases the cursor so it can draw its own;
+    /// gameplay captures it for mouse-look.
+    pub fn set_mouse_captured(&mut self, captured: bool) {
+        self.ctx
+            .commands
+            .push(ScriptCommand::SetMouseCaptured { captured });
     }
 
     // -- scenes and prefabs -------------------------------------------------
