@@ -170,7 +170,7 @@ fn instantiate_prefab_returns_the_root_handle() {
 
 /// Multiple entities created in one call must each get their own handle: a
 /// script engine's `f64` numbers cannot represent a raw `EntityId`, so the
-/// backend hands out small per-call indices instead.
+/// backend hands out small per-instance indices instead.
 const MULTI_SPAWN_SCRIPT: &str = "
     function on_start(entity, dt) {
         var a = spawn('A');

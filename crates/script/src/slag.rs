@@ -41,7 +41,7 @@ use ecs::resources::{Key, MouseButton};
 use math::{Vec3, vec3};
 
 use crate::api::{EntityId, ScriptCommand, ScriptContext};
-use crate::bridge::{Bridge, entity_of, handle_of, replay};
+use crate::bridge::{Bridge, HandleTables, replay};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// A failure constructing or driving the Slag backend.
@@ -68,9 +68,10 @@ impl std::error::Error for SlagError {}
 pub struct SlagHost {
     context: slag::Context,
     bridge: Rc<RefCell<Bridge>>,
-    /// The per-call handle table handed to JavaScript (see [`handle_of`]): scripts
-    /// receive small indices, never raw `EntityId`s.
-    handles: Rc<RefCell<Vec<EntityId>>>,
+    /// The persistent handle table handed to JavaScript (see [`HandleTables`]):
+    /// scripts receive small stable indices, never raw `EntityId`s, and a handle
+    /// it stores keeps naming the same entity on the next frame.
+    handles: Rc<RefCell<HandleTables>>,
     next_module: ModuleId,
     /// Whether each compiled module reads reflected components, so its calls
     /// build the component snapshot. See [`source_reads_components`].
@@ -103,7 +104,7 @@ impl SlagHost {
         let mut host = Self {
             context,
             bridge: Rc::new(RefCell::new(Bridge::default())),
-            handles: Rc::new(RefCell::new(Vec::new())),
+            handles: Rc::new(RefCell::new(HandleTables::default())),
             next_module: 1,
             reflect: HashMap::new(),
             errors: Vec::new(),
@@ -151,7 +152,7 @@ impl SlagHost {
             Box::new(move |call| {
                 let name = arg_name(call, 0);
                 let id = b.borrow_mut().spawn(name);
-                let handle = handle_of(&mut h.borrow_mut(), id);
+                let handle = h.borrow_mut().handle_of(id);
                 Ok(slag::JsValue::number(handle as f64))
             }),
         )?;
@@ -193,7 +194,7 @@ impl SlagHost {
             Box::new(move |call| {
                 let found = arg_string(call, 0)
                     .and_then(|name| b.borrow().find(&name))
-                    .map(|id| handle_of(&mut h.borrow_mut(), id));
+                    .map(|id| h.borrow_mut().handle_of(id));
                 Ok(match found {
                     Some(handle) => slag::JsValue::number(handle as f64),
                     None => slag::JsValue::undefined(),
@@ -512,7 +513,7 @@ impl SlagHost {
                 });
                 Ok(match root {
                     Some(id) => {
-                        let handle = handle_of(&mut h.borrow_mut(), id);
+                        let handle = h.borrow_mut().handle_of(id);
                         slag::JsValue::number(handle as f64)
                     }
                     None => slag::JsValue::undefined(),
@@ -615,12 +616,12 @@ fn arg_name(call: &slag::FunctionCall<'_>, index: usize) -> Option<String> {
 }
 
 fn arg_entity(
-    handles: &[EntityId],
+    handles: &HandleTables,
     call: &slag::FunctionCall<'_>,
     index: usize,
 ) -> Option<EntityId> {
     let handle = call.arg(index).and_then(|v| v.as_number())?;
-    entity_of(handles, handle as i32)
+    handles.entity_of(handle as i32)
 }
 
 fn arg_number(call: &slag::FunctionCall<'_>, index: usize) -> Option<f32> {
@@ -695,7 +696,7 @@ impl ScriptHost for SlagHost {
     fn call_lifecycle(&mut self, module: ModuleId, func: &str, ctx: &mut ScriptContext<'_>) {
         let reflect = self.reflect.get(&module).copied().unwrap_or(true);
         self.bridge.borrow_mut().begin(ctx, reflect);
-        self.handles.borrow_mut().clear();
+        self.handles.borrow_mut().begin(ctx.entity);
 
         // Reach the lifecycle function through the module's namespace object
         // rather than `eval`ing `globalThis.__noctis_ns_N.func` on every call:
@@ -715,7 +716,7 @@ impl ScriptHost for SlagHost {
             && callee.is_callable()
             && let Some(entity) = ctx.entity
         {
-            let handle = handle_of(&mut self.handles.borrow_mut(), entity);
+            let handle = self.handles.borrow_mut().handle_of(entity);
             let args = [
                 slag::JsValue::number(handle as f64),
                 slag::JsValue::number(ctx.delta as f64),
@@ -729,7 +730,12 @@ impl ScriptHost for SlagHost {
         }
 
         let commands = std::mem::take(&mut self.bridge.borrow_mut().commands);
-        replay(ctx, commands);
+        let map = replay(ctx, commands);
+        self.handles.borrow_mut().resolve(&map);
+    }
+
+    fn forget_instance(&mut self, entity: EntityId) {
+        self.handles.borrow_mut().forget(entity);
     }
 
     fn set_pending_api(&mut self, _api: PendingApi) {
@@ -879,6 +885,49 @@ mod tests {
             )),
             "get_position did not yield an array: {:?}",
             runtime.command_log()
+        );
+    }
+
+    #[test]
+    fn a_handle_stored_on_one_frame_names_the_same_entity_the_next() {
+        // A handle kept in module state must keep naming the spawned entity on
+        // later calls (the reason the table is per-instance, not per-call).
+        const CROSS_FRAME: &str = "
+            var kept = undefined;
+            function on_start(entity, dt) {
+                kept = spawn('Kept');
+                set_position(kept, 1, 2, 3);
+            }
+            function on_update(entity, dt) {
+                var p = get_position(kept);
+                set_position(kept, p[0] + 1, p[1], p[2]);
+            }
+        ";
+        let host = SlagHost::new().expect("slag engine starts");
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let owner = world.spawn();
+        world.insert(owner, Script::from_source(CROSS_FRAME));
+
+        runtime.run_start(&mut world, &assets); // spawns Kept at (1,2,3)
+        runtime.run_update(&mut world, &assets, 0.016); // reads it -> (2,2,3)
+        runtime.run_update(&mut world, &assets, 0.016); // -> (3,2,3)
+
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
+        );
+        let kept = world
+            .query::<Name>()
+            .find(|(_, n)| n.0 == "Kept")
+            .map(|(e, _)| e)
+            .expect("the spawned entity exists");
+        let t = world.get::<LocalTransform>(kept).unwrap().translation;
+        assert!(
+            (t.x - 3.0).abs() < 1e-4 && (t.y - 2.0).abs() < 1e-4 && (t.z - 3.0).abs() < 1e-4,
+            "kept should have been advanced to (3,2,3), got {t:?}"
         );
     }
 

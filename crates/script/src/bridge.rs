@@ -46,26 +46,80 @@ pub(crate) fn placeholder_id(slot: u64) -> EntityId {
     ((PLACEHOLDER_GENERATION as u64) << 32) | slot
 }
 
-/// The opaque handle index for `id` within a call, allocating one if needed.
+/// A persistent, per-instance handle table: a stable small index for every
+/// entity a script has addressed, so a handle it stores on one frame still names
+/// the same entity on the next.
 ///
 /// Script engines receive entity handles as small integers: a raw [`EntityId`] is
 /// ~2^64 and would lose precision as a JavaScript `f64`, so a script addresses an
-/// entity through this per-call index table instead. The table is cleared at the
-/// start of each call and read back with [`entity_of`].
-pub(crate) fn handle_of(handles: &mut Vec<EntityId>, id: EntityId) -> i32 {
-    if let Some(index) = handles.iter().position(|h| *h == id) {
-        return index as i32;
-    }
-    handles.push(id);
-    (handles.len() - 1) as i32
+/// entity through an index into this table. A table is kept per *instance* —
+/// keyed by the script's own entity — and lives as long as that instance does, so
+/// handles are stable across calls; index 0 is always the instance's own entity.
+#[derive(Default)]
+pub(crate) struct HandleTables {
+    /// The owner of the current call (the script instance's entity).
+    owner: Option<EntityId>,
+    /// Each owner's table: stable index → the entity it names.
+    tables: HashMap<EntityId, Vec<EntityId>>,
 }
 
-/// The entity a call's handle index names, if the call handed one out.
-pub(crate) fn entity_of(handles: &[EntityId], index: i32) -> Option<EntityId> {
-    usize::try_from(index)
-        .ok()
-        .and_then(|i| handles.get(i))
-        .copied()
+impl HandleTables {
+    /// Begin a call owned by `owner` (index 0 becomes the owner, the rest persist).
+    pub(crate) fn begin(&mut self, owner: Option<EntityId>) {
+        self.owner = owner;
+        if let Some(owner) = owner {
+            let table = self.tables.entry(owner).or_default();
+            match table.first_mut() {
+                Some(slot) => *slot = owner,
+                None => table.push(owner),
+            }
+        }
+    }
+
+    /// The stable handle for `id`, allocating one if this instance has not seen
+    /// it before.
+    pub(crate) fn handle_of(&mut self, id: EntityId) -> i32 {
+        let Some(owner) = self.owner else {
+            return 0;
+        };
+        let table = self.tables.entry(owner).or_default();
+        if let Some(index) = table.iter().position(|h| *h == id) {
+            return index as i32;
+        }
+        table.push(id);
+        (table.len() - 1) as i32
+    }
+
+    /// The entity the handle names, if this instance has one for it.
+    pub(crate) fn entity_of(&self, index: i32) -> Option<EntityId> {
+        let owner = self.owner?;
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| self.tables.get(&owner)?.get(i))
+            .copied()
+    }
+
+    /// Rewrite placeholder entries to the entities they became once the call's
+    /// commands have been replayed, so a handle stored for a `spawn()` still names
+    /// the real entity on the next frame.
+    pub(crate) fn resolve(&mut self, map: &HashMap<EntityId, EntityId>) {
+        let Some(owner) = self.owner else {
+            return;
+        };
+        if let Some(table) = self.tables.get_mut(&owner) {
+            for slot in table.iter_mut() {
+                if let Some(&real) = map.get(slot) {
+                    *slot = real;
+                }
+            }
+        }
+    }
+
+    /// Drop an instance's table (its script ended). The owner id carries the
+    /// mesh generation, so a reused slot never collides; this only bounds memory.
+    pub(crate) fn forget(&mut self, owner: EntityId) {
+        self.tables.remove(&owner);
+    }
 }
 
 /// The Euler angles `(roll, pitch, yaw)`, radians, of a rotation.
@@ -369,7 +423,15 @@ impl Bridge {
 
 /// Replay a call's queued commands against the real world, translating
 /// placeholder handles spawned during the call to the entities they became.
-pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) {
+/// Replay a call's queued commands against the real world, translating
+/// placeholder handles spawned during the call to the entities they became.
+///
+/// Returns that placeholder → real map, so the caller can re-point any handles it
+/// stored at the entities the placeholders became (see [`HandleTables::resolve`]).
+pub(crate) fn replay(
+    ctx: &mut ScriptContext<'_>,
+    commands: Vec<ScriptCommand>,
+) -> HashMap<EntityId, EntityId> {
     fn resolve(map: &HashMap<EntityId, EntityId>, id: EntityId) -> EntityId {
         map.get(&id).copied().unwrap_or(id)
     }
@@ -435,6 +497,7 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
             ScriptCommand::SetMouseCaptured { captured } => api.set_mouse_captured(captured),
         }
     }
+    map
 }
 
 /// Whether a script source may *read* reflected components, and so needs the

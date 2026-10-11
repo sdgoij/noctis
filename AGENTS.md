@@ -136,9 +136,11 @@ needed.
   (`load_scene`, and `teleport_scene`, which carries a named entity and its
   subtree into the target scene, landing it at that scene's `Entry` marker),
   and timing), and `engine_host::EngineHost`, which runs
-  both languages in one runtime. Both backends address entities through small
-  per-call handle indices rather than raw ids, because a JavaScript `f64` cannot
-  represent a 64-bit `EntityId` exactly. A WebAssembly module travels as a
+  both languages in one runtime. Both backends address entities through small,
+  stable per-instance handle indices rather than raw ids, because a JavaScript
+  `f64` cannot represent a 64-bit `EntityId` exactly; the table persists for the
+  instance's life, so a handle a script stores keeps naming the same entity
+  across frames. A WebAssembly module travels as a
   `wasm:`-prefixed hex descriptor (the script channel is text); the descriptor
   encode/decode lives in `ecs::assets`, a `.wasm` file imports as a script asset
   (so a scene references it by path like a `.js`), `wasm_host::load`/`register`

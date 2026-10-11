@@ -80,6 +80,13 @@ pub trait ScriptHost {
     /// Install a snapshot for the next [`Self::call_lifecycle`].
     fn set_pending_api(&mut self, api: PendingApi);
 
+    /// Release any per-instance state the host keeps for `entity` — the runtime
+    /// calls this when a script instance ends, so a persistent handle table does
+    /// not outlive it. The default does nothing.
+    fn forget_instance(&mut self, entity: EntityId) {
+        let _ = entity;
+    }
+
     /// Release a compiled module. The runtime calls this when no entity
     /// references it any more. The default does nothing.
     fn drop_module(&mut self, module: ModuleId) {

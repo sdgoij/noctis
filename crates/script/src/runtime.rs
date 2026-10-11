@@ -195,6 +195,10 @@ impl<H: ScriptHost> ScriptRuntime<H> {
     /// Drop all instances and compiled modules, leaving the host and input
     /// intact.
     pub fn reset(&mut self) {
+        let owners: Vec<EntityId> = self.instances.values().map(|i| i.entity).collect();
+        for owner in owners {
+            self.host.forget_instance(owner);
+        }
         self.instances.clear();
         self.modules.clear();
         self.command_log.clear();
@@ -237,6 +241,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
             self.invoke(world, assets, entity, ON_DESTROY, 0.0);
         }
         self.instances.remove(&entity);
+        self.host.forget_instance(entity_id(entity));
         let was_alive = world.is_alive(entity);
         if was_alive {
             world.despawn(entity);
@@ -286,6 +291,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         for (entity, source, module) in recreate {
             if self.instances.contains_key(&entity) {
                 self.invoke(world, assets, entity, ON_DESTROY, 0.0);
+                self.host.forget_instance(entity_id(entity));
                 report.destroyed += 1;
             }
             self.instances.insert(
@@ -310,6 +316,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         for entity in stale {
             self.invoke(world, assets, entity, ON_DESTROY, 0.0);
             self.instances.remove(&entity);
+            self.host.forget_instance(entity_id(entity));
             report.destroyed += 1;
         }
 

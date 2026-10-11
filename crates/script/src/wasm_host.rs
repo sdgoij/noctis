@@ -43,10 +43,12 @@
 //! [`load`] returns a ready [`Script`](ecs::components::Script) and [`register`]
 //! installs it as a script asset under a name.
 //!
-//! Handles are `i32` indices into a per-call table: handle `0` is the script's
-//! own entity, and handles returned by `spawn`/`find_entity` are valid for the
-//! rest of the call. String arguments read the module's exported `memory`; a
-//! module that never calls a string import need not export one.
+//! Handles are `i32` indices into a persistent per-instance table: handle `0` is
+//! the script's own entity, and handles returned by `spawn`/`find_entity` stay
+//! valid for the rest of the instance's life, so a module can store one in a
+//! global and use it on a later frame. String arguments read the module's
+//! exported `memory`; a module that never calls a string import need not export
+//! one.
 //!
 //! ## How a call runs
 //!
@@ -70,7 +72,7 @@ use slag::wasm::types::{FuncType, ValType};
 use slag::wasm::{ExternVal, Store, Value, decode, validate};
 
 use crate::api::{EntityId, ScriptCommand, ScriptContext};
-use crate::bridge::{Bridge, entity_of, handle_of, replay};
+use crate::bridge::{Bridge, HandleTables, replay};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 
 /// The module name a WebAssembly script imports the engine API from.
@@ -245,13 +247,13 @@ impl Abi {
         self,
         args: &[Value],
         bridge: &mut Bridge,
-        handles: &mut Vec<EntityId>,
+        handles: &mut HandleTables,
         memory: Option<&StoreMemory<'_>>,
     ) -> Vec<Value> {
         use Abi::*;
         let handle = |index: usize| -> Option<EntityId> {
             let raw = i32_of(args.get(index).copied().unwrap_or(Value::I32(-1)));
-            entity_of(handles, raw)
+            handles.entity_of(raw)
         };
         let vector = |base: usize| {
             vec3(
@@ -321,12 +323,12 @@ impl Abi {
             Spawn => {
                 let name = memory_string_at(args, memory, 0);
                 let id = bridge.spawn(name);
-                vec![Value::I32(handle_of(handles, id))]
+                vec![Value::I32(handles.handle_of(id))]
             }
             FindEntity => {
                 let found = memory_string_at(args, memory, 0)
                     .and_then(|name| bridge.find(&name))
-                    .map(|id| handle_of(handles, id));
+                    .map(|id| handles.handle_of(id));
                 vec![Value::I32(found.unwrap_or(-1))]
             }
             AddScript => {
@@ -344,7 +346,7 @@ impl Abi {
                 // Return a handle for the prefab's root so the module can address
                 // it immediately (resolved to the real entity at replay).
                 let root = bridge.instantiate_prefab(json, handle(2));
-                vec![Value::I32(handle_of(handles, root))]
+                vec![Value::I32(handles.handle_of(root))]
             }
             HasComponent => {
                 let has = match (handle(0), memory_string_at(args, memory, 1)) {
@@ -596,6 +598,9 @@ pub struct WasmHost {
     instances: HashMap<ModuleId, usize>,
     abi: HashMap<u64, Abi>,
     bridge: Bridge,
+    /// The persistent handle table (see [`HandleTables`]): stable per-instance
+    /// handle indices, so a module can store a handle across calls.
+    handles: HandleTables,
     next_module: ModuleId,
     next_token: u64,
     /// Whether each compiled module imports a reflection read, so its calls build
@@ -628,6 +633,7 @@ impl WasmHost {
             instances: HashMap::new(),
             abi: HashMap::new(),
             bridge: Bridge::default(),
+            handles: HandleTables::default(),
             next_module: 1,
             next_token: 1,
             reflect: HashMap::new(),
@@ -702,8 +708,10 @@ impl WasmHost {
         let Some(index) = self.store.exported_func(instance, func) else {
             return Vec::new();
         };
-        // Handle 0 is the script's own entity; the rest are handed out lazily.
-        let mut handles: Vec<EntityId> = vec![entity.unwrap_or(0)];
+        // Move the table out so `service` can borrow it alongside `&mut self`, and
+        // restore it before returning. Handle 0 is the script's own entity.
+        let mut handles = std::mem::take(&mut self.handles);
+        handles.begin(entity);
         let args = [Value::I32(0), Value::F32(delta.to_bits())];
 
         let mut progress = self.store.start(instance, index, &args);
@@ -720,6 +728,7 @@ impl WasmHost {
                 }
             }
         }
+        self.handles = handles;
         std::mem::take(&mut self.bridge.commands)
     }
 
@@ -728,7 +737,7 @@ impl WasmHost {
         &mut self,
         instance: usize,
         request: HostRequest,
-        handles: &mut Vec<EntityId>,
+        handles: &mut HandleTables,
     ) -> Result<Vec<Value>, slag::wasm::ExecFail> {
         let Some(abi) = self.abi.get(&request.token).copied() else {
             return Ok(Vec::new());
@@ -773,7 +782,12 @@ impl ScriptHost for WasmHost {
             return;
         };
         let commands = self.run_export(instance, func, ctx.entity, ctx.delta);
-        replay(ctx, commands);
+        let map = replay(ctx, commands);
+        self.handles.resolve(&map);
+    }
+
+    fn forget_instance(&mut self, entity: EntityId) {
+        self.handles.forget(entity);
     }
 
     fn set_pending_api(&mut self, _api: PendingApi) {

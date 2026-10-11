@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::ScriptContext;
+use crate::api::{EntityId, ScriptContext};
 use crate::host::{ModuleId, PendingApi, ScriptHost};
 use crate::slag::{SlagError, SlagHost};
 use crate::wasm_host::{WasmHost, is_wasm_source};
@@ -90,5 +90,10 @@ impl ScriptHost for EngineHost {
     fn set_pending_api(&mut self, api: PendingApi) {
         self.javascript.set_pending_api(api);
         self.wasm.set_pending_api(api);
+    }
+
+    fn forget_instance(&mut self, entity: EntityId) {
+        self.javascript.forget_instance(entity);
+        self.wasm.forget_instance(entity);
     }
 }
