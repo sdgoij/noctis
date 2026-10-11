@@ -5,13 +5,16 @@
 # non-`default` `features` argument is forwarded as `--features`.
 #
 # `run` takes a project directory or a `.zip` bundle and forwards any extra
-# arguments to `noctis run`. `publish-wasm` builds the browser client and
-# repackages `examples/showcase`; the `wasm-bindgen` CLI must match the crate
-# version in `Cargo.lock`.
+# arguments to `noctis run`.
+#
+# `publish-wasm` builds the browser client, repackages `examples/showcase`, and
+# stages the demo in `docs/` for GitHub Pages; the `wasm-bindgen` CLI must match
+# the crate version in `Cargo.lock`.
 
 showcase := "examples/showcase"
 wasm_out := "crates/web/web"
 wasm_artifact := "target/wasm32-unknown-unknown/release/web.wasm"
+publish := "docs"
 
 # List the available recipes.
 default:
@@ -34,8 +37,11 @@ run project *args:
 test: check
     cargo test --workspace
 
-# Build a new wasm and package the showcase.
+# Build a new wasm, package the showcase, and stage the demo in docs/.
 publish-wasm:
     cargo build -p web --target wasm32-unknown-unknown --release
     wasm-bindgen --target web --out-dir {{ wasm_out }} {{ wasm_artifact }}
     cargo run -- pack --project {{ showcase }} --out {{ wasm_out }}/game.zip
+    mkdir -p {{ publish }}
+    cp {{ wasm_out }}/index.html {{ wasm_out }}/env.js {{ wasm_out }}/web.js {{ wasm_out }}/web_bg.wasm {{ wasm_out }}/game.zip {{ publish }}/
+    touch {{ publish }}/.nojekyll
