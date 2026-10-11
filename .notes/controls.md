@@ -202,5 +202,11 @@ the same three registration files), then **S1 + S3**, then **F4 → S2**, then
   `is_grounded`, from a per-frame `PhysicsView` snapshot), and cursor capture with
   `Esc` toggling it. Both the JavaScript and the native-WebAssembly backends
   expose the verbs.
-- **Open:** F4 (runtime scene switching), F5 (sensor events), and the showcase
-  work S1–S5. The `Esc` → pause → menu behaviour waits on F4.
+- **S1, S3 shipped:** the showcase Player is a kinematic capsule driven by
+  `third_person.js` (WASD in the yaw frame, `Space` jump when grounded, mouse X
+  yaw / Y camera pitch, a follow camera, and a "Player Facing" child that shows
+  the heading), and `spawner.js` now spawns physical, tumbling crates (mesh +
+  dynamic body + collider through `set_component`, a lifetime via `add_script`,
+  and a kill-plane despawn) the player can push.
+- **Open:** F4 (runtime scene switching), F5 (sensor events), and S2/S4/S5. The
+  `Esc` → pause → menu behaviour waits on F4.

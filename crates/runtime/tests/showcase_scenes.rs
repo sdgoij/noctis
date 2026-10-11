@@ -10,8 +10,10 @@ use std::path::PathBuf;
 
 use ecs::assets::AssetRegistry;
 use ecs::components::{LocalTransform, Name};
+use ecs::resources::Key;
 use ecs::scene::Scene;
 use math::{vec3, vec3_approx_eq};
+use platform::AppDriver;
 use project::{AssetPath, Project};
 use runtime::{Runtime, RuntimeConfig};
 use script::engine_host::EngineHost;
@@ -90,6 +92,47 @@ fn the_showcase_scene_scripts_move_their_entities() {
     assert!(
         (y - 2.0).abs() > 1e-3,
         "the Hover Torus did not bob (y = {y})"
+    );
+
+    // `third_person.js` places the Main Camera behind the player, so it no longer
+    // rests at its authored (6, 3.8, 9).
+    let camera = transform(&runtime, "Main Camera").translation;
+    assert!(
+        (camera.x - 6.0).abs() > 1.0 || (camera.z - 9.0).abs() > 1.0,
+        "the follow camera did not move from its authored position: {camera:?}"
+    );
+}
+
+#[test]
+fn the_third_person_controller_moves_the_player_and_camera() {
+    let (scene, assets) = load("scenes/showcase.scene.json");
+    let config = RuntimeConfig {
+        audio: false,
+        ..RuntimeConfig::default()
+    };
+    let mut runtime = Runtime::from_parts(scene, assets, config, EngineHost::new().expect("Slag"));
+    let start = transform(&runtime, "Player").translation;
+
+    // Hold W and nudge the mouse once, then run a second of frames.
+    runtime
+        .input_mut()
+        .expect("the runtime takes input")
+        .press_key(Key::letter('W').expect("W is a letter key"));
+    runtime
+        .input_mut()
+        .expect("the runtime takes input")
+        .set_mouse_position(150.0, 0.0);
+    runtime.run_headless(60, 1.0 / 60.0);
+
+    let end = transform(&runtime, "Player").translation;
+    let moved = ((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt();
+    assert!(moved > 1.0, "the player did not move: {start:?} -> {end:?}");
+
+    // The follow camera is placed behind the player, not at its authored spot.
+    let camera = transform(&runtime, "Main Camera").translation;
+    assert!(
+        (camera.x - 6.0).abs() > 1.0,
+        "the camera did not follow the player: {camera:?}"
     );
 }
 

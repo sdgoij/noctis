@@ -1,39 +1,45 @@
-// spawner.js — spawn, destroy, attach behaviours, and instantiate a prefab.
+// spawner.js — spawn physical crates the player can push around.
 //
-// Press:
-//   Space — spawn a spinning crate above the spawner
-//   R     — instantiate the "Spawned Crate" prefab (inline JSON) as a child
-//   X     — destroy everything this script created
+//   E  spawn a tumbling crate above the pad
+//   R  instantiate the "Spawned Crate" prefab (inline JSON)
+//   X  destroy everything this script created
 //
-// `key_down` is level-triggered (true for every frame the key is held), so the
-// script tracks the previous frame to act on the *edge*.
+// Each crate is given a cube mesh, a dynamic body with a little spin, and a
+// collider through component reflection, so it falls, rolls, and can be shoved
+// by the player. A lifetime script removes each crate after a while, and
+// anything that falls off the floor is removed below KILL_Y.
 
-let spaceWasDown = false;
+const KILL_Y = -8.0; // crates below this are gone (they fell off the floor)
+const LIFETIME = 25.0; // seconds before a crate removes itself
+
+let eWasDown = false;
 let rWasDown = false;
 let xWasDown = false;
 
 const spawned = [];
 
 function on_start(entity, dt) {
-  log("spawner ready: Space = spawn, R = prefab, X = clear");
+  log("spawner ready: E = crate, R = prefab, X = clear");
 }
 
 function on_update(entity, dt) {
-  const space = key_down("Space");
-  if (space && !spaceWasDown) {
-    const box = spawn("spawned-crate");
-    set_position(box, 0.0, 5.0 + spawned.length * 0.8, 0.0);
-    add_script(box, SPINNER_SOURCE);
+  const e = key_down("KeyE");
+  if (e && !eWasDown) {
+    const box = spawn("crate-spawn");
+    const angle = (spawned.length * 1.7) % 6.28318;
+    set_position(box, Math.cos(angle) * 1.2, 5.0, Math.sin(angle) * 1.2);
+    make_physical(box);
     spawned.push(box);
     log("spawned crate " + spawned.length);
   }
-  spaceWasDown = space;
+  eWasDown = e;
 
   const r = key_down("KeyR");
   if (r && !rWasDown) {
     const root = instantiate_prefab(CRATE_PREFAB, entity);
     if (root !== undefined) {
-      set_position(root, 3.0, 0.5, 3.0);
+      set_position(root, 3.0, 6.0, 3.0);
+      make_physical(root);
       spawned.push(root);
     }
     log("instantiated the crate prefab");
@@ -49,17 +55,74 @@ function on_update(entity, dt) {
     log("cleared spawned crates");
   }
   xWasDown = x;
+
+  // Remove anything that has fallen off the floor.
+  for (let i = spawned.length - 1; i >= 0; i--) {
+    if (vec3(get_position(spawned[i]))[1] < KILL_Y) {
+      destroy(spawned[i]);
+      spawned.splice(i, 1);
+    }
+  }
 }
 
-// A behaviour attached to each spawned cube. `add_script` takes source text.
-const SPINNER_SOURCE =
+// Give a spawned entity a cube mesh, a dynamic body, a collider, and a lifetime.
+function make_physical(entity) {
+  set_component(
+    entity,
+    "mesh_renderer",
+    JSON.stringify({
+      type: "mesh_renderer",
+      mesh: "primitives/cube",
+      material: "Copper",
+      cast_shadows: true,
+      receive_shadows: true,
+    }),
+  );
+  set_component(
+    entity,
+    "rigid_body",
+    JSON.stringify({
+      type: "rigid_body",
+      body_type: "dynamic",
+      mass: 1.0,
+      restitution: 0.2,
+      friction: 0.7,
+      gravity_scale: 1.0,
+      linear_velocity: [0.0, 0.0, 0.0],
+      angular_velocity: [0.4, 1.3, -0.3],
+    }),
+  );
+  set_component(
+    entity,
+    "collider",
+    JSON.stringify({
+      type: "collider",
+      shape: { kind: "cuboid", half_extents: [0.4, 0.4, 0.4] },
+      offset: [0.0, 0.0, 0.0],
+      is_sensor: false,
+      friction: 0.7,
+      restitution: 0.2,
+    }),
+  );
+  add_script(entity, LIFETIME_SOURCE);
+}
+
+// A behaviour attached to each spawned crate: despawn after LIFETIME seconds.
+// Module state is shared by every entity running the script, so ages are kept
+// per handle.
+const LIFETIME_SOURCE =
+  "const ages = [];" +
   "function on_update(entity, dt) {" +
-  "  const v = vec3(get_rotation_euler(entity));" +
-  "  set_rotation_euler(entity, v[0] + dt, v[1] + dt, v[2]);" +
-  "}" +
-  "function vec3(raw) {" +
-  "  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(',').map(Number);" +
+  "  ages[entity] = (ages[entity] || 0.0) + dt;" +
+  "  if (ages[entity] > " +
+  LIFETIME +
+  ") { destroy(entity); }" +
   "}";
+
+// Parse a "[x,y,z]" string (what the getters return) into an array.
+function vec3(raw) {
+  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
+}
 
 // A prefab as inline JSON — the same shape as a `prefabs/*.prefab.json` file.
 const CRATE_PREFAB =

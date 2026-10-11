@@ -80,7 +80,7 @@ fn every_showcase_script_runs_without_errors() {
 
     // Press each key the scripts listen for (one frame held, one released) so the
     // input, spawn, prefab, and destroy paths all execute.
-    for name in ["Space", "KeyW", "KeyR", "KeyX"] {
+    for name in ["Space", "KeyW", "KeyR", "KeyX", "KeyE"] {
         runtime.input_mut().press_key(key(name));
         runtime.run_update(&mut world, &assets, dt);
         runtime.input_mut().release_key(key(name));

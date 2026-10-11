@@ -451,7 +451,7 @@
       "parent": 0,
       "active": true,
       "visible": true,
-      "transform": { "translation": [-4.5, 1.0, 4.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "transform": { "translation": [-4.5, 0.9, 4.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
       "components": [
         {
           "type": "mesh_renderer",
@@ -461,10 +461,45 @@
           "receive_shadows": true
         },
         {
+          "type": "rigid_body",
+          "body_type": "kinematic",
+          "mass": 0.0,
+          "restitution": 0.0,
+          "friction": 0.6,
+          "gravity_scale": 0.0,
+          "linear_velocity": [0.0, 0.0, 0.0],
+          "angular_velocity": [0.0, 0.0, 0.0]
+        },
+        {
+          "type": "collider",
+          "shape": { "kind": "capsule", "half_height": 0.5, "radius": 0.4 },
+          "offset": [0.0, 0.0, 0.0],
+          "is_sensor": false,
+          "friction": 0.6,
+          "restitution": 0.0
+        },
+        {
           "type": "script",
           "source": null,
-          "path": "scripts/orbit_player.js",
+          "path": "scripts/third_person.js",
           "enabled": true
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Player Facing",
+      "parent": 18,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 0.35, -0.5], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [0.22, 0.22, 0.5] },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/cube",
+          "material": "Gold",
+          "cast_shadows": true,
+          "receive_shadows": true
         }
       ]
     },

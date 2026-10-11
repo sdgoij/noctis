@@ -21,7 +21,7 @@ showcase/
     Crate.prefab.json            # a spinning, physical crate
     Lamp.prefab.json             # a post with a light on a child entity
   scripts/
-    spinner.js  bobber.js  spin2d.js  orbit_player.js  spawner.js
+    spinner.js  bobber.js  spin2d.js  third_person.js  spawner.js
   assets/
     models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
     models/palette.glb           # the named PBR material palette the scenes shade with
@@ -216,10 +216,15 @@ scene-descriptor form; see `.notes/embedding.md`).
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.
 - `spin2d.js` — spins about Z, for a 2D scene.
-- `orbit_player.js` — moves the "Player" with WASD / arrows (Shift to sprint).
-- `spawner.js` — **Space** spawns a spinning crate (via `spawn` + `add_script`),
-  **R** instantiates a prefab from inline JSON, **X** destroys everything it
-  created (`destroy` and `destroy_by_name`).
+- `third_person.js` — the Player's controller: **WASD** moves in the yaw frame,
+  **Space** jumps when grounded, the **mouse** turns the player (X) and tilts a
+  follow camera (Y). The body is kinematic; the script integrates its own gravity
+  (see `is_grounded`, `translate`, `mouse_move`, `get_position`).
+- `spawner.js` — **E** spawns a physical crate (a cube mesh, a dynamic body, and a
+  collider set through `set_component`, plus a lifetime via `add_script`), **R**
+  instantiates a prefab from inline JSON, **X** destroys everything it created
+  (`destroy` and `destroy_by_name`). A crate that falls off the floor, or outlives
+  its lifetime, is removed.
 
 `bobber.js` and the other scripts are also covered by an integration test that
 runs them in the real engine:
