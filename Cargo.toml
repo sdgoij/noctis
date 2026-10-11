@@ -19,6 +19,7 @@ members = [
     "crates/editor",
     "crates/runtime",
     "crates/platform",
+    "crates/web",
     "crates/noctis",
     "crates/client",
 ]
@@ -51,6 +52,7 @@ vfs = { path = "crates/vfs" }
 editor = { path = "crates/editor" }
 runtime = { path = "crates/runtime" }
 platform = { path = "crates/platform" }
+web = { path = "crates/web" }
 noctis = { path = "crates/noctis" }
 client = { path = "crates/client" }
 

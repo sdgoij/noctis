@@ -23,7 +23,11 @@ project.workspace = true
 vfs.workspace = true
 serde_json.workspace = true
 log.workspace = true
-notify.workspace = true
 
 [dev-dependencies]
 serde.workspace = true
+
+# The development script watcher (`crate::watch`, the `--watch` reload) is
+# native-only: `notify` watches the local filesystem.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+notify.workspace = true

@@ -21,7 +21,9 @@
 > `noctis run --bundle <file.zip>` opens and runs one (its default scene). GPU
 > startup is `await`-able (`Renderer::headless_async`/`for_surface_async`), and a
 > wasm **host** (`platform/src/web.rs`) drives any `AppDriver` on a `<canvas>` via
-> `requestAnimationFrame`. The
+> `requestAnimationFrame`, and the wasm **client** `crates/web`
+> (`start(canvas, bundleUrl)`, `cfg(wasm32)`) runs a bundle: the `runtime` client
+> path is target-agnostic, its native-only modules gated. The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -90,7 +92,7 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
-**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, **`project`**, **`audio`**, and now **`platform`**, all compile. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only — it compiles on the web but has no WebAudio sink yet, so decode is what works there. `script` remains blocked **upstream**: Slag's `runtime/src/jit.rs` compiles unconditionally and transmutes a `u64` fn-pointer, which is invalid on 32-bit wasm (the `jit` feature is already dropped on wasm here). `platform` needs winit's web backend features.
+**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, **`project`**, **`audio`**, and now **`platform`**, all compile. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only — it compiles on the web but has no WebAudio sink yet, so decode is what works there. `script` remains blocked **upstream**: Slag's `runtime/src/jit.rs` compiles unconditionally and transmutes a `u64` fn-pointer, which is invalid on 32-bit wasm (the `jit` feature is already dropped on wasm here). That single blocker also holds back `runtime` (now gated, its own code clean) and `crates/web`: the *only* `cargo check -p web --target wasm32-unknown-unknown` errors are in Slag's `jit.rs`. With Slag fixed, the whole client path checks.
 
 ## The seams to introduce
 
@@ -135,6 +137,13 @@ New crates (names provisional; they never leak into the native-only build):
 - **`crates/web`** (the `noctis-web` module) — the wasm entry point and its JS
   glue: instantiate, expose `start(canvas, bundleUrl)`, and own the runtime. This
   is the generic client; the project comes from the bundle, not the binary.
+  **Shipped:** `crates/web`'s `start(canvas_id, bundle_url)` fetches the bundle,
+  opens it with `Project::open_in(ZipStore)`, imports its assets, loads the default
+  scene, and runs it through `platform::run`. It `cfg`s the whole crate to
+  `wasm32` (native builds an empty lib). To enable it, `runtime`'s native-only
+  modules (`build`/`export`/`plugin`/`cli`/`watch`) are gated
+  `cfg(not(target_arch = "wasm32"))`; the client path (`Runtime`, `window`) is
+  target-agnostic.
 - **`render` async init** — split device creation behind an `async fn` so the web
   host can `await` `request_adapter`/`request_device`; the native path keeps its
   `pollster::block_on` wrapper. **Shipped**: `open_device` (the single await

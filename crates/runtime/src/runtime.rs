@@ -20,16 +20,20 @@
 //! enabled, a frame is drawn each tick and the last [`Frame`] is kept. A missing
 //! GPU adapter is logged and ignored, never fatal.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use audio::AudioEngine;
 use ecs::app::App;
-use ecs::assets::{AssetRegistry, ScriptAsset};
+use ecs::assets::AssetRegistry;
+#[cfg(not(target_arch = "wasm32"))]
+use ecs::assets::ScriptAsset;
 use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
 use render::{Frame, IblConfig, RenderError, Renderer, RendererConfig};
 use script::{NoopHost, ScriptHost, ScriptRuntime};
+#[cfg(not(target_arch = "wasm32"))]
 use vfs::{DirStore, Store};
 
 use crate::config::RuntimeConfig;
@@ -80,6 +84,7 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     renderer: Option<Renderer>,
     last_frame: Option<Frame>,
     /// The development script watcher, when scripts load from disk.
+    #[cfg(not(target_arch = "wasm32"))]
     watch: Option<crate::watch::ScriptWatch>,
 }
 
@@ -173,12 +178,14 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             script,
             renderer: None,
             last_frame: None,
+            #[cfg(not(target_arch = "wasm32"))]
             watch: None,
         }
     }
 
     /// Advance the simulation by one frame with raw delta `dt` seconds.
     pub fn tick(&mut self, dt: f32) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.pump_script_watch();
         self.app.tick(dt);
         self.render();
@@ -250,6 +257,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// Watch `root` for `.js`/`.mjs`/`.wasm` changes and reload scripts as they
     /// are edited. A development run ([`cli`](crate::cli)) calls this when scripts
     /// are not embedded in the binary; see `docs/scripts.md`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn watch_scripts(&mut self, root: impl AsRef<Path>) -> std::io::Result<()> {
         self.watch = Some(
             crate::watch::ScriptWatch::new(root.as_ref())
@@ -262,6 +270,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// Re-read the `relative` (project-relative) script from disk into the asset
     /// registry, returning `true` when it changed. The script runtime recompiles
     /// the new source on the next frame. Requires a watched root.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn reload_script(&mut self, relative: &str) -> bool {
         let Some(root) = self.watch.as_ref().map(|watch| watch.root().to_path_buf()) else {
             return false;
@@ -290,6 +299,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     }
 
     /// Re-read every script the watcher reported changed since the last frame.
+    #[cfg(not(target_arch = "wasm32"))]
     fn pump_script_watch(&mut self) {
         let Some(watch) = self.watch.as_ref() else {
             return;

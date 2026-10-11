@@ -47,7 +47,7 @@ mod web;
 #[cfg(not(target_arch = "wasm32"))]
 mod window;
 
-pub use config::WindowConfig;
+pub use config::{DEFAULT_CANVAS_ID, WindowConfig};
 pub use driver::AppDriver;
 pub use error::PlatformError;
 

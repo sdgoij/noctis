@@ -17,10 +17,6 @@ use crate::config::WindowConfig;
 use crate::driver::AppDriver;
 use crate::error::PlatformError;
 
-/// The id of the canvas to render into. A canvas with this id is used if the page
-/// has one; otherwise one is created and appended to the `<body>`.
-const CANVAS_ID: &str = "noctis-canvas";
-
 /// A DOM event captured between frames, applied to the driver's input at the next
 /// frame.
 enum RawEvent {
@@ -100,18 +96,19 @@ fn canvas(
     window: &web_sys::Window,
     config: &WindowConfig,
 ) -> Result<web_sys::HtmlCanvasElement, PlatformError> {
+    let id = &config.canvas_id;
     let document = window.document().ok_or_else(|| host_err("no document"))?;
-    let canvas = match document.get_element_by_id(CANVAS_ID) {
+    let canvas = match document.get_element_by_id(id) {
         Some(element) => element
             .dyn_into::<web_sys::HtmlCanvasElement>()
-            .map_err(|_| host_err(format!("#{CANVAS_ID} is not a <canvas> element")))?,
+            .map_err(|_| host_err(format!("#{id} is not a <canvas> element")))?,
         None => {
             let canvas = document
                 .create_element("canvas")
                 .map_err(|_| host_err("failed to create a <canvas>"))?
                 .dyn_into::<web_sys::HtmlCanvasElement>()
                 .map_err(|_| host_err("created element is not a <canvas>"))?;
-            canvas.set_id(CANVAS_ID);
+            canvas.set_id(id);
             let body = document.body().ok_or_else(|| host_err("no <body>"))?;
             body.append_child(&canvas)
                 .map_err(|_| host_err("failed to attach the canvas"))?;

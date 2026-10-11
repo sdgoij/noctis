@@ -51,26 +51,39 @@
 #![forbid(unsafe_code)]
 
 mod config;
-pub mod embed;
-pub mod export;
-mod runtime;
-mod watch;
-
-pub mod build;
-pub mod cli;
 pub mod demo;
-pub mod plugin;
+pub mod embed;
+mod runtime;
 pub mod window;
 
-pub use build::{BuildOptions, build_project};
 pub use config::RuntimeConfig;
 pub use embed::EmbeddedScript;
-pub use export::{ExportError, ExportFile, ExportReport, bundled_scene, export_game};
 pub use runtime::{RunSummary, Runtime};
 pub use window::run_in_window;
 
+// Native-only: the CLI, the build/export machinery, and the development script
+// watcher. None can run in a browser — they spawn cargo, copy binaries, or watch
+// the filesystem. The client path (`Runtime`, `window`) is target-agnostic, so the
+// wasm client (`crates/web`) reuses it.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod build;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod export;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugin;
+#[cfg(not(target_arch = "wasm32"))]
+mod watch;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use build::{BuildOptions, build_project};
+#[cfg(not(target_arch = "wasm32"))]
+pub use export::{ExportError, ExportFile, ExportReport, bundled_scene, export_game};
+
 /// The most commonly used imports.
 pub mod prelude {
+    #[cfg(not(target_arch = "wasm32"))]
     pub use crate::build::{BuildOptions, build_project};
     pub use crate::config::RuntimeConfig;
     pub use crate::demo::demo_scene;
