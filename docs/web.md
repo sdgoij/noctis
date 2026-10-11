@@ -148,6 +148,9 @@ New crates (names provisional; they never leak into the native-only build):
   target-agnostic. `cargo build -p web --target wasm32-unknown-unknown` links
   `web.wasm`; `crates/web/web/index.html` is the host page (a `<canvas>` +
   `start("noctis-canvas", bundleUrl)`), with the wasm-bindgen output gitignored.
+  The page needs an **import map** for Slag's wasm `env` imports
+  (`slag_host_now_ms`/`slag_host_now_monotonic_ms`), which wasm-bindgen leaves as a
+  bare `import … from "env"`; `crates/web/web/env.js` supplies them.
 - **`render` async init** — split device creation behind an `async fn` so the web
   host can `await` `request_adapter`/`request_device`; the native path keeps its
   `pollster::block_on` wrapper. **Shipped**: `open_device` (the single await

@@ -35,6 +35,17 @@
       `?bundle=<url>` overrides the bundle to load.
     -->
     <canvas id="noctis-canvas"></canvas>
+
+    <!--
+      Slag (the script engine) compiled to wasm imports its clock from a module
+      named `env` (`slag_host_now_ms`, `slag_host_now_monotonic_ms`). wasm-bindgen
+      emits a bare `import * as … from "env"`, which a browser cannot resolve
+      without a mapping, so this import map points `env` at the shim below.
+    -->
+    <script type="importmap">
+      { "imports": { "env": "./env.js" } }
+    </script>
+
     <script type="module">
       import init, { start } from "./web.js";
 

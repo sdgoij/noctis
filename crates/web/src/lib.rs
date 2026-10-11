@@ -23,6 +23,12 @@
 //! start("noctis-canvas", "https://example.com/game.zip");
 //! ```
 //!
+//! Slag imports its clock from a wasm `env` module
+//! (`slag_host_now_ms`/`slag_host_now_monotonic_ms`), which wasm-bindgen leaves
+//! as a bare `import * as … from "env"` — unresolvable in a browser without a map.
+//! The host page must provide one; `crates/web/web/index.html` does, pointing
+//! `env` at `crates/web/web/env.js`.
+//!
 //! (No `#![forbid(unsafe_code)]` here: `#[wasm_bindgen]` generates the FFI glue.)
 
 use ecs::assets::AssetRegistry;
