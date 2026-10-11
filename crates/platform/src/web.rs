@@ -117,6 +117,8 @@ fn canvas(
     };
     canvas.set_width(config.width.max(1));
     canvas.set_height(config.height.max(1));
+    // Focusable, so clicking it captures keyboard input (see `install_listeners`).
+    canvas.set_tab_index(0);
     Ok(canvas)
 }
 
@@ -133,10 +135,12 @@ fn install_listeners(
         let events = Rc::clone(events);
         let closure = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
             move |event: web_sys::KeyboardEvent| {
-                events.borrow_mut().push(RawEvent::Key {
-                    name: event.code(),
-                    down,
-                });
+                let name = event.code();
+                // A key the engine knows must not also scroll/zoom the page.
+                if ecs::resources::Key::from_name(&name).is_some() {
+                    event.prevent_default();
+                }
+                events.borrow_mut().push(RawEvent::Key { name, down });
             },
         );
         let kind = if down { "keydown" } else { "keyup" };
@@ -160,8 +164,14 @@ fn install_listeners(
 
     for down in [true, false] {
         let events = Rc::clone(events);
+        let focusable = canvas.clone();
         let closure =
             Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+                if down {
+                    // Keyboard events follow focus, so clicking the canvas focuses
+                    // it and the game receives keys even without a window listener.
+                    let _ = focusable.focus();
+                }
                 let mut pending = events.borrow_mut();
                 pending.push(RawEvent::Button {
                     button: event.button() as u16,
