@@ -78,7 +78,7 @@ const BOOTSTRAP: &str = r#"
     editor: {
       _reads: function () { return JSON.parse(__host_reads()); },
       list_entities: function () { return JSON.stringify(this._reads().entities); },
-      selection: function () { return JSON.stringify(this._reads().selection); },
+      selection: function () { return this._reads().selection; },
       scene_name: function () { return this._reads().scene; },
       mode: function () { return this._reads().mode; },
       find: function (name) {
@@ -883,7 +883,9 @@ mod tests {
             noctis.command("who", function () {
               var list = JSON.parse(noctis.editor.list_entities());
               var names = list.map(function (e) { return e.name; }).join(",");
-              return "ok " + noctis.editor.mode() + " " + names;
+              var sel = noctis.editor.selection();
+              return "ok " + noctis.editor.mode() + " " + names +
+                " sel=" + Array.isArray(sel) + ":" + sel.length;
             });
             "#,
         );
@@ -891,10 +893,11 @@ mod tests {
         let mut host = ExtensionHost::new().unwrap();
         host.load(&loader, |_| true);
         let mut editor = Editor::new();
-        editor.spawn("Sun", None);
+        let sun = editor.spawn("Sun", None);
+        editor.select(sun).unwrap();
 
         let reply = host.dispatch(&mut editor, "who").unwrap();
-        assert_eq!(reply, "ok 3d Sun");
+        assert_eq!(reply, "ok 3d Sun sel=true:1");
         std::fs::remove_dir_all(&root).ok();
     }
 

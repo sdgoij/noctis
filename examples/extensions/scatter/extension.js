@@ -18,8 +18,9 @@ noctis.command("scatter", function (parts) {
     count = 3;
   }
 
-  // Reads are JSON strings — the same shape the CLI prints.
-  var selection = JSON.parse(noctis.editor.selection());
+  // `selection()` returns an array of entity references; the entity list
+  // (`list_entities()`) stays a JSON string — its structured shape is what the CLI prints.
+  var selection = noctis.editor.selection();
   if (selection.length === 0) {
     return "ok scatter: nothing selected";
   }
@@ -41,7 +42,7 @@ noctis.command("scatter", function (parts) {
 // dispatches the same verb the console uses.
 noctis.ui.panel("Scatter", function (ui) {
   ui.heading("Scatter");
-  var selection = JSON.parse(noctis.editor.selection());
+  var selection = noctis.editor.selection();
   ui.label("selected: " + selection.length);
   ui.separator();
   if (ui.button("Scatter x3")) {

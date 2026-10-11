@@ -159,12 +159,11 @@ arguments — only the reads change.)
 - `examples/showcase/README.md` — the API summary and the `vec3` note.
 - `.notes/script-values.md` — this note, flipped from *proposed* to *shipped*.
 
-## Part 5 — Editor extensions (to confirm)
+## Part 5 — Editor extensions
 
-By the convention above, the editor-extension composite reads should follow the
-same rule. `.notes/extensions.md` currently says reads are snapshots returning
-"JSON strings (the pattern the script API already uses for composite values)".
-Of those:
+By the convention above, the editor-extension reads follow the same rule.
+`.notes/extensions.md` said reads are snapshots returning "JSON strings (the
+pattern the script API already uses for composite values)". Of those:
 
 - `noctis.editor.selection()` — "a JSON array of entity refs": a homogeneous list,
   so it should return a **real array**.
@@ -173,9 +172,10 @@ Of those:
 - `editor_json` (the WebAssembly extension import) — a structured record buffer;
   **stays** as-is.
 
-So this is a small change (start with `selection()`), consistent with the engine,
-and not performance-driven. Confirm the exact read list during implementation and
-update `.notes/extensions.md` to state the convention.
+Shipped: `noctis.editor.selection()` returns the array directly — the bootstrap's
+`_reads()` already parses the snapshot, so it was a one-line change in the
+`BOOTSTRAP` JS (no host or Slag change). The entity list and `inspect` stay JSON.
+`.notes/extensions.md` and the `examples/extensions` scatter extension are updated.
 
 ## Found while migrating
 
@@ -210,8 +210,8 @@ not fold it into this change.
    `slag.rs` docs and its `mouse_reads_reach_a_real_script` test.
 3. **P2 — scripts.** Migrate the six showcase scripts; rebuild the `docs/` demo.
 4. **P3 — docs.** The Part 4 list.
-5. **P4 — extensions.** Align `selection()` and friends; update
-   `.notes/extensions.md`.
+5. **P4 — extensions.** `selection()` returns an array; `.notes/extensions.md`
+   updated. Done.
 
 ## Validation
 
@@ -226,7 +226,7 @@ not fold it into this change.
 ## Open questions
 
 1. Slag method name: `create_array` (matches `create_object`) — agreed?
-2. Extensions (Part 5): is `selection()` the only read to convert, or are there
-   others once the list is walked?
+2. Extensions (Part 5): **resolved** — `selection()` was the only read to
+   convert; the rest are structured records.
 3. Anything else returning a JSON string that this convention should move
    (`viewport_size` is in; anything I missed)?

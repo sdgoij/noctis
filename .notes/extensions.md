@@ -170,7 +170,7 @@ frame or the other extensions' handlers.
 ```js
 noctis.command("scatter", (parts) => {
   const n = Number(parts[1] ?? 5);
-  const selection = JSON.parse(noctis.editor.selection());
+  const selection = noctis.editor.selection();
   const batch = selection.flatMap((e) =>
     Array.from({ length: n - 1 }, () => ({ op: "duplicate", entity: e })));
   return `ok scatter ${noctis.edit(batch)}`;
@@ -188,14 +188,16 @@ noctis.command("scatter", (parts) => {
 
 ### Editor access
 
-Reads are snapshots taken before the handler runs; they return **JSON strings**
-(the pattern the script API already uses for composite values).
+Reads are snapshots taken before the handler runs. A fixed-shape list of handles
+(`selection`) comes back as a **real array**; a structured record (`list_entities`,
+`inspect`) stays a **JSON string** — the convention the script API and the
+WebAssembly ABI follow.
 
 | Member | Returns |
 | --- | --- |
 | `noctis.editor.list_entities()` | The entity list (the same JSON `noctis editor` prints). |
 | `noctis.editor.inspect(handle)` | One entity's components, or `""`. |
-| `noctis.editor.selection()` | The selected entities (a JSON array of entity refs). |
+| `noctis.editor.selection()` | The selected entities (an array of entity refs). |
 | `noctis.editor.scene_name()` | The scene name. |
 | `noctis.editor.mode()` | `"3d"` or `"2d"`. |
 | `noctis.editor.find(name)` | A handle for the entity named `name`, or undefined. |
