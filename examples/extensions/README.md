@@ -3,7 +3,7 @@
 A worked **editor extension** for Noctis. Extensions are JavaScript (or
 WebAssembly) discovered at run time, so the editor grows new verbs and panels
 without a rebuild — the dynamic counterpart to a compiled
-[`[rust]` plugin](../../.notes/embedding.md). See [`.notes/extensions.md`](../../.notes/extensions.md)
+[Rust plugin](../../.notes/embedding.md). See [`.notes/extensions.md`](../../.notes/extensions.md)
 for the design.
 
 ```

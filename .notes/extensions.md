@@ -12,7 +12,7 @@ discovered by the editor, evaluated against the open scene, and talks to the
 editor through a single versioned global, `noctis`. This document defines that
 global, the extension file format, the loading rules, and the safety limits.
 
-It is the dynamic counterpart to the compiled [`[rust]` plugin](embedding.md): a
+It is the dynamic counterpart to the compiled [Rust plugin](embedding.md): a
 plugin is linked in and needs a rebuild, an extension is discovered at run time,
 so an author (or an agent) can add a tool verb or a panel and see it without
 recompiling anything. Both build on the same authoring surface — the

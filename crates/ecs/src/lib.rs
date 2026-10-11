@@ -31,6 +31,8 @@ pub mod world;
 
 /// Derive the `Component` trait (see [`reflect::Component`]).
 pub use ecs_macros::Component;
+/// Mark a project's [`Plugin`](app::Plugin) type; exports `<crate>::noctis_plugin`.
+pub use ecs_macros::plugin;
 
 /// The most commonly used imports.
 pub mod prelude {
@@ -52,6 +54,7 @@ pub mod prelude {
     };
     pub use crate::world::{Entities, Entity, Query, QueryMut, QueryWith, World};
     pub use ecs_macros::Component;
+    pub use ecs_macros::plugin;
     pub use math;
     pub use math::{Aabb, Mat4, Quat, Transform, Vec2, Vec3, Vec4};
 }

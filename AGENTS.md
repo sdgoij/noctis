@@ -157,14 +157,16 @@ needed.
   which works because the script runtime's module cache is keyed by source. Only
   scripts embed for now — scenes, models, textures, audio, fonts, and HDR
   environments stay loose files, so packaging larger assets is still to come.
-- **Project Rust (a `[rust]` plugin)** is shipped (see
-  [`.notes/embedding.md`](.notes/embedding.md)). A project that carries Rust declares a
-  plugin crate in `[rust]` (`crate`, `plugin`); `noctis run`/`editor` generate a
-  per-project **tool** under the project's gitignored `.noctis/tool/` that links it
-  and dispatches the same CLI, and `noctis build` generates a plugin-linked
-  **client** under `.noctis/client/` (runtime + plugin, no editor) to ship, baking
-  scripts in for a release build. A registered custom component's asset references
-  are bundled. The `Component` derive resolves its crate path for both `ecs`
+- **Project Rust (a plugin)** is shipped (see
+  [`.notes/embedding.md`](.notes/embedding.md)). A project carries Rust when its
+  root holds a `Cargo.toml` — a library crate whose type is marked
+  `#[noctis::plugin]` (exporting the `noctis_plugin` symbol); there is no manifest
+  table. `noctis run`/`editor` generate a per-project **tool** under the project's
+  gitignored `.noctis/tool/` that links it and dispatches the same CLI, and
+  `noctis build` generates a plugin-linked **client** under `.noctis/client/`
+  (runtime + plugin, no editor) to ship, baking scripts in for a release build. A
+  registered custom component's asset references are bundled. The `Component`
+  derive and the `plugin` attribute both resolve their crate path for `ecs`
   consumers and `noctis`-only plugin crates, and `noctis`'s `editor` is a default
   feature so a shipped plugin game can drop it. A worked example (a custom `Spin`
   component, a fly-camera system, and a simulated ball) is `examples/rustball`.

@@ -18,7 +18,7 @@ path = "src/main.rs"
 [features]
 default = ["editor"]
 # The editor and its authoring UI (winit/egui/wgpu), plus the `noctis editor`
-# command. A game client built for a `[rust]` project links only the runtime and
+# command. A game client built for a Rust project links only the runtime and
 # the plugin, so it depends on `noctis` with `default-features = false` and this
 # stays off — a shipped plugin game carries no authoring tools.
 editor = ["dep:editor"]

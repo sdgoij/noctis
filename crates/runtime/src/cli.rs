@@ -182,7 +182,7 @@ pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> E
 
 /// Run the game command line with a project's [`Plugin`].
 ///
-/// The per-project binary a `[rust]` build produces calls this: the plugin's
+/// The per-project binary a Rust build produces calls this: the plugin's
 /// components are registered before the scene loads, and its systems are added to
 /// the app.
 pub fn run_cli_with_plugin(

@@ -1,6 +1,6 @@
 [package]
 name = "ecs-macros"
-description = "Derive macros for the Noctis `ecs` crate: `#[derive(Component)]`."
+description = "Derive and attribute macros for the Noctis `ecs` crate: `#[derive(Component)]` and `#[plugin]`."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

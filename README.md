@@ -42,14 +42,15 @@ prefabs, scripts, and generated assets exercising every engine feature. See its
 [README](examples/showcase/README.md).
 
 [`examples/rustball`](examples/rustball) is a small project whose gameplay is
-**Rust** rather than a script: a `[rust]` plugin with a custom component and
-systems (see [`.notes/embedding.md`](.notes/embedding.md) and its
+**Rust** rather than a script: a Rust plugin (a `Cargo.toml` at the project root,
+marked `#[noctis::plugin]`) with a custom component and systems (see
+[`.notes/embedding.md`](.notes/embedding.md) and its
 [README](examples/rustball/README.md)).
 
 The editor is **extendible**: JavaScript and WebAssembly extensions add verbs,
 panels and automation without a rebuild (see [`.notes/extensions.md`](.notes/extensions.md),
 [`examples/extensions`](examples/extensions), and
-[`examples/rustball`](examples/rustball) for the compiled `[rust]` plugin seam).
+[`examples/rustball`](examples/rustball) for the compiled Rust plugin seam).
 
 Scripting is JavaScript, executed by the Slag engine, which is always built — a
 project's scripts run out of the box. The example project's JavaScript is covered

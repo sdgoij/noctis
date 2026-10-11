@@ -5,8 +5,9 @@
 //!
 //! * The **binary** dispatches subcommands — `noctis editor`, `noctis run`,
 //!   `noctis build`, `noctis pack`, `noctis rename` — each implemented by the
-//!   crate that owns it. A project that carries Rust (a `[rust]` table) is run
-//!   through a generated plugin-aware binary (see [`runtime::plugin`]).
+//!   crate that owns it. A project that carries Rust (a `Cargo.toml` at the
+//!   project root) is run through a generated plugin-aware binary (see
+//!   [`runtime::plugin`]).
 //! * The **library** exposes the whole engine through [`prelude`], so an
 //!   application can `use noctis::prelude::*` and drive the very crates the tool
 //!   does. Everything is re-exported from the engine crates, never reimplemented
@@ -50,6 +51,10 @@ pub mod prelude;
 /// The `ecs` crate, re-exported so a crate that depends only on `noctis` can use
 /// `#[derive(Component)]` — the derive resolves the reflect types through here.
 pub use ecs;
+
+/// Mark a project's [`Plugin`](ecs::app::Plugin) type — `#[noctis::plugin]` — so
+/// the tool finds it through the crate's `Cargo.toml`.
+pub use ecs::plugin;
 
 const USAGE: &str = "\
 noctis — the Noctis engine tool
@@ -165,8 +170,9 @@ pub fn dispatch_with_plugin<P: Plugin>(plugin: P) -> ExitCode {
 
 /// The stock `noctis` binary's entry point.
 ///
-/// When `args` names a project with a `[rust]` table, the project is run through
-/// its generated plugin-aware tool (built on demand); otherwise the stock tool
+/// When `args` names a project with a Rust plugin (a `Cargo.toml` at its root),
+/// the project is run through its generated plugin-aware tool (built on demand);
+/// otherwise the stock tool
 /// dispatches with no plugin.
 pub fn main_entry(args: &[String]) -> ExitCode {
     if let Some(project) = runtime::plugin::plugin_project(args) {

@@ -65,11 +65,11 @@ Nothing in this document is implemented; it is the plan and the contract.
 3. **`noctis build` stays native; the browser only *runs*.** A project is compiled
    and packed by the native tool into a **bundle**; the browser fetches and runs
    the bundle. We do not run cargo (or any compiler) in the browser.
-4. **No Rust plugins on the web.** A `[rust]` plugin is compiled and linked by the
-   native tool (see [`.notes/embedding.md`](embedding.md)); that path cannot run in
-   a browser. A web game uses **JavaScript** (and native `.wasm` scripts) only.
-   That is acceptable: the plugin seam is an authoring/embedding feature, not a
-   runtime requirement.
+4. **No Rust plugins on the web.** A Rust plugin (a `Cargo.toml` at the project
+   root) is compiled and linked by the native tool (see
+   [`.notes/embedding.md`](embedding.md)); that path cannot run in a browser. A web
+   game uses **JavaScript** (and native `.wasm` scripts) only. That is acceptable:
+   the plugin seam is an authoring/embedding feature, not a runtime requirement.
 5. **One `Store` abstraction for all file access.** A new `vfs` crate defines a
    byte- and path-oriented `Store` trait with a native filesystem backend and web
    backends (OPFS, IndexedDB). `project`, `extensions`, `runtime` and `editor`
@@ -95,7 +95,7 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
 | Audio | `audio` (`rodio`→`cpal`) | **Shipped.** A `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the same `AudioEngine`; it resumes the `AudioContext` on the first user gesture. Decoding from bytes is `audio::load_clip_bytes`. |
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
-| Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
+| Tooling | `noctis`, `client` build | `noctis build`/`pack`, Rust plugins and `--watch` stay native. |
 
 **One WGSL difference to watch:** the browser's WGSL validator (Tint) is stricter than naga — e.g. it rejects `dpdx`/`dpdy` after a divergent branch that naga accepts — so shaders must keep derivatives in uniform control flow (see `crates/render/src/shaders/ssao.wgsl`, where the position gradient is taken above the background early-out).
 
@@ -309,7 +309,7 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 
 ## Non-goals
 
-- Running a Rust compiler or the `[rust]` plugin seam in the browser.
+- Running a Rust compiler or the Rust plugin seam in the browser.
 - `noctis build`, `--watch`, or any cargo/`std::process` step on the web.
 - WebGL2 as a first-class target (kept as an option, not built).
 - A web-based *authoring* workflow in this phase (the editor follows the client).

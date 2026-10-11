@@ -82,12 +82,10 @@ controls = "input/controls.json"
 dirs = ["tools/extensions"]       # extra search directories (project-relative)
 disabled = ["com.example.wip"]    # extension ids this project turns off
 
-# Optional: the project carries Rust (a plugin of custom components and systems).
-# `noctis run`/`editor` build and run a per-project tool that links it, and
-# `noctis build` ships a plugin-linked game client. See .notes/embedding.md.
-[rust]
-crate = "rust"                    # the plugin library crate directory (default "rust")
-plugin = "mygame::plugin"         # the plugin function; defaults to `<package>::plugin`
+# A project carries Rust when its root holds a `Cargo.toml` (a plugin library crate
+# whose type is `#[noctis::plugin]`); there is no manifest table for it. `noctis
+# run`/`editor` link it into a per-project tool, and `noctis build` ships a
+# plugin-linked game client. See .notes/embedding.md.
 
 # Build/export targets. Each is a self-contained artifact.
 [[build]]
@@ -329,22 +327,28 @@ at startup, so a scene's script paths resolve with no file on disk.
 
 ## Rust (project plugins)
 
-A project may carry Rust alongside its scripts: a library crate (by convention
-`rust/`) that implements a [`Plugin`](embedding.md), defining **custom components**
-and **systems**. The manifest opts in with `[rust]`:
+A project may carry Rust alongside its scripts: a **library crate at the project
+root**. A `Cargo.toml` there is what makes `noctis` treat the project as carrying
+Rust — there is no manifest table for it. The crate's plugin type is marked
+[`#[noctis::plugin]`](embedding.md) and defines **custom components** and
+**systems**:
 
 ```toml
-[rust]
-crate = "rust"
-plugin = "mygame::plugin"
+# Cargo.toml (the project root)
+[package]
+name = "mygame"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+noctis = { path = "...", default-features = false }
 ```
 
 The tool builds a per-project binary that links the plugin and registers it before
 loading the scene, so a project's Rust shapes the scene, the editor, and the
 exported game alike, and the component types are scene-authorable. The full design
 (component registry, scene serialization, editor, script reflection, and the
-build/export path) is in [`.notes/embedding.md`](embedding.md). It is planned, not
-yet implemented.
+build/export path) is in [`.notes/embedding.md`](embedding.md).
 
 ## Fonts
 

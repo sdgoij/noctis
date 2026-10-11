@@ -37,9 +37,8 @@ pub struct BuildOptions {
 ///
 /// `target` names a `[[build]]` target; when omitted the ad-hoc defaults apply
 /// (`options`, then the project's `default_scene` and name). `plugin` is the
-/// project's Rust (a `[rust]` project's plugin, else `&NullPlugin`): its
-/// components' asset references are bundled, and a `[rust]` project's game client
-/// links it.
+/// project's Rust (a Rust project's plugin, else `&NullPlugin`): its components'
+/// asset references are bundled, and a Rust project's game client links it.
 pub fn build_project(
     project_dir: &Path,
     target: Option<&str>,
@@ -52,7 +51,7 @@ pub fn build_project(
     // The plugin's components are needed to scan a scene's `Custom` references.
     let mut components = ComponentRegistry::new();
     plugin.register(&mut components);
-    let is_rust = project.manifest().rust.is_some();
+    let is_rust = project.rust_crate_dir().is_some();
 
     let target: Option<&BuildTarget> = match target {
         Some(name) => Some(

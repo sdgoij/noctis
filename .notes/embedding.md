@@ -18,24 +18,26 @@ is and [`.notes/core-api.md`](core-api.md) for the frozen `math`/`ecs` contract.
 2. **Scripts read and write custom components.** JavaScript reaches any registered
    component by name, through one generic, data-driven API, not a per-type binding.
 3. **Shape B: the tool owns `main`; the project supplies a plugin.** A project with
-   Rust has a library crate that implements [`Plugin`](#the-plugin); the tool builds
-   a per-project binary that links the plugin and registers it before loading the
-   scene. Dynamic libraries (`cdylib`) are rejected: they need `unsafe` and a stable
-   ABI, which the engine forbids.
+   Rust is a library crate at its root (a `Cargo.toml` there is the signal) whose
+   type is marked `#[noctis::plugin]`; the tool builds a per-project binary that
+   links the crate and registers the plugin before loading the scene. Dynamic
+   libraries (`cdylib`) are rejected: they need `unsafe` and a stable ABI, which the
+   engine forbids.
 4. **The component registry is a first-class engine object.** Component types are
    registered (name, default, serialize, deserialize, editor schema), and the scene
    loader/saver, the editor, the bundler, and the script bridge all consult it.
 
 ## The plugin
 
-A project's Rust is a **library** crate (by convention `rust/`, override with
-`[rust]` in the manifest) that depends on `noctis` **without the `editor`
-feature** and exports one value. The feature matters: the exported game links this
-crate, so `default-features = false` keeps the editor and its authoring UI out of a
-shipped game (the tool that links the same crate enables the feature itself).
+A project's Rust lives at the **project root**: a `Cargo.toml` there is what makes
+`noctis` treat the project as carrying Rust — no manifest table is needed. The
+crate is a **library** that depends on `noctis` **without the `editor` feature**
+and exports one value. The feature matters: the exported game links this crate, so
+`default-features = false` keeps the editor and its authoring UI out of a shipped
+game (the tool that links the same crate enables the feature itself).
 
 ```toml
-# rust/Cargo.toml
+# Cargo.toml (the project root)
 [package]
 name = "mygame"
 version = "0.1.0"
@@ -45,12 +47,15 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
-noctis = { path = "../../noctis", default-features = false }
+noctis = { path = "../../crates/noctis", default-features = false }
 serde = { version = "1", features = ["derive"] }
+
+# A project nested in another cargo workspace detaches with an empty table.
+[workspace]
 ```
 
 ```rust
-// rust/src/lib.rs
+// src/lib.rs
 use noctis::prelude::*;
 
 #[derive(Debug, Default, Serialize, Deserialize, Component)]
@@ -59,7 +64,9 @@ pub struct Health {
     pub max: f32,
 }
 
-#[derive(Default)]
+/// `#[noctis::plugin]` exports the `noctis_plugin` symbol the tool links; the
+/// behaviour is written by hand in the `impl`.
+#[noctis::plugin]
 pub struct MyGame;
 
 impl Plugin for MyGame {
@@ -76,31 +83,30 @@ impl Plugin for MyGame {
         });
     }
 }
-
-/// The tool calls this to obtain the project's plugin.
-pub fn plugin() -> MyGame {
-    MyGame
-}
 ```
 
-`noctis.toml` opts in:
+`#[noctis::plugin]` must be applied to the plugin type at the crate root; it keeps
+the type and appends
 
-```toml
-[rust]
-crate = "rust"            # a directory with a Cargo.toml (default: "rust")
-plugin = "mygame::plugin" # the function returning the plugin (default: `<package>::plugin`)
+```rust,ignore
+#[doc(hidden)]
+pub fn noctis_plugin() -> impl ::noctis::ecs::app::Plugin { MyGame }
 ```
 
-**How the tool runs it.** For `run`/`editor`/`build` with `--project` whose manifest
-has `[rust]`, the stock `noctis` builds a per-project **tool** — a small generated
-`main` (under the project's gitignored `.noctis/tool/`) that depends on `noctis` and
-the plugin crate and calls `noctis::dispatch_with_plugin(<plugin>())` — then runs it
-as a subprocess with the same arguments, so the subcommand behaves exactly as the
-stock tool but with the plugin registered. The binary is cached and rebuilt only
-when the plugin crate or the engine changes, the same way `game_client` builds the
-client on demand today. The generated crate carries an empty `[workspace]` table and
-path dependencies on the plugin and on `crates/noctis`, so it compiles the plugin's
-component types in.
+The type must be a unit struct (used as its own value) or implement `Default`.
+
+**How the tool runs it.** For `run`/`editor`/`build` with `--project` whose root
+holds a `Cargo.toml`, the stock `noctis` builds a per-project **tool** — a small
+generated `main` (under the project's gitignored `.noctis/tool/`) that depends on
+`noctis` and the plugin crate and calls
+`noctis::dispatch_with_plugin(<crate>::noctis_plugin())` — then runs it as a
+subprocess with the same arguments, so the subcommand behaves exactly as the stock
+tool but with the plugin registered. The plugin's crate name is the root
+`Cargo.toml`'s `[package].name` (`-` normalized to `_`). The binary is cached and
+rebuilt only when the plugin crate or the engine changes, the same way `game_client`
+builds the client on demand today. The generated crate carries an empty `[workspace]`
+table and path dependencies on the plugin (the project root) and on `crates/noctis`,
+so it compiles the plugin's component types in.
 
 **How a plugin project builds.** `noctis build --project <game>` (dispatched to the
 plugin-aware tool) resolves the scene, bundles the referenced files — including a
@@ -113,8 +119,8 @@ on `noctis` directly, and the plugin's `noctis` has no editor) and calls
 empty and loads scripts from disk. The exported game therefore links the plugin's
 component types and nothing from the authoring tool chain.
 
-A project with no `[rust]` is unchanged: the stock `noctis` binary handles it, and
-`noctis build` ships the stock `noctis-game` client.
+A project with no root `Cargo.toml` is unchanged: the stock `noctis` binary handles
+it, and `noctis build` ships the stock `noctis-game` client.
 
 A complete worked example is `examples/rustball`: a `Spin` custom component turned
 by a system, a system that flies the active camera from input, and a simulated
@@ -245,7 +251,7 @@ pub enum FieldKind {
 `crates/project/src/resolve.rs`) takes the component registry, so a `Custom`
 component's asset references (`FieldKind::Asset` fields, via `Component::references`)
 are bundled like a mesh or clip — otherwise a shipped game would lose the files a
-custom component points at. `noctis build` for a `[rust]` project builds a
+custom component points at. `noctis build` for a Rust project builds a
 plugin-linked client (`.noctis/client/`) instead of the stock `noctis-game`, so the
 exported game has the component types.
 
@@ -330,11 +336,12 @@ identical whichever language reads it.
    plugin's components before the scene loads and schedule its systems after; the
    editor's `run_cli_with_plugin` gives `Editor` the registry so scenes that use
    custom components load, save, and instantiate from prefabs; the inspector draws
-   the schema-driven form and lists custom names in the Add menu. The `[rust]`
-   manifest table (`crate`, `plugin`) drives `runtime::plugin`, which generates and
-   builds the per-project **tool** under `.noctis/tool/` for `noctis run`/`editor`
-   and the per-project **client** under `.noctis/client/` for `noctis build` (a
-   plugin-linked game with no editor; scripts baked in for a release build).
+   the schema-driven form and lists custom names in the Add menu. A `Cargo.toml` at
+   the project root (whose `#[noctis::plugin]` type exports the `noctis_plugin`
+   symbol) drives `runtime::plugin`, which generates and builds the per-project
+   **tool** under `.noctis/tool/` for `noctis run`/`editor` and the per-project
+   **client** under `.noctis/client/` for `noctis build` (a plugin-linked game with no
+   editor; scripts baked in for a release build).
    `project::referenced_files_with` bundles a custom component's asset references.
 3. **Script reflection.** *(Shipped for JavaScript and WebAssembly, custom and
    built-in.)* `has/get/set/remove_component` plus
@@ -352,8 +359,8 @@ identical whichever language reads it.
 - **Derive vs. manual.** How much `#[derive(Component)]` should infer (field kinds
   from Rust types) before `#[field(as = "asset")]`-style attributes are needed.
 - **Schema stability.** A registered component's `NAME` becomes part of the scene
-  format; renaming it is a scene migration. A `[rust] version` and a documented
-  policy are probably warranted.
+  format; renaming it is a scene migration. A plugin-version policy is probably
+  warranted.
 - **Reflection cost.** *Resolved:* the bridge snapshots every reflected component's
   JSON (built-in descriptors and registered customs) per entity once per call
   (`Bridge::begin`). Simple and correct; a lazily-populated cache (only the

@@ -1,7 +1,7 @@
 # Rust Ball
 
 A minimal Noctis **project** whose gameplay is **Rust** rather than a script. It is
-the smallest complete demonstration of the `[rust]` plugin seam (see
+the smallest complete demonstration of the Rust plugin seam (see
 [`.notes/embedding.md`](../../.notes/embedding.md)): a custom, scene-authorable
 component and the systems that act on it.
 
@@ -11,7 +11,8 @@ flies.
 
 ## What the plugin does
 
-The `rust/` crate is the project's plugin; it installs four systems:
+The project root is its plugin crate (`src/lib.rs`, marked with `#[noctis::plugin]`);
+it installs four systems:
 
 - **paint** (once, on startup) — registers a small PBR palette and colours every
   named object. A project with no imported assets can only name the engine's
@@ -41,11 +42,10 @@ project, not here.
 
 ```
 rustball/
-  noctis.toml                  # the manifest: settings, the default scene, [rust]
+  noctis.toml                  # the manifest: settings and the default scene
+  Cargo.toml                   # the plugin library crate (depends on `noctis`)
+  src/lib.rs                   # the `Spin` component, the plugin, and its systems
   scenes/ball.scene.json       # the camera, sun, floor, ball, and the Beacon
-  rust/
-    Cargo.toml                 # the plugin library crate (depends on `noctis`)
-    src/lib.rs                 # the `Spin` component, the plugin, and its systems
 ```
 
 ## Run it
@@ -94,6 +94,6 @@ chain, so a shipped game has no editor.
 - There is no `[render] environment` in the manifest, so image-based lighting is the
   neutral (fully white) fallback. Point `[render] environment` at an `.hdr` for a
   richer look.
-- The plugin crate is a detached cargo workspace (`[workspace]` in its `Cargo.toml`),
-  so it builds into `rust/target/`, not the engine's root `target/`. Its unit tests
-  run with `cargo test --manifest-path examples/rustball/rust/Cargo.toml`.
+- The project is a detached cargo workspace (`[workspace]` in its root `Cargo.toml`),
+  so it builds into `examples/rustball/target/`, not the engine's root `target/`. Its
+  unit tests run with `cargo test --manifest-path examples/rustball/Cargo.toml`.

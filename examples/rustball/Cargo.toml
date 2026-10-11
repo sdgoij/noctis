@@ -1,0 +1,22 @@
+# Rust Ball — a Noctis project whose gameplay is Rust.
+#
+# The project root *is* the plugin library crate: a `Cargo.toml` here is what makes
+# `noctis` treat the project as carrying Rust, and `src/lib.rs` exports the plugin
+# with `#[noctis::plugin]`. `noctis` is depended on without the `editor` feature —
+# a shipped game links this crate, and it must not carry the editor or its
+# authoring UI.
+[package]
+name = "rustball"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+noctis = { path = "../../crates/noctis", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+# Detach from the engine workspace. The project builds in its own target directory
+# here, and is compiled into the generated `.noctis/` tool and client crates.
+[workspace]

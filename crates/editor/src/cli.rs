@@ -85,7 +85,7 @@ pub fn run_cli(args: Vec<String>) -> ExitCode {
 
 /// Run the editor command line with a project's [`Plugin`].
 ///
-/// The per-project binary a `[rust]` build produces calls this: the plugin's
+/// The per-project binary a Rust build produces calls this: the plugin's
 /// custom components are registered so the editor loads, edits, and saves scenes
 /// that use them, and lists them in the Add-component menu.
 pub fn run_cli_with_plugin(args: Vec<String>, plugin: &dyn Plugin) -> ExitCode {

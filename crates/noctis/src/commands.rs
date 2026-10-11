@@ -63,7 +63,7 @@ OPTIONS:
     -h, --help           Show this help.";
 
 /// Parse `build`'s options and run the build. `plugin` is the project's Rust: a
-/// `[rust]` project links it into the exported game and bundles its components'
+/// Rust project links it into the exported game and bundles its components'
 /// asset references.
 pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
     let mut project: Option<String> = None;
@@ -136,7 +136,7 @@ pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliE
     Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
 
     // `build_project` acquires the game client itself (embedding the project's
-    // scripts for a release build, and linking the plugin for a `[rust]` project),
+    // scripts for a release build, and linking the plugin for a Rust project),
     // so `noctis build` is one command.
     let report = build_project(
         &PathBuf::from(&project),

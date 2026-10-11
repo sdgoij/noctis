@@ -1,8 +1,9 @@
 # Rust Ball — a minimal Noctis project whose gameplay is Rust.
 #
-# The project carries a `[rust]` plugin (the `rust/` crate): it registers a custom
-# component (`Spin`) and installs the systems that turn tagged entities and fly the
-# player camera. See README.md, and .notes/embedding.md for the design.
+# The project root is its plugin crate (a `Cargo.toml` and `src/lib.rs`, whose type
+# is marked `#[noctis::plugin]`): it registers a custom component (`Spin`) and
+# installs the systems that turn tagged entities and fly the player camera. See
+# README.md, and .notes/embedding.md for the design.
 
 [project]
 name = "Rust Ball"
@@ -25,11 +26,6 @@ height = 720
 # neutral (fully white) fallback — add an .hdr there for a richer look.
 hdr = true
 sample_count = 4
-
-# The plugin crate and the function returning its `Plugin`.
-[rust]
-crate = "rust"
-plugin = "rustball::plugin"
 
 [[build]]
 name = "rustball"

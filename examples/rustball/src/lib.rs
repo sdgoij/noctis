@@ -1,7 +1,7 @@
 //! Rust Ball — a Noctis example project whose gameplay is Rust.
 //!
-//! The project carries a `[rust]` plugin. It registers one custom component,
-//! [`Spin`], and installs four systems:
+//! The project carries a Rust plugin (a `Cargo.toml` at its root). It registers
+//! one custom component, [`Spin`], and installs four systems:
 //!
 //! * **paint** (once): registers a small PBR palette and colours every named
 //!   object, so the scene's `$default` meshes are not all white;
@@ -249,7 +249,10 @@ fn step_camera(look: &mut Look, transform: &mut LocalTransform, input: &InputSta
     transform.translation = transform.translation + forward * (input.mouse.scroll * ZOOM_SPEED);
 }
 
-/// The project's plugin.
+/// The project's plugin. `#[noctis::plugin]` exports the `noctis_plugin` symbol
+/// the tool links — a `Cargo.toml` at the project root is all `noctis` needs to
+/// find it.
+#[noctis::plugin]
 #[derive(Default)]
 pub struct RustBall;
 
@@ -317,11 +320,6 @@ impl Plugin for RustBall {
             }
         });
     }
-}
-
-/// The tool calls this to obtain the project's plugin.
-pub fn plugin() -> RustBall {
-    RustBall
 }
 
 #[cfg(test)]

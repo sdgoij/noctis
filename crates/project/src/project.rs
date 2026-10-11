@@ -167,18 +167,14 @@ impl Project {
         walk_files(self.store(), dir, out)
     }
 
-    /// The `[package].name` of the crate at `<crate_dir>/Cargo.toml`.
-    fn crate_package_name(&self, crate_dir: &str) -> Result<String, ProjectError> {
-        let relative = format!("{crate_dir}/Cargo.toml");
-        let text = self.read_string(&relative)?;
-        let value: toml::Value =
-            toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
-        value
-            .get("package")
-            .and_then(|package| package.get("name"))
-            .and_then(|name| name.as_str())
-            .map(str::to_string)
-            .ok_or_else(|| ProjectError::Manifest(format!("{relative}: missing [package].name")))
+    /// The project root's `Cargo.toml` text, or `None` when the project carries no
+    /// Rust.
+    ///
+    /// A `Cargo.toml` at the project root is what makes a project a *Rust*
+    /// project; its `[package].name` names the crate the generated tool and client
+    /// link.
+    fn cargo_toml(&self) -> Result<Option<String>, ProjectError> {
+        self.read_document("Cargo.toml")
     }
 
     /// The project root directory.
@@ -246,36 +242,51 @@ impl Project {
         self.root.join(relative)
     }
 
-    /// The plugin library crate directory, when the project carries Rust.
-    pub fn rust_crate_dir(&self) -> Option<PathBuf> {
-        self.manifest
-            .rust
-            .as_ref()
-            .map(|rust| self.dir(&rust.crate_dir))
-    }
-
-    /// The plugin function's Rust path (e.g. `mygame::plugin`).
+    /// The plugin crate directory, when the project carries Rust.
     ///
-    /// When the manifest gives no `[rust].plugin`, the default is
-    /// `<package name>::plugin`, read from the plugin crate's `Cargo.toml` (with
-    /// `-` normalized to `_`). `None` when the project has no `[rust]` table.
-    pub fn plugin_path(&self) -> Result<Option<String>, ProjectError> {
-        let Some(rust) = &self.manifest.rust else {
-            return Ok(None);
-        };
-        if let Some(plugin) = &rust.plugin {
-            return Ok(Some(plugin.clone()));
-        }
-        let package = self.crate_package_name(&rust.crate_dir)?;
-        Ok(Some(format!("{}::plugin", package.replace('-', "_"))))
+    /// A project carries Rust when its root holds a `Cargo.toml`; the crate *is*
+    /// the plugin, so this is the project root.
+    pub fn rust_crate_dir(&self) -> Option<PathBuf> {
+        self.cargo_toml().ok().flatten().map(|_| self.root.clone())
     }
 
-    /// The plugin crate's `[package].name`, when the project carries Rust.
+    /// The plugin crate's `[package].name`, when the project root has a
+    /// `Cargo.toml`.
+    ///
+    /// A `Cargo.toml` with no `[package]` (a virtual workspace root) is an error:
+    /// a project's Rust must be a library crate at the root.
     pub fn rust_package_name(&self) -> Result<Option<String>, ProjectError> {
-        let Some(rust) = &self.manifest.rust else {
+        let Some(text) = self.cargo_toml()? else {
             return Ok(None);
         };
-        Ok(Some(self.crate_package_name(&rust.crate_dir)?))
+        let value: toml::Value =
+            toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
+        let name = value
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(|name| name.as_str());
+        match name {
+            Some(name) => Ok(Some(name.to_string())),
+            None => Err(ProjectError::Manifest(
+                "Cargo.toml: missing [package].name (a virtual workspace is not a plugin crate)"
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// The conventional plugin function's Rust path, `<package>::noctis_plugin`.
+    ///
+    /// `#[noctis::plugin]` exports the `noctis_plugin` symbol; the crate name is
+    /// the root `Cargo.toml`'s `[package].name`, with `-` normalized to `_`. `None`
+    /// when the project has no root `Cargo.toml`.
+    pub fn plugin_path(&self) -> Result<Option<String>, ProjectError> {
+        let Some(package) = self.rust_package_name()? else {
+            return Ok(None);
+        };
+        Ok(Some(format!(
+            "{}::noctis_plugin",
+            package.replace('-', "_")
+        )))
     }
 
     /// The project's extension search directories, absolute (see `.notes/extensions.md`).
@@ -584,61 +595,43 @@ mod tests {
     }
 
     #[test]
-    fn rust_settings_resolve_the_crate_and_plugin_path() {
+    fn a_root_cargo_toml_makes_the_project_carry_rust() {
         let dir = std::env::temp_dir().join(format!("noctis-rust-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("game")).expect("dirs");
+        std::fs::create_dir_all(&dir).expect("dirs");
+        std::fs::write(dir.join(MANIFEST_FILE), "[project]\nname = \"T\"\n").expect("manifest");
+
+        // No Cargo.toml: the project carries no Rust.
+        let project = Project::open(&dir).expect("open");
+        assert_eq!(project.rust_crate_dir(), None);
+        assert_eq!(project.rust_package_name().unwrap(), None);
+        assert_eq!(project.plugin_path().unwrap(), None);
+
+        // A root Cargo.toml is the signal: the crate is the plugin, its package
+        // name names it, and the plugin path is the convention (`-` normalized).
         std::fs::write(
-            dir.join("game/Cargo.toml"),
-            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\n",
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .expect("crate manifest");
-
-        // An explicit plugin path is used verbatim.
-        std::fs::write(
-            dir.join(MANIFEST_FILE),
-            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"game\"\nplugin = \"my_game::game\"\n",
-        )
-        .expect("manifest");
         let project = Project::open(&dir).expect("open");
-        assert_eq!(project.rust_crate_dir(), Some(dir.join("game")));
+        assert_eq!(project.rust_crate_dir(), Some(dir.clone()));
         assert_eq!(
             project.rust_package_name().unwrap().as_deref(),
             Some("my-game")
         );
         assert_eq!(
             project.plugin_path().unwrap().as_deref(),
-            Some("my_game::game")
+            Some("my_game::noctis_plugin")
         );
 
-        // Absent, it defaults to `<package name>::plugin`, with `-` normalized.
-        std::fs::write(
-            dir.join("default.toml"),
-            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"game\"\n",
-        )
-        .expect("manifest");
-        let project = Project::from_manifest_file(dir.join("default.toml")).expect("open");
-        assert_eq!(
-            project.plugin_path().unwrap().as_deref(),
-            Some("my_game::plugin")
-        );
-
-        // No [rust] table at all.
-        let none = Project::from_manifest(
-            "/x",
-            ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap(),
-        );
-        assert_eq!(none.rust_crate_dir(), None);
-        assert_eq!(none.rust_package_name().unwrap(), None);
-        assert_eq!(none.plugin_path().unwrap(), None);
-
-        // A crate directory with no Cargo.toml is an error, not a silent default.
-        std::fs::write(
-            dir.join("missing.toml"),
-            "[project]\nname = \"T\"\n\n[rust]\ncrate = \"absent\"\n",
-        )
-        .expect("manifest");
-        let missing = Project::from_manifest_file(dir.join("missing.toml")).expect("open");
-        assert!(matches!(missing.plugin_path(), Err(ProjectError::Io(_))));
+        // A virtual workspace root (no [package]) is an error, not a silent default.
+        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n")
+            .expect("crate manifest");
+        let project = Project::open(&dir).expect("open");
+        assert!(matches!(
+            project.rust_package_name(),
+            Err(ProjectError::Manifest(_))
+        ));
 
         std::fs::remove_dir_all(&dir).ok();
     }

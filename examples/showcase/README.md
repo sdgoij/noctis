@@ -206,7 +206,7 @@ The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 `time_elapsed`, `key_down` (winit key names such as `KeyW`, `Space`,
 `ArrowUp`), `mouse_down` (`left`/`right`/`middle`), `add_script`, `log`,
 `instantiate_prefab`, and the component reflection calls `has_component`,
-`get_component`, `set_component`, `remove_component` (any component — a `[rust]`
+`get_component`, `set_component`, `remove_component` (any component — a Rust
 project's custom components or a built-in, whose JSON is its scene-descriptor form;
 see `.notes/embedding.md`).
 
