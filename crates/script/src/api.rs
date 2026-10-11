@@ -98,6 +98,34 @@ pub enum ScriptCommand {
         /// The new scale.
         scale: Vec3,
     },
+    /// An entity's body linear velocity was overwritten.
+    ///
+    /// Queued only: the script API has no physics handle, so the runtime applies
+    /// it to the [`PhysicsWorld`](physics) after the call.
+    SetVelocity {
+        /// The entity.
+        entity: EntityId,
+        /// The new linear velocity.
+        velocity: Vec3,
+    },
+    /// An entity's body linear velocity was offset.
+    ///
+    /// Queued only, applied by the runtime (see [`ScriptCommand::SetVelocity`]).
+    AddVelocity {
+        /// The entity.
+        entity: EntityId,
+        /// The offset applied to the velocity.
+        velocity: Vec3,
+    },
+    /// An instantaneous impulse was applied to an entity's body.
+    ///
+    /// Queued only, applied by the runtime (see [`ScriptCommand::SetVelocity`]).
+    ApplyImpulse {
+        /// The entity.
+        entity: EntityId,
+        /// The impulse (a change of momentum).
+        velocity: Vec3,
+    },
     /// A script component was added or replaced at runtime.
     AddScript {
         /// The entity.
@@ -153,6 +181,10 @@ pub struct ScriptContext<'a> {
     pub components: &'a ComponentRegistry,
     /// Input state for the current frame.
     pub input: &'a InputState,
+    /// A read-only snapshot of the physics state (grounding, velocities), or
+    /// `None` when the caller has no physics to offer. The host supplies it per
+    /// frame; a bare [`ScriptContext::new`] leaves it empty.
+    pub physics: Option<&'a PhysicsView>,
     /// Total elapsed scaled time, seconds.
     pub elapsed: f32,
     /// Delta time of the current frame, seconds.
@@ -167,18 +199,32 @@ impl<'a> ScriptContext<'a> {
     /// A context with no current entity and an empty command log.
     ///
     /// `components` is the reflection registry scripts read and write by name;
-    /// pass an empty one when there are no registered components.
+    /// pass an empty one when there are no registered components. There is no
+    /// physics snapshot; use [`ScriptContext::with_physics`] to add one.
     pub fn new(
         world: &'a mut World,
         assets: &'a AssetRegistry,
         components: &'a ComponentRegistry,
         input: &'a InputState,
     ) -> Self {
+        Self::with_physics(world, assets, components, input, None)
+    }
+
+    /// Like [`ScriptContext::new`], but with a physics snapshot for the reads
+    /// `is_grounded` / `get_velocity`.
+    pub fn with_physics(
+        world: &'a mut World,
+        assets: &'a AssetRegistry,
+        components: &'a ComponentRegistry,
+        input: &'a InputState,
+        physics: Option<&'a PhysicsView>,
+    ) -> Self {
         Self {
             world,
             assets,
             components,
             input,
+            physics,
             elapsed: 0.0,
             delta: 0.0,
             entity: None,
@@ -192,6 +238,55 @@ impl<'a> ScriptContext<'a> {
     /// context again.
     pub fn api(&mut self) -> ScriptApi<'_, 'a> {
         ScriptApi { ctx: self }
+    }
+}
+
+/// A read-only snapshot of the physics state scripts may read this frame:
+/// whether a body is grounded and its linear velocity, keyed by entity handle.
+///
+/// The runtime fills one from the [`PhysicsWorld`](physics) each frame; the
+/// bridge copies it, so `is_grounded` / `get_velocity` answer from the snapshot
+/// instead of reaching into physics mid-call.
+#[derive(Clone, Debug, Default)]
+pub struct PhysicsView {
+    pub(crate) grounded: std::collections::HashSet<EntityId>,
+    pub(crate) velocities: std::collections::HashMap<EntityId, Vec3>,
+}
+
+impl PhysicsView {
+    /// An empty view.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Drop everything, for reuse between frames.
+    pub fn clear(&mut self) {
+        self.grounded.clear();
+        self.velocities.clear();
+    }
+
+    /// Record whether `entity` is grounded.
+    pub fn set_grounded(&mut self, entity: EntityId, grounded: bool) {
+        if grounded {
+            self.grounded.insert(entity);
+        } else {
+            self.grounded.remove(&entity);
+        }
+    }
+
+    /// Record `entity`'s linear velocity.
+    pub fn set_velocity(&mut self, entity: EntityId, velocity: Vec3) {
+        self.velocities.insert(entity, velocity);
+    }
+
+    /// Whether `entity` is grounded.
+    pub fn is_grounded(&self, entity: EntityId) -> bool {
+        self.grounded.contains(&entity)
+    }
+
+    /// `entity`'s linear velocity, or zero when unknown.
+    pub fn velocity(&self, entity: EntityId) -> Vec3 {
+        self.velocities.get(&entity).copied().unwrap_or_else(zero3)
     }
 }
 
@@ -459,6 +554,67 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
             _ => return false,
         };
         self.ctx.input.mouse.is_down(button)
+    }
+
+    /// The cursor movement since the previous frame, logical pixels.
+    pub fn mouse_delta(&self) -> [f32; 2] {
+        self.ctx.input.mouse.delta
+    }
+
+    /// The cursor position in logical pixels.
+    pub fn mouse_position(&self) -> [f32; 2] {
+        self.ctx.input.mouse.position
+    }
+
+    /// The scroll wheel delta since the previous frame.
+    pub fn mouse_scroll(&self) -> f32 {
+        self.ctx.input.mouse.scroll
+    }
+
+    // -- physics ------------------------------------------------------------
+
+    /// Overwrite the entity's body linear velocity.
+    ///
+    /// Recorded as [`ScriptCommand::SetVelocity`]; the script API has no physics
+    /// handle, so the runtime applies it after the call. Does nothing when the
+    /// entity has no dynamic body.
+    pub fn set_velocity(&mut self, id: EntityId, velocity: Vec3) {
+        self.ctx.commands.push(ScriptCommand::SetVelocity {
+            entity: id,
+            velocity,
+        });
+    }
+
+    /// Offset the entity's body linear velocity by `delta`.
+    ///
+    /// Recorded as [`ScriptCommand::AddVelocity`]; applied by the runtime.
+    pub fn add_velocity(&mut self, id: EntityId, delta: Vec3) {
+        self.ctx.commands.push(ScriptCommand::AddVelocity {
+            entity: id,
+            velocity: delta,
+        });
+    }
+
+    /// Apply an instantaneous impulse to the entity's body.
+    ///
+    /// Recorded as [`ScriptCommand::ApplyImpulse`]; applied by the runtime.
+    pub fn apply_impulse(&mut self, id: EntityId, impulse: Vec3) {
+        self.ctx.commands.push(ScriptCommand::ApplyImpulse {
+            entity: id,
+            velocity: impulse,
+        });
+    }
+
+    /// The entity's body linear velocity from this frame's snapshot, or zero.
+    pub fn get_velocity(&self, id: EntityId) -> Vec3 {
+        self.ctx
+            .physics
+            .map_or_else(zero3, |view| view.velocity(id))
+    }
+
+    /// Whether the entity is grounded, from this frame's snapshot.
+    pub fn is_grounded(&self, id: EntityId) -> bool {
+        self.ctx.physics.is_some_and(|view| view.is_grounded(id))
     }
 
     // -- scenes and prefabs -------------------------------------------------

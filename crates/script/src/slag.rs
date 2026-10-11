@@ -326,6 +326,96 @@ impl SlagHost {
         )?;
 
         let b = Rc::clone(&self.bridge);
+        self.register(
+            "mouse_move",
+            0,
+            Box::new(move |_call| {
+                let d = b.borrow().input.mouse.delta;
+                Ok(slag::JsValue::string(format!("[{},{}]", d[0], d[1])))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "mouse_position",
+            0,
+            Box::new(move |_call| {
+                let p = b.borrow().input.mouse.position;
+                Ok(slag::JsValue::string(format!("[{},{}]", p[0], p[1])))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
+            "mouse_scroll",
+            0,
+            Box::new(move |_call| Ok(slag::JsValue::number(b.borrow().input.mouse.scroll as f64))),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "set_velocity",
+            4,
+            Box::new(move |call| {
+                if let (Some(id), Some(v)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
+                    b.borrow_mut().set_velocity(id, v);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "add_velocity",
+            4,
+            Box::new(move |call| {
+                if let (Some(id), Some(v)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
+                    b.borrow_mut().add_velocity(id, v);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "apply_impulse",
+            4,
+            Box::new(move |call| {
+                if let (Some(id), Some(v)) = (arg_entity(&h.borrow(), call, 0), arg_vec3(call, 1)) {
+                    b.borrow_mut().apply_impulse(id, v);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "get_velocity",
+            1,
+            Box::new(move |call| {
+                let out =
+                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().velocity(id)));
+                Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
+            "is_grounded",
+            1,
+            Box::new(move |call| {
+                let grounded =
+                    arg_entity(&h.borrow(), call, 0).is_some_and(|id| b.borrow().is_grounded(id));
+                Ok(slag::JsValue::boolean(grounded))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
         let h = Rc::clone(&self.handles);
         self.register(
             "add_script",
@@ -610,6 +700,39 @@ mod tests {
                 .command_log()
                 .iter()
                 .any(|c| matches!(c, ScriptCommand::Log { .. }))
+        );
+    }
+
+    #[test]
+    fn mouse_reads_reach_a_real_script() {
+        const MOUSE: &str = "
+            function on_update(entity, dt) {
+                var m = String(mouse_move()).slice(1, -1).split(',').map(Number);
+                log('dx=' + m[0] + ' scroll=' + mouse_scroll());
+            }
+        ";
+        let host = SlagHost::new().expect("slag engine starts");
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(entity, Script::from_source(MOUSE));
+
+        // Moving the cursor from the origin adds its position to this frame's delta.
+        runtime.input_mut().set_mouse_position(50.0, 0.0);
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
+        );
+        assert!(
+            runtime.command_log().iter().any(|c| matches!(
+                c, ScriptCommand::Log { message, .. } if message.contains("dx=50")
+            )),
+            "mouse_move did not reach the script: {:?}",
+            runtime.command_log()
         );
     }
 

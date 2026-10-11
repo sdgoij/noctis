@@ -19,7 +19,7 @@
 //! the JavaScript backend and the native WebAssembly host share one
 //! implementation of the snapshot/replay protocol.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ecs::components::{LocalTransform, Name};
 use ecs::resources::InputState;
@@ -88,6 +88,10 @@ pub(crate) struct Bridge {
     /// Registered components in the snapshot, keyed by entity then component
     /// name, as JSON strings (the reflection registry's serialization).
     pub(crate) components: HashMap<EntityId, HashMap<String, String>>,
+    /// Entities the physics snapshot marked grounded this frame.
+    pub(crate) grounded: HashSet<EntityId>,
+    /// Linear velocities from the physics snapshot, keyed by entity handle.
+    pub(crate) velocities: HashMap<EntityId, Vec3>,
     /// The number of placeholders handed out so far this call.
     pub(crate) next_placeholder: u64,
     /// Commands queued during the call, replayed afterwards.
@@ -106,8 +110,16 @@ impl Bridge {
         self.scales.clear();
         self.names.clear();
         self.components.clear();
+        self.grounded.clear();
+        self.velocities.clear();
         self.next_placeholder = 0;
         self.commands.clear();
+
+        if let Some(view) = ctx.physics {
+            self.grounded.extend(view.grounded.iter().copied());
+            self.velocities
+                .extend(view.velocities.iter().map(|(id, v)| (*id, *v)));
+        }
 
         // Reflected components (built-ins in scene form, registered customs in
         // their own JSON) are serialized once per call — the cost of the generic
@@ -268,6 +280,46 @@ impl Bridge {
             name: name.to_string(),
         });
     }
+
+    // -- physics ------------------------------------------------------------
+
+    /// Whether the snapshot marked `id` grounded.
+    pub(crate) fn is_grounded(&self, id: EntityId) -> bool {
+        self.grounded.contains(&id)
+    }
+
+    /// The snapshot's linear velocity for `id`, or zero.
+    pub(crate) fn velocity(&self, id: EntityId) -> Vec3 {
+        self.velocities
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+    }
+
+    /// Queue a linear-velocity overwrite (applied by the runtime).
+    pub(crate) fn set_velocity(&mut self, id: EntityId, velocity: Vec3) {
+        self.velocities.insert(id, velocity);
+        self.commands.push(ScriptCommand::SetVelocity {
+            entity: id,
+            velocity,
+        });
+    }
+
+    /// Queue a linear-velocity offset (applied by the runtime).
+    pub(crate) fn add_velocity(&mut self, id: EntityId, delta: Vec3) {
+        self.commands.push(ScriptCommand::AddVelocity {
+            entity: id,
+            velocity: delta,
+        });
+    }
+
+    /// Queue an impulse (applied by the runtime).
+    pub(crate) fn apply_impulse(&mut self, id: EntityId, impulse: Vec3) {
+        self.commands.push(ScriptCommand::ApplyImpulse {
+            entity: id,
+            velocity: impulse,
+        });
+    }
 }
 
 /// Replay a call's queued commands against the real world, translating
@@ -323,6 +375,15 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
             }
             ScriptCommand::RemoveComponent { entity, name } => {
                 api.remove_component(resolve(&map, entity), &name);
+            }
+            ScriptCommand::SetVelocity { entity, velocity } => {
+                api.set_velocity(resolve(&map, entity), velocity);
+            }
+            ScriptCommand::AddVelocity { entity, velocity } => {
+                api.add_velocity(resolve(&map, entity), velocity);
+            }
+            ScriptCommand::ApplyImpulse { entity, velocity } => {
+                api.apply_impulse(resolve(&map, entity), velocity);
             }
         }
     }

@@ -29,16 +29,21 @@ use ecs::app::App;
 use ecs::assets::AssetRegistry;
 #[cfg(not(target_arch = "wasm32"))]
 use ecs::assets::ScriptAsset;
+use ecs::components::RigidBody;
 use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
 use render::{Frame, IblConfig, Renderer};
 #[cfg(not(target_arch = "wasm32"))]
 use render::{RenderError, RendererConfig};
-use script::{NoopHost, ScriptHost, ScriptRuntime};
+use script::{NoopHost, PhysicsView, ScriptCommand, ScriptHost, ScriptRuntime};
 #[cfg(not(target_arch = "wasm32"))]
 use vfs::{DirStore, Store};
 
 use crate::config::RuntimeConfig;
+
+/// How far below a body's collider the ground probe starts and looks (twice
+/// that): a human-scale clearance that clears small steps but not a jump.
+const GROUND_PROBE: f32 = 0.15;
 
 /// A summary of a headless run.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +90,9 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     script: Arc<Mutex<ScriptRuntime<H>>>,
     renderer: Option<Renderer>,
     last_frame: Option<Frame>,
+    /// Whether the windowed game currently captures the cursor (mouse-look).
+    /// `Esc` toggles it; the menu/pause build ties it to the paused state.
+    pub(crate) captured: bool,
     /// The development script watcher, when scripts load from disk.
     #[cfg(not(target_arch = "wasm32"))]
     watch: Option<crate::watch::ScriptWatch>,
@@ -157,12 +165,62 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             });
         }
         {
-            let script = Arc::clone(&script);
+            let scripts = Arc::clone(&script);
+            let physics_handle = Arc::clone(&physics);
             app.on_update("runtime.script_update", move |ctx| {
                 let dt = ctx.time.delta();
-                let mut script = lock(&script);
-                *script.input_mut() = ctx.input.clone();
-                script.run_update(&mut ctx.scene.world, &ctx.assets, dt);
+                // Snapshot what scripts may read (`is_grounded`, `get_velocity`)
+                // before running them, then run, then apply the physics writes the
+                // world-only replay left queued (velocity, impulses).
+                let view = {
+                    let physics = lock(&physics_handle);
+                    let mut view = PhysicsView::new();
+                    for (entity, _) in ctx.scene.world.query::<RigidBody>() {
+                        let id = script::entity_id(entity);
+                        if let Some(velocity) = physics.linear_velocity_of(entity) {
+                            view.set_velocity(id, velocity);
+                        }
+                        view.set_grounded(
+                            id,
+                            physics.is_grounded(&ctx.scene.world, entity, GROUND_PROBE),
+                        );
+                    }
+                    view
+                };
+                let commands = {
+                    let mut scripts = lock(&scripts);
+                    *scripts.input_mut() = ctx.input.clone();
+                    scripts.set_physics_view(view);
+                    scripts.run_update(&mut ctx.scene.world, &ctx.assets, dt);
+                    scripts.take_commands()
+                };
+                let mut physics = lock(&physics_handle);
+                for command in commands {
+                    match command {
+                        ScriptCommand::SetVelocity { entity, velocity } => {
+                            if let Some(entity) = script::entity_from_id(&ctx.scene.world, entity) {
+                                physics.set_linear_velocity(&ctx.scene.world, entity, velocity);
+                            }
+                        }
+                        ScriptCommand::AddVelocity { entity, velocity } => {
+                            if let Some(entity) = script::entity_from_id(&ctx.scene.world, entity)
+                                && let Some(current) = physics.linear_velocity_of(entity)
+                            {
+                                physics.set_linear_velocity(
+                                    &ctx.scene.world,
+                                    entity,
+                                    current + velocity,
+                                );
+                            }
+                        }
+                        ScriptCommand::ApplyImpulse { entity, velocity } => {
+                            if let Some(entity) = script::entity_from_id(&ctx.scene.world, entity) {
+                                physics.apply_impulse(&ctx.scene.world, entity, velocity);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             });
         }
         {
@@ -180,6 +238,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             script,
             renderer: None,
             last_frame: None,
+            captured: true,
             #[cfg(not(target_arch = "wasm32"))]
             watch: None,
         }
@@ -510,6 +569,31 @@ mod tests {
             .expect("entity has a global transform")
             .position()
             .y
+    }
+
+    #[test]
+    fn a_script_velocity_reaches_the_physics_body() {
+        // A script names the ball and overwrites its velocity; the runtime applies
+        // the queued command to the physics world after the call.
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            if let Some(ball) = api.find_entity("Ball") {
+                api.set_velocity(ball, math::vec3(2.0, 0.0, 0.0));
+            }
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+        runtime.tick_once();
+
+        let ball = entity_named(&runtime, "Ball").expect("the ball exists");
+        let velocity = runtime
+            .physics()
+            .linear_velocity_of(ball)
+            .expect("the ball has a body");
+        assert!(velocity.x > 1.0, "ball velocity = {velocity:?}");
     }
 
     #[test]

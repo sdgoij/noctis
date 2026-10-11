@@ -57,7 +57,9 @@ pub mod wasm_host;
 /// The shared snapshot/replay bridge used by the script backends.
 mod bridge;
 
-pub use api::{EntityId, ScriptApi, ScriptCommand, ScriptContext, entity_from_id, entity_id};
+pub use api::{
+    EntityId, PhysicsView, ScriptApi, ScriptCommand, ScriptContext, entity_from_id, entity_id,
+};
 pub use ecs::world::Entity;
 pub use host::{
     LifecycleCall, ModuleId, NoopHost, PendingApi, RecordingHost, ScriptBehaviour, ScriptHost,

@@ -67,6 +67,9 @@ pub struct WindowHost<D: AppDriver> {
     egui: Option<EguiLayer>,
     window: Option<Arc<Window>>,
     last: Instant,
+    /// The cursor-capture state last applied to the window, so a driver's wish is
+    /// only pushed to winit when it changes.
+    cursor_captured: bool,
 }
 
 impl<D: AppDriver> WindowHost<D> {
@@ -79,6 +82,7 @@ impl<D: AppDriver> WindowHost<D> {
             egui: None,
             window: None,
             last: Instant::now(),
+            cursor_captured: false,
         }
     }
 
@@ -160,6 +164,29 @@ impl<D: AppDriver> WindowHost<D> {
         }
     }
 
+    /// Grab/hide the cursor to match what the driver wants, if it changed.
+    fn sync_cursor(&mut self) {
+        let want = self.driver.cursor_captured();
+        if want == self.cursor_captured {
+            return;
+        }
+        self.cursor_captured = want;
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        window.set_cursor_visible(!want);
+        let mode = if want {
+            winit::window::CursorGrabMode::Locked
+        } else {
+            winit::window::CursorGrabMode::None
+        };
+        // Not every backend supports locking; a failure is not fatal (the game
+        // then relies on the cursor deltas it does get).
+        if let Err(err) = window.set_cursor_grab(mode) {
+            log::warn!("cursor grab unsupported: {err}");
+        }
+    }
+
     /// Upload the driver's editor gizmo (if any) to the renderer. Called after
     /// the driver's UI has run, so interaction state (a hovered handle) is
     /// current.
@@ -176,6 +203,7 @@ impl<D: AppDriver> WindowHost<D> {
         self.last = now;
 
         self.driver.update(dt);
+        self.sync_cursor();
 
         let Some(window) = self.window.clone() else {
             return;
@@ -315,6 +343,11 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
                         ElementState::Pressed => input.press_key(key),
                         ElementState::Released => input.release_key(key),
                     }
+                }
+                if key_event.state == ElementState::Pressed
+                    && key_event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                {
+                    self.driver.on_escape();
                 }
                 self.forward_to_egui(&event);
             }

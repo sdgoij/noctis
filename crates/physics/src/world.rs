@@ -8,7 +8,7 @@ use ecs::components::{
     BodyType, Collider, ColliderShape, GlobalTransform, LocalTransform, Parent, RigidBody,
 };
 use ecs::world::{Entity, World};
-use math::{Vec3, one3, trs};
+use math::{Vec3, one3, trs, vec3};
 
 use rapier3d::dynamics::{
     CCDSolver, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
@@ -513,6 +513,30 @@ impl PhysicsWorld {
             .collect()
     }
 
+    /// Whether `entity`'s collider is resting on a surface: a short ray cast from
+    /// just below the collider's lowest point hits something that is not the
+    /// entity itself.
+    ///
+    /// `probe` is how far below the collider the ray starts and how far it looks
+    /// (twice that); `0.1`–`0.2` suits a human-scale body. An entity without a
+    /// collider or a `GlobalTransform` is never grounded.
+    pub fn is_grounded(&self, world: &World, entity: Entity, probe: f32) -> bool {
+        let (Some(collider), Some(global)) = (
+            world.get::<Collider>(entity),
+            world.get::<GlobalTransform>(entity),
+        ) else {
+            return false;
+        };
+        let base = global.position() + collider.offset;
+        let origin = vec3(
+            base.x,
+            base.y - collider.shape.half_height() - probe,
+            base.z,
+        );
+        self.raycast(origin, vec3(0.0, -1.0, 0.0), probe * 2.0)
+            .is_some_and(|hit| hit.entity != Some(entity))
+    }
+
     // ------------------------------------------------------------------
     // Forces / velocities
     // ------------------------------------------------------------------
@@ -736,6 +760,41 @@ mod tests {
             (rest - 1.0).abs() < 0.2,
             "ball did not rest on floor: y = {rest}"
         );
+    }
+
+    #[test]
+    fn is_grounded_at_rest_and_not_in_the_air() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::default();
+        spawn_body(
+            &mut world,
+            vec3(0.0, 0.0, 0.0),
+            fixed(),
+            floor(vec3(5.0, 0.5, 5.0)),
+        );
+        let ball_e = spawn_body(
+            &mut world,
+            vec3(0.0, 10.0, 0.0),
+            RigidBody::default(),
+            ball(0.5),
+        );
+        physics.sync_from_world(&world);
+
+        // High in the air: the probe reaches nothing.
+        assert!(!physics.is_grounded(&world, ball_e, 0.15));
+
+        // Let it fall and settle on the floor.
+        for _ in 0..300 {
+            physics.step(&mut world, 1.0 / 60.0);
+        }
+        assert!(
+            physics.is_grounded(&world, ball_e, 0.15),
+            "ball did not report grounded at rest"
+        );
+
+        // An entity with no collider is never grounded.
+        let bare = world.spawn();
+        assert!(!physics.is_grounded(&world, bare, 0.15));
     }
 
     #[test]

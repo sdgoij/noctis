@@ -62,6 +62,19 @@ pub trait AppDriver {
         None
     }
 
+    /// Whether the driver wants the cursor captured (hidden and locked to the
+    /// window) while playing. Defaults to no capture, which suits an editor.
+    ///
+    /// The host applies this by grabbing and hiding the cursor; a game that uses
+    /// mouse-look returns `true` while playing and `false` while paused.
+    fn cursor_captured(&self) -> bool {
+        false
+    }
+
+    /// The `Esc` key was pressed. Defaults to doing nothing; a game uses it to
+    /// pause (and release the cursor).
+    fn on_escape(&mut self) {}
+
     /// Whether the driver has requested the application exit.
     fn should_exit(&self) -> bool {
         false

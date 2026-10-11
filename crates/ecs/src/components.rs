@@ -397,6 +397,21 @@ impl ColliderShape {
     pub fn sphere() -> Self {
         ColliderShape::Ball { radius: 0.5 }
     }
+
+    /// The distance from the shape's local origin down to its lowest point on the
+    /// Y axis, used to place a ground probe just below a body.
+    pub fn half_height(&self) -> f32 {
+        match self {
+            ColliderShape::Cuboid { half_extents } => half_extents.y,
+            ColliderShape::Ball { radius } => *radius,
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+                ..
+            } => half_height + radius,
+            ColliderShape::Cylinder { half_height, .. } => *half_height,
+        }
+    }
 }
 
 /// A physics collider attached to a [`RigidBody`] (or to a static entity).

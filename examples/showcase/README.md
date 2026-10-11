@@ -204,11 +204,14 @@ getters (`get_position`, `get_rotation_euler`, `get_scale`) return a
 The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 `set_position`/`translate`, `set_rotation_euler`, `set_scale`, `time_delta`,
 `time_elapsed`, `key_down` (winit key names such as `KeyW`, `Space`,
-`ArrowUp`), `mouse_down` (`left`/`right`/`middle`), `add_script`, `log`,
-`instantiate_prefab`, and the component reflection calls `has_component`,
-`get_component`, `set_component`, `remove_component` (any component — a Rust
-project's custom components or a built-in, whose JSON is its scene-descriptor form;
-see `.notes/embedding.md`).
+`ArrowUp`), `mouse_down` (`left`/`right`/`middle`), pointer motion
+(`mouse_move` → `"[dx,dy]"`, `mouse_position` → `"[x,y]"`, `mouse_scroll`),
+driving a dynamic body (`set_velocity`/`add_velocity`/`apply_impulse`, applied to
+physics by the runtime; `get_velocity` and `is_grounded` read back this frame's
+snapshot), `add_script`, `log`, `instantiate_prefab`, and the component reflection
+calls `has_component`, `get_component`, `set_component`, `remove_component` (any
+component — a Rust project's custom components or a built-in, whose JSON is its
+scene-descriptor form; see `.notes/embedding.md`).
 
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.

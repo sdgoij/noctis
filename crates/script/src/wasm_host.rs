@@ -106,6 +106,14 @@ enum Abi {
     RemoveComponent,
     KeyDown,
     MouseDown,
+    MouseMove,
+    MousePosition,
+    MouseScroll,
+    SetVelocity,
+    AddVelocity,
+    ApplyImpulse,
+    GetVelocity,
+    IsGrounded,
     TimeDelta,
     TimeElapsed,
 }
@@ -134,6 +142,14 @@ impl Abi {
             "remove_component" => Abi::RemoveComponent,
             "key_down" => Abi::KeyDown,
             "mouse_down" => Abi::MouseDown,
+            "mouse_move" => Abi::MouseMove,
+            "mouse_position" => Abi::MousePosition,
+            "mouse_scroll" => Abi::MouseScroll,
+            "set_velocity" => Abi::SetVelocity,
+            "add_velocity" => Abi::AddVelocity,
+            "apply_impulse" => Abi::ApplyImpulse,
+            "get_velocity" => Abi::GetVelocity,
+            "is_grounded" => Abi::IsGrounded,
             "time_delta" => Abi::TimeDelta,
             "time_elapsed" => Abi::TimeElapsed,
             _ => return None,
@@ -158,6 +174,18 @@ impl Abi {
             Log => (vec![ValType::I32, ValType::I32], vec![]),
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
+            // Mouse reads take no arguments; motion/position return two floats.
+            MouseMove | MousePosition => (vec![], vec![ValType::F32, ValType::F32]),
+            MouseScroll => (vec![], vec![ValType::F32]),
+            SetVelocity | AddVelocity | ApplyImpulse => (
+                vec![ValType::I32, ValType::F32, ValType::F32, ValType::F32],
+                vec![],
+            ),
+            GetVelocity => (
+                vec![ValType::I32],
+                vec![ValType::F32, ValType::F32, ValType::F32],
+            ),
+            IsGrounded => (vec![ValType::I32], vec![ValType::I32]),
             AddScript => (vec![ValType::I32, ValType::I32, ValType::I32], vec![]),
             InstantiatePrefab => (
                 vec![ValType::I32, ValType::I32, ValType::I32],
@@ -358,6 +386,38 @@ impl Abi {
                     .and_then(|name| mouse_button(&name))
                     .is_some_and(|button| bridge.input.mouse.is_down(button));
                 vec![Value::I32(i32::from(down))]
+            }
+            MouseMove => {
+                let d = bridge.input.mouse.delta;
+                vec![Value::F32(d[0].to_bits()), Value::F32(d[1].to_bits())]
+            }
+            MousePosition => {
+                let p = bridge.input.mouse.position;
+                vec![Value::F32(p[0].to_bits()), Value::F32(p[1].to_bits())]
+            }
+            MouseScroll => vec![Value::F32(bridge.input.mouse.scroll.to_bits())],
+            SetVelocity => {
+                if let Some(id) = handle(0) {
+                    bridge.set_velocity(id, vector(1));
+                }
+                Vec::new()
+            }
+            AddVelocity => {
+                if let Some(id) = handle(0) {
+                    bridge.add_velocity(id, vector(1));
+                }
+                Vec::new()
+            }
+            ApplyImpulse => {
+                if let Some(id) = handle(0) {
+                    bridge.apply_impulse(id, vector(1));
+                }
+                Vec::new()
+            }
+            GetVelocity => handle(0).map_or_else(Vec::new, |id| vector_result(bridge.velocity(id))),
+            IsGrounded => {
+                let grounded = handle(0).is_some_and(|id| bridge.is_grounded(id));
+                vec![Value::I32(i32::from(grounded))]
             }
             TimeDelta => vec![Value::F32(bridge.delta.to_bits())],
             TimeElapsed => vec![Value::F32(bridge.elapsed.to_bits())],

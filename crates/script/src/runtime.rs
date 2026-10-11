@@ -20,7 +20,7 @@ use ecs::reflect::ComponentRegistry;
 use ecs::resources::InputState;
 use ecs::world::{Entity, World};
 
-use crate::api::{EntityId, ScriptCommand, ScriptContext, entity_id};
+use crate::api::{EntityId, PhysicsView, ScriptCommand, ScriptContext, entity_id};
 use crate::host::{ModuleId, NoopHost, PendingApi, ScriptHost};
 
 /// The start lifecycle function name.
@@ -77,6 +77,9 @@ pub struct ScriptRuntime<H: ScriptHost = NoopHost> {
     last_delta: f32,
     report: RunReport,
     command_log: Vec<ScriptCommand>,
+    /// The physics snapshot scripts read this frame (`is_grounded`,
+    /// `get_velocity`). The caller fills it before [`Self::run_update`].
+    physics_view: PhysicsView,
 }
 
 impl<H: ScriptHost + Default> Default for ScriptRuntime<H> {
@@ -104,6 +107,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
             last_delta: 0.0,
             report: RunReport::default(),
             command_log: Vec::new(),
+            physics_view: PhysicsView::new(),
         }
     }
 
@@ -139,6 +143,15 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         &mut self.input
     }
 
+    /// Replace the physics snapshot scripts read this frame.
+    ///
+    /// The caller builds it from the [`PhysicsWorld`](physics) before
+    /// [`Self::run_update`]; without it `is_grounded` is `false` and
+    /// `get_velocity` is zero.
+    pub fn set_physics_view(&mut self, view: PhysicsView) {
+        self.physics_view = view;
+    }
+
     /// Total elapsed scaled time, seconds.
     pub fn elapsed(&self) -> f32 {
         self.elapsed
@@ -169,6 +182,16 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         &self.command_log
     }
 
+    /// Remove and return every command produced so far.
+    ///
+    /// The engine loops call this after [`Self::run_update`] to apply the
+    /// commands only physics can carry out (velocity, impulses), which the
+    /// world-only replay leaves in the log. [`Self::command_log`] keeps
+    /// accumulating for callers that never drain it.
+    pub fn take_commands(&mut self) -> Vec<ScriptCommand> {
+        std::mem::take(&mut self.command_log)
+    }
+
     /// Drop all instances and compiled modules, leaving the host and input
     /// intact.
     pub fn reset(&mut self) {
@@ -178,6 +201,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
         self.report = RunReport::default();
         self.elapsed = 0.0;
         self.last_delta = 0.0;
+        self.physics_view.clear();
     }
 
     /// Run the start lifecycle for every newly seen script and adopt the world.
@@ -333,6 +357,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
             input,
             elapsed,
             command_log,
+            physics_view,
             ..
         } = self;
         let Some(instance) = instances.get(&entity) else {
@@ -351,6 +376,7 @@ impl<H: ScriptHost> ScriptRuntime<H> {
             assets,
             components: &*components,
             input: &*input,
+            physics: Some(&*physics_view),
             elapsed: *elapsed,
             delta: dt,
             entity: Some(id),
@@ -382,7 +408,7 @@ fn resolve_source(script: &Script, assets: &AssetRegistry) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ScriptApi, entity_from_id};
+    use crate::api::{PhysicsView, ScriptApi, entity_from_id, entity_id};
     use crate::host::RecordingHost;
     use ecs::assets::ScriptAsset;
     use ecs::components::{LocalTransform, Name};
@@ -612,6 +638,43 @@ mod tests {
             runtime.command_log().last(),
             Some(ScriptCommand::Log { .. })
         ));
+    }
+
+    #[test]
+    fn the_physics_snapshot_reaches_scripts() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            let Some(entity) = api.current_entity() else {
+                return;
+            };
+            if api.is_grounded(entity) {
+                api.log("grounded");
+            }
+            api.log(format!("vy={}", api.get_velocity(entity).y));
+        });
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let (mut world, entity) = world_with_script("s();");
+
+        let id = entity_id(entity);
+        let mut view = PhysicsView::new();
+        view.set_grounded(id, true);
+        view.set_velocity(id, vec3(0.0, 2.5, 0.0));
+        runtime.set_physics_view(view);
+
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        let log = runtime.command_log();
+        assert!(
+            log.iter()
+                .any(|c| matches!(c, ScriptCommand::Log { message, .. } if message == "grounded")),
+            "grounded flag did not reach the script: {log:?}"
+        );
+        assert!(
+            log.iter()
+                .any(|c| matches!(c, ScriptCommand::Log { message, .. } if message == "vy=2.5")),
+            "velocity did not reach the script: {log:?}"
+        );
     }
 
     #[test]

@@ -54,6 +54,16 @@ impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
         Some(&mut self.app_mut().context.input)
     }
 
+    fn cursor_captured(&self) -> bool {
+        self.captured
+    }
+
+    fn on_escape(&mut self) {
+        // While playing, `Esc` releases the cursor (and, once the menu exists,
+        // pauses); again to resume. The cursor follows the toggle.
+        self.captured = !self.captured;
+    }
+
     fn should_exit(&self) -> bool {
         self.app().context.exit_requested
     }
