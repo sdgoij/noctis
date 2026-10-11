@@ -16,7 +16,8 @@ use rapier3d::dynamics::{
     SoftBodySet,
 };
 use rapier3d::geometry::{
-    BroadPhaseBvh, ColliderBuilder, ColliderHandle, ColliderSet, NarrowPhase, Ray,
+    ActiveCollisionTypes, BroadPhaseBvh, ColliderBuilder, ColliderHandle, ColliderSet, NarrowPhase,
+    Ray,
 };
 use rapier3d::math::{Pose, Vector};
 use rapier3d::pipeline::{PhysicsPipeline, QueryFilter, QueryPipeline};
@@ -644,6 +645,17 @@ fn build_collider(collider: &Collider, pose: Pose, mass: Option<f32>) -> Collide
         .restitution(collider.restitution)
         .sensor(collider.is_sensor);
 
+    // A sensor must notice a body of *any* type, but rapier's default
+    // `ActiveCollisionTypes` only pairs *dynamic* bodies with the others, so a
+    // fixed sensor (e.g. a floor-mounted trigger pad) would never report a
+    // kinematic body walking over it. A solid collider keeps the default, which
+    // correctly suppresses kinematic-kinematic and fixed-fixed contacts.
+    let builder = if collider.is_sensor {
+        builder.active_collision_types(ActiveCollisionTypes::all())
+    } else {
+        builder
+    };
+
     match mass {
         Some(mass) => builder.mass(mass),
         None => builder,
@@ -817,6 +829,56 @@ mod tests {
                 .iter()
                 .any(|&(a, b)| (a == pad && b == ball) || (a == ball && b == pad)),
             "the sensor did not report the ball: {overlaps:?}"
+        );
+    }
+
+    #[test]
+    fn a_sensor_reports_a_kinematic_body() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::default();
+        // A floor, a thin sensor pad at foot height, and a kinematic capsule at rest.
+        spawn_body(
+            &mut world,
+            vec3(0.0, -0.05, 0.0),
+            fixed(),
+            floor(vec3(10.0, 0.05, 10.0)),
+        );
+        let pad = spawn_body(
+            &mut world,
+            vec3(0.0, 0.06, 0.0),
+            fixed(),
+            Collider {
+                shape: ColliderShape::Cuboid {
+                    half_extents: vec3(1.25, 0.05, 1.25),
+                },
+                is_sensor: true,
+                ..Collider::default()
+            },
+        );
+        let player = spawn_body(
+            &mut world,
+            vec3(0.0, 0.9, 0.0),
+            RigidBody {
+                body_type: BodyType::Kinematic,
+                ..RigidBody::default()
+            },
+            Collider {
+                shape: ColliderShape::Capsule {
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                ..Collider::default()
+            },
+        );
+        physics.sync_from_world(&world);
+        physics.step(&mut world, 1.0 / 60.0);
+
+        let overlaps = physics.overlaps();
+        assert!(
+            overlaps
+                .iter()
+                .any(|&(a, b)| (a == pad && b == player) || (a == player && b == pad)),
+            "the sensor did not report the kinematic body: {overlaps:?}"
         );
     }
 

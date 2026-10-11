@@ -825,8 +825,10 @@ mod tests {
 
     #[test]
     fn a_sensor_overlap_can_switch_the_scene() {
-        // A sensor pad with a body already inside it, and a script that loads
-        // another scene while the overlap holds.
+        // A fixed sensor pad with a *kinematic* body inside it — the case a
+        // third-person player hits, and the one rapier's default collision
+        // types ignore — and a script that loads another scene while the
+        // overlap holds.
         let json = r#"{
             "name": "Trigger",
             "entities": [
@@ -840,7 +842,7 @@ mod tests {
                 { "id": 1, "name": "Ball",
                   "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
                   "components": [
-                    { "type": "rigid_body", "body_type": "dynamic", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 0.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
+                    { "type": "rigid_body", "body_type": "kinematic", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 0.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
                     { "type": "collider", "shape": { "kind": "ball", "radius": 0.5 }, "offset": [0,0,0], "is_sensor": false, "friction": 0.5, "restitution": 0.0 }
                   ]
                 },
