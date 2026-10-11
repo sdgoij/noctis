@@ -31,7 +31,9 @@ use ecs::assets::AssetRegistry;
 use ecs::assets::ScriptAsset;
 use ecs::scene::{Scene, propagate_transforms};
 use physics::PhysicsWorld;
-use render::{Frame, IblConfig, RenderError, Renderer, RendererConfig};
+use render::{Frame, IblConfig, Renderer};
+#[cfg(not(target_arch = "wasm32"))]
+use render::{RenderError, RendererConfig};
 use script::{NoopHost, ScriptHost, ScriptRuntime};
 #[cfg(not(target_arch = "wasm32"))]
 use vfs::{DirStore, Store};
@@ -339,6 +341,10 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// Returns [`RenderError::NoAdapter`] (after logging) when no GPU adapter is
     /// available; the runtime keeps running without rendering. This never
     /// panics.
+    ///
+    /// Native only: the web host supplies a surface-backed renderer through
+    /// `AppDriver::configure_renderer` instead.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_renderer(&mut self, config: RendererConfig) -> Result<(), RenderError> {
         match Renderer::headless(config) {
             Ok(mut renderer) => {

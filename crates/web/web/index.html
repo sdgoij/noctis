@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noctis</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        overflow: hidden;
+      }
+      #noctis-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The Noctis browser client host page. Serve this directory over HTTP (a
+      `file://` page cannot fetch the bundle), with the generated wasm-bindgen
+      files (`web.js` / `web_bg.wasm`) and a project bundle (`game.zip`, from
+      `noctis pack`) alongside it:
+
+        cargo build -p web --target wasm32-unknown-unknown --release
+        wasm-bindgen --target web --out-dir crates/web/web \
+          target/wasm32-unknown-unknown/release/web.wasm
+        noctis pack --project examples/showcase --out crates/web/web/game.zip
+        # then serve crates/web/web/ and open index.html
+
+      `?bundle=<url>` overrides the bundle to load.
+    -->
+    <canvas id="noctis-canvas"></canvas>
+    <script type="module">
+      import init, { start } from "./web.js";
+
+      const bundle =
+        new URLSearchParams(location.search).get("bundle") ?? "./game.zip";
+
+      await init();
+      start("noctis-canvas", bundle);
+    </script>
+  </body>
+</html>

@@ -23,7 +23,9 @@
 > wasm **host** (`platform/src/web.rs`) drives any `AppDriver` on a `<canvas>` via
 > `requestAnimationFrame`, and the wasm **client** `crates/web`
 > (`start(canvas, bundleUrl)`, `cfg(wasm32)`) runs a bundle: the `runtime` client
-> path is target-agnostic, its native-only modules gated. The
+> path is target-agnostic, its native-only modules gated. `cargo build -p web
+> --target wasm32-unknown-unknown` links the module and `crates/web/web/index.html`
+> hosts it. The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project).
@@ -92,7 +94,7 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
-**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, **`project`**, **`audio`**, and now **`platform`**, all compile. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only — it compiles on the web but has no WebAudio sink yet, so decode is what works there. `script` remains blocked **upstream**: Slag's `runtime/src/jit.rs` compiles unconditionally and transmutes a `u64` fn-pointer, which is invalid on 32-bit wasm (the `jit` feature is already dropped on wasm here). That single blocker also holds back `runtime` (now gated, its own code clean) and `crates/web`: the *only* `cargo check -p web --target wasm32-unknown-unknown` errors are in Slag's `jit.rs`. With Slag fixed, the whole client path checks.
+**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): **every crate on the client path compiles** — `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, `project`, `audio`, `platform`, `script`, `runtime`, `web`. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only, so the web client plays silently until a WebAudio sink is added; decoding works. `script` drops the native-only `jit` feature on wasm, and `runtime` gates its native-only modules. `cargo build -p web --target wasm32-unknown-unknown` then links `web.wasm`, which `wasm-bindgen` turns into `web_bg.wasm` + `web.js`; `crates/web/web/index.html` hosts it. (This all became possible once Slag stopped compiling its `runtime::jit` module on 32-bit wasm — the pin is now `66078cd6`.)
 
 ## The seams to introduce
 
@@ -143,7 +145,9 @@ New crates (names provisional; they never leak into the native-only build):
   `wasm32` (native builds an empty lib). To enable it, `runtime`'s native-only
   modules (`build`/`export`/`plugin`/`cli`/`watch`) are gated
   `cfg(not(target_arch = "wasm32"))`; the client path (`Runtime`, `window`) is
-  target-agnostic.
+  target-agnostic. `cargo build -p web --target wasm32-unknown-unknown` links
+  `web.wasm`; `crates/web/web/index.html` is the host page (a `<canvas>` +
+  `start("noctis-canvas", bundleUrl)`), with the wasm-bindgen output gitignored.
 - **`render` async init** — split device creation behind an `async fn` so the web
   host can `await` `request_adapter`/`request_device`; the native path keeps its
   `pollster::block_on` wrapper. **Shipped**: `open_device` (the single await

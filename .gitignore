@@ -5,3 +5,11 @@
 **/dist/
 **/.noctis/
 /assets/imported
+
+# The web client's generated wasm-bindgen output and bundle (crates/web/web/).
+# `index.html` is committed; these are built by `cargo build -p web` + wasm-bindgen.
+/crates/web/web/web.js
+/crates/web/web/web_bg.wasm
+/crates/web/web/web.d.ts
+/crates/web/web/web_bg.wasm.d.ts
+/crates/web/web/game.zip
