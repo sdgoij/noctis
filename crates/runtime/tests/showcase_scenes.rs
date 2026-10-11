@@ -183,6 +183,75 @@ fn the_menu_scene_spinner_rotates_in_the_plane() {
 }
 
 #[test]
+fn the_trigger_pad_teleports_the_player_to_the_physics_scene() {
+    let (scene, assets) = load("scenes/showcase.scene.json");
+    let config = RuntimeConfig {
+        audio: false,
+        ..RuntimeConfig::default()
+    };
+    let mut runtime = Runtime::from_parts(scene, assets, config, EngineHost::new().expect("Slag"));
+
+    // The development loader, as `noctis run` wires it.
+    let dir = showcase_dir();
+    runtime.set_scene_loader(Box::new(move |path: &str| {
+        std::fs::read_to_string(dir.join(path)).map_err(|error| error.to_string())
+    }));
+
+    // The Player starts west of the Trigger Pad (both at z = 4); hold "right" to
+    // walk +X onto it, hopping as they go. The pad is a tall trigger volume, so
+    // an airborne Player still overlaps it (a thin slab would be missed).
+    runtime
+        .input_mut()
+        .expect("the runtime takes input")
+        .press_key(Key::letter('D').expect("D is a letter key"));
+    for frame in 0..120 {
+        {
+            let input = runtime.input_mut().expect("the runtime takes input");
+            if frame % 15 == 0 {
+                input.press_key(Key::Space);
+            } else {
+                input.release_key(Key::Space);
+            }
+        }
+        runtime.run_headless(1, 1.0 / 60.0);
+    }
+
+    assert!(
+        runtime.script().host().errors().is_empty(),
+        "script errors: {:?}",
+        runtime.script().host().errors()
+    );
+
+    let world = &runtime.scene().world;
+    let has = |name: &str| {
+        world
+            .entities_with::<Name>()
+            .into_iter()
+            .any(|e| world.get::<Name>(e).is_some_and(|n| n.as_str() == name))
+    };
+    // "Guide Text" is unique to the physics scene; the showcase's marker is gone.
+    assert!(
+        has("Guide Text"),
+        "the pad did not switch to the physics scene"
+    );
+    assert!(
+        !has("Title Label"),
+        "the showcase scene is still loaded after the pad"
+    );
+    assert!(
+        has("Player"),
+        "the Player did not come along to the physics scene"
+    );
+
+    // It landed at the physics scene's Entry (0, 0.9, 6), not the showcase's.
+    let player = transform(&runtime, "Player").translation;
+    assert!(
+        (player.z - 6.0).abs() < 1.5,
+        "the Player did not land at the physics Entry: {player:?}"
+    );
+}
+
+#[test]
 fn the_physics_scene_platform_bobs() {
     let runtime = run("scenes/physics.scene.json", 60);
 

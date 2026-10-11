@@ -337,6 +337,12 @@ impl Bridge {
         self.commands.push(ScriptCommand::LoadScene { path });
     }
 
+    /// Queue a scene load that carries a named entity (applied by the runtime).
+    pub(crate) fn teleport_scene(&mut self, path: String, carry: String) {
+        self.commands
+            .push(ScriptCommand::TeleportScene { path, carry });
+    }
+
     /// Queue a cursor-capture request (applied by the runtime).
     pub(crate) fn set_mouse_captured(&mut self, captured: bool) {
         self.commands
@@ -408,6 +414,7 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
                 api.apply_impulse(resolve(&map, entity), velocity);
             }
             ScriptCommand::LoadScene { path } => api.load_scene(path),
+            ScriptCommand::TeleportScene { path, carry } => api.teleport_scene(path, carry),
             ScriptCommand::SetMouseCaptured { captured } => api.set_mouse_captured(captured),
         }
     }

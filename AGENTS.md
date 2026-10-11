@@ -129,7 +129,10 @@ needed.
   `key_down`/`mouse_down`, pointer motion (`mouse_move`/`mouse_position`/
   `mouse_scroll`), driving a dynamic body (`set_velocity`/`add_velocity`/
   `apply_impulse`; the runtime applies these to physics) and reading it back
-  (`get_velocity`, `is_grounded`, `is_overlapping`), and timing), and `engine_host::EngineHost`, which runs
+  (`get_velocity`, `is_grounded`, `is_overlapping`), scene control
+  (`load_scene`, and `teleport_scene`, which carries a named entity and its
+  subtree into the target scene, landing it at that scene's `Entry` marker),
+  and timing), and `engine_host::EngineHost`, which runs
   both languages in one runtime. Both backends address entities through small
   per-call handle indices rather than raw ids, because a JavaScript `f64` cannot
   represent a 64-bit `EntityId` exactly. A WebAssembly module travels as a
@@ -152,6 +155,15 @@ needed.
   (`has_component`/`get_component` into the module's memory/`set_component`/
   `remove_component`). The entity-level `LocalTransform`/`Name`/`Active`/`Visible`
   are not in the reflected list; they keep their dedicated bindings.
+- **Scene switching and portals** (see [`.notes/portals.md`](.notes/portals.md)).
+  A script switches scenes with `load_scene`, which replaces the world (physics
+  rebuilt, scripting restarted). `teleport_scene` additionally *carries* an entity
+  and its subtree across the load, placing its root at the target scene's `Entry`
+  marker (or keeping its transform when the target has none) — the showcase's
+  Trigger Pad uses it to move the Player into the physics playground, and a
+  Sensor Zone carries it back. Only one named entity travels per transition, and
+  transient state restarts on the far side (script locals such as velocity, and
+  the carried entity's scripts re-run `on_start`).
 - `noctis build` ships scripts by **profile** (see [`.notes/scripts.md`](.notes/scripts.md)):
   a `release` build bakes the scene's `.js`/`.wasm` into the `noctis-game` client
   (via `NOCTIS_EMBED_PACK` → `crates/client/build.rs` → `include_bytes!`) and

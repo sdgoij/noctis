@@ -134,6 +134,18 @@ pub enum ScriptCommand {
         /// The scene path, resolved by the runtime's scene loader.
         path: String,
     },
+    /// A request to load another scene, carrying a named entity (with its
+    /// subtree) from the current one into the new scene.
+    ///
+    /// Queued only, like [`ScriptCommand::LoadScene`]. The runtime resolves
+    /// `carry` in the outgoing scene, places the result at the target scene's
+    /// `Entry` marker, and then performs the swap at the end of the frame.
+    TeleportScene {
+        /// The scene path, resolved by the runtime's scene loader.
+        path: String,
+        /// The name of the entity to carry across the load, with its subtree.
+        carry: String,
+    },
     /// A request to capture (hide and lock) or release the cursor.
     ///
     /// Queued only; the window host applies it. A menu releases the cursor so a
@@ -671,6 +683,20 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
         self.ctx
             .commands
             .push(ScriptCommand::LoadScene { path: path.into() });
+    }
+
+    /// Ask the runtime to load `path`, carrying the entity named `carry` (and
+    /// its whole subtree) into the new scene, placed at that scene's `Entry`
+    /// marker (or its pre-switch transform if the target has no `Entry`).
+    ///
+    /// Recorded as [`ScriptCommand::TeleportScene`]; the runtime performs the
+    /// swap at the end of the frame, because the script API cannot replace the
+    /// world it is running against mid-call.
+    pub fn teleport_scene(&mut self, path: impl Into<String>, carry: impl Into<String>) {
+        self.ctx.commands.push(ScriptCommand::TeleportScene {
+            path: path.into(),
+            carry: carry.into(),
+        });
     }
 
     /// Ask the runtime to capture (`true`) or release (`false`) the cursor.

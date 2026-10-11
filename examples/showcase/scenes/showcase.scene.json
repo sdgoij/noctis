@@ -330,8 +330,8 @@
         },
         {
           "type": "collider",
-          "shape": { "kind": "cuboid", "half_extents": [1.25, 0.05, 1.25] },
-          "offset": [0.0, 0.0, 0.0],
+          "shape": { "kind": "cuboid", "half_extents": [1.25, 1.0, 1.25] },
+          "offset": [0.0, 1.0, 0.0],
           "is_sensor": true,
           "friction": 0.5,
           "restitution": 0.0
@@ -542,6 +542,15 @@
           "receive_shadows": true
         }
       ]
+    },
+    {
+      "id": 22,
+      "name": "Entry",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [-4.5, 0.9, 4.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": []
     }
   ]
 }

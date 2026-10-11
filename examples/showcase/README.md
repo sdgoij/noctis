@@ -21,7 +21,7 @@ showcase/
     Crate.prefab.json            # a spinning, physical crate
     Lamp.prefab.json             # a post with a light on a child entity
   scripts/
-    spinner.js  bobber.js  spin2d.js  third_person.js  spawner.js  menu.js  trigger.js
+    spinner.js  bobber.js  spin2d.js  third_person.js  spawner.js  menu.js  trigger.js  return.js
   assets/
     models/drone.glb             # a textured cube: mesh + PBR material + 2 textures
     models/palette.glb           # the named PBR material palette the scenes shade with
@@ -175,7 +175,9 @@ hierarchy, two cameras (one active, one inactive with a higher render priority),
 the three light kinds (one shadow-casting directional plus a point and a spot),
 every built-in primitive mesh shaded with the named palette materials, a glTF
 mesh with its imported material and textures, rigid bodies and all four collider
-shapes (including a sensor pad that teleports to the physics scene), spatial and
+shapes (including a sensor pad that carries the Player into the physics scene — a
+*tall* trigger volume, so an airborne Player still overlaps it — and an `Entry`
+marker where the return trip lands), spatial and
 non-spatial audio, and a billboarded
 `Text` label drawn from the generated font. It also carries entities an editor
 would toggle: one `active: false`, one `visible: false` — the only way `Active`
@@ -183,8 +185,9 @@ and `Visible` appear in a scene document.
 
 **`scenes/physics.scene.json`** — a playground: a ground plane, a tilted ramp, a
 stack of dropping cubes, a bouncy and a heavy ball, a capsule, a fixed pillar, a
-**kinematic** platform driven by `bobber.js`, and a sensor pad (a flattened
-trigger volume you walk over).
+**kinematic** platform driven by `bobber.js`, an `Entry` marker the Player arrives
+at, and a sensor **Sensor Zone** (a tall trigger volume you walk or jump
+through) whose `return.js` carries the Player back to the showcase.
 
 **`scenes/menu.scene.json`** — a 2D scene (`"mode": "2d"`) with an orthographic
 camera, a backdrop, a title and subtitle, a `PLAY` button, and a spinning
@@ -215,8 +218,10 @@ snapshot, and `is_overlapping(a, b)` reports a sensor overlap), `add_script`,
 `log`, `instantiate_prefab`, and the component reflection
 calls `has_component`, `get_component`, `set_component`, `remove_component` (any
 component — a Rust project's custom components or a built-in, whose JSON is its
-scene-descriptor form; see `.notes/embedding.md`), and `load_scene`, which replaces
-the running scene with another the project ships (see `.notes/controls.md`).
+scene-descriptor form; see `.notes/embedding.md`), and scene switching:
+`load_scene` replaces the running scene with another the project ships, and
+`teleport_scene(path, name)` carries a named entity (with its subtree) across the
+load, landing it at the target's `Entry` marker (see `.notes/portals.md`).
 `viewport_size()` gives the window size (to map the cursor into a 2D scene) and
 `set_mouse_captured(bool)` captures or releases the OS cursor.
 
@@ -225,8 +230,11 @@ the running scene with another the project ships (see `.notes/controls.md`).
   **Space**/**Enter** (or clicking) calls `load_scene("scenes/showcase.scene.json")`,
   so Play hands off to the showcase. The game starts on this scene (the project's
   default).
-- `trigger.js` — the showcase's **Trigger Pad** is a sensor: when the Player stands
-  on it (`is_overlapping`), it calls `load_scene("scenes/physics.scene.json")`.
+- `trigger.js` / `return.js` — the showcase's **Trigger Pad** and the physics
+  playground's **Sensor Zone** are sensors: when the Player stands on one
+  (`is_overlapping`), it calls `teleport_scene` to carry the Player into the other
+  scene (at that scene's `Entry`). Each arms only after the Player *leaves*, so
+  arriving on a pad never re-fires it.
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.
 - `spin2d.js` — spins about Z, for a 2D scene.

@@ -38,6 +38,54 @@ fn key(name: &str) -> Key {
 }
 
 #[test]
+fn the_scene_verbs_reach_the_engine() {
+    // `load_scene` and `teleport_scene` must be callable from JavaScript and
+    // record the commands the runtime acts on.
+    let mut assets = AssetRegistry::with_builtins();
+    let path = "scripts/portal.js";
+    assets.scripts.insert_named(
+        path,
+        ScriptAsset {
+            name: path.into(),
+            source: concat!(
+                "function on_update(entity, dt) {",
+                "  load_scene(\"scenes/next.json\");",
+                "  teleport_scene(\"scenes/physics.json\", \"Player\");",
+                "}",
+            )
+            .into(),
+        },
+    );
+
+    let mut world = World::new();
+    let entity = world.spawn();
+    world.insert(entity, Name::new(path));
+    world.insert(entity, LocalTransform::default());
+    world.insert(entity, Script::from_path(path));
+
+    let mut runtime = ScriptRuntime::with_host(EngineHost::new().expect("the Slag engine starts"));
+    runtime.run_update(&mut world, &assets, 1.0 / 60.0);
+
+    let errors = runtime.host().errors().to_vec();
+    assert!(errors.is_empty(), "script errors:\n{}", errors.join("\n"));
+
+    let log = runtime.command_log();
+    assert!(
+        log.iter()
+            .any(|c| matches!(c, ScriptCommand::LoadScene { path } if path == "scenes/next.json")),
+        "load_scene did not reach the engine"
+    );
+    assert!(
+        log.iter().any(|c| matches!(
+            c,
+            ScriptCommand::TeleportScene { path, carry }
+                if path == "scenes/physics.json" && carry == "Player"
+        )),
+        "teleport_scene did not reach the engine"
+    );
+}
+
+#[test]
 fn every_showcase_script_runs_without_errors() {
     let files = script_files();
     assert!(

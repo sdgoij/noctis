@@ -224,43 +224,106 @@ impl Scene {
             .collect();
         entities.sort_unstable();
 
+        SceneDesc {
+            name: self.name.clone(),
+            format_version: SCENE_FORMAT_VERSION,
+            mode: self.mode,
+            entities: self.descs_for(&entities, assets),
+        }
+    }
+
+    /// The first entity whose [`Name`] is `name`, if any.
+    pub fn entity_named(&self, name: &str) -> Option<Entity> {
+        self.world
+            .entities()
+            .iter()
+            .find(|e| self.world.get::<Name>(*e).is_some_and(|n| n.0 == name))
+    }
+
+    /// Serialize `root` and every one of its descendants (through [`Parent`])
+    /// into a standalone scene document.
+    ///
+    /// The subtree is numbered independently, and `root` is written with no
+    /// parent, so the result re-instantiates through [`instantiate_into_with`]
+    /// as a parentless top-level entity in *any* world. This is the building
+    /// block for carrying an entity across a scene load: it captures exactly one
+    /// object and its children, dropping the root's own parent if it had one.
+    ///
+    /// Returns `None` if `root` is not an entity of this scene — though a root
+    /// that exists but has neither a transform nor a name still yields a
+    /// document (its subtree is what matters).
+    pub fn subtree_desc(&self, assets: &AssetRegistry, root: Entity) -> Option<SceneDesc> {
+        let all = self.world.entities();
+        if !all.iter().any(|e| e == root) {
+            return None;
+        }
+
+        // Breadth-first over the parent links, keeping the root.
+        let mut members: Vec<Entity> = vec![root];
+        let mut cursor = 0;
+        while cursor < members.len() {
+            let parent = members[cursor];
+            for candidate in all.iter() {
+                if !members.contains(&candidate)
+                    && self
+                        .world
+                        .get::<Parent>(candidate)
+                        .is_some_and(|p| p.0 == parent)
+                {
+                    members.push(candidate);
+                }
+            }
+            cursor += 1;
+        }
+        // The root keeps index 0 (so it serializes as id 0 and re-instantiates
+        // first); the descendants follow in a stable order.
+        members[1..].sort_unstable();
+
+        Some(SceneDesc {
+            name: self.name.clone(),
+            format_version: SCENE_FORMAT_VERSION,
+            mode: self.mode,
+            entities: self.descs_for(&members, assets),
+        })
+    }
+
+    /// Serialize a specific, already-ordered set of entities into [`EntityDesc`]s,
+    /// numbering them from zero and rewriting each `parent` to a member id (a
+    /// parent outside the set becomes `None`).
+    fn descs_for(&self, entities: &[Entity], assets: &AssetRegistry) -> Vec<EntityDesc> {
         let mut id_of: HashMap<Entity, u32> = HashMap::new();
         for (i, e) in entities.iter().enumerate() {
             id_of.insert(*e, i as u32);
         }
 
-        let mut descs = Vec::with_capacity(entities.len());
-        for (id, entity) in entities.iter().enumerate() {
-            let transform = self
-                .world
-                .get::<LocalTransform>(*entity)
-                .copied()
-                .unwrap_or_default();
-            let parent = self
-                .world
-                .get::<Parent>(*entity)
-                .and_then(|p| id_of.get(&p.0).copied());
-            let name = self.world.get::<Name>(*entity).map(|n| n.0.clone());
-            let active = self.world.get::<Active>(*entity).is_none_or(|a| a.0);
-            let visible = self.world.get::<Visible>(*entity).is_none_or(|v| v.0);
-            let components = component_descs(&self.world, *entity, assets, &self.components);
-            descs.push(EntityDesc {
-                id: id as u32,
-                name,
-                parent,
-                active,
-                visible,
-                transform: TransformDesc::from(&transform),
-                components,
-            });
-        }
-
-        SceneDesc {
-            name: self.name.clone(),
-            format_version: SCENE_FORMAT_VERSION,
-            mode: self.mode,
-            entities: descs,
-        }
+        entities
+            .iter()
+            .enumerate()
+            .map(|(id, entity)| {
+                let transform = self
+                    .world
+                    .get::<LocalTransform>(*entity)
+                    .copied()
+                    .unwrap_or_default();
+                let parent = self
+                    .world
+                    .get::<Parent>(*entity)
+                    .and_then(|p| id_of.get(&p.0).copied());
+                let name = self.world.get::<Name>(*entity).map(|n| n.0.clone());
+                let active = self.world.get::<Active>(*entity).is_none_or(|a| a.0);
+                let visible = self.world.get::<Visible>(*entity).is_none_or(|v| v.0);
+                let components = component_descs(&self.world, *entity, assets, &self.components);
+                EntityDesc {
+                    id: id as u32,
+                    name,
+                    parent,
+                    active,
+                    visible,
+                    transform: TransformDesc::from(&transform),
+                    components,
+                }
+            })
+            .collect()
     }
 
     /// Build a scene from its serializable form, resolving asset paths via
@@ -1511,6 +1574,87 @@ mod tests {
             from_desc.to_json(&assets),
             "desc round trip reordered"
         );
+    }
+
+    #[test]
+    fn a_subtree_serializes_with_its_children_and_no_root_parent() {
+        let assets = AssetRegistry::with_defaults();
+        let mut scene = Scene::new("Source");
+        // A parent *above* the subtree: the carried root's own parent must drop.
+        let outside = scene.world.spawn();
+        scene.world.insert(outside, Name::new("Outside"));
+
+        let root = scene.world.spawn();
+        scene.world.insert(root, Name::new("Player"));
+        scene
+            .world
+            .insert(root, LocalTransform::from_translation(vec3(1.0, 2.0, 3.0)));
+        set_parent(&mut scene.world, root, Some(outside));
+
+        let child = scene.world.spawn();
+        scene.world.insert(child, Name::new("Facing"));
+        scene
+            .world
+            .insert(child, LocalTransform::from_translation(vec3(0.0, 0.5, 0.0)));
+        set_parent(&mut scene.world, child, Some(root));
+
+        let grandchild = scene.world.spawn();
+        scene.world.insert(grandchild, Name::new("Tip"));
+        set_parent(&mut scene.world, grandchild, Some(child));
+
+        // A second, unrelated root must not travel.
+        let bystander = scene.world.spawn();
+        scene.world.insert(bystander, Name::new("Bystander"));
+
+        let desc = scene
+            .subtree_desc(&assets, root)
+            .expect("root is an entity");
+        assert_eq!(desc.entities.len(), 3, "the root and its two descendants");
+
+        let rebuilt = Scene::from_desc(&desc, &assets);
+        let root_e = rebuilt.entity_named("Player").expect("root");
+        let child_e = rebuilt.entity_named("Facing").expect("child");
+        let grand_e = rebuilt.entity_named("Tip").expect("grandchild");
+
+        assert!(
+            rebuilt.world.get::<Parent>(root_e).is_none(),
+            "the carried root is top-level"
+        );
+        assert_eq!(
+            rebuilt.world.get::<Parent>(child_e).map(|p| p.0),
+            Some(root_e)
+        );
+        assert_eq!(
+            rebuilt.world.get::<Parent>(grand_e).map(|p| p.0),
+            Some(child_e)
+        );
+        assert_eq!(
+            rebuilt
+                .world
+                .get::<LocalTransform>(root_e)
+                .unwrap()
+                .translation,
+            vec3(1.0, 2.0, 3.0)
+        );
+        assert!(rebuilt.entity_named("Outside").is_none());
+        assert!(rebuilt.entity_named("Bystander").is_none());
+    }
+
+    #[test]
+    fn entity_named_finds_a_named_entity_and_unknown_names_are_none() {
+        let mut scene = Scene::new("S");
+        let e = scene.world.spawn();
+        scene.world.insert(e, Name::new("Hero"));
+        assert_eq!(scene.entity_named("Hero"), Some(e));
+        assert_eq!(scene.entity_named("Missing"), None);
+    }
+
+    #[test]
+    fn subtree_desc_of_an_unknown_entity_is_none() {
+        let assets = AssetRegistry::with_defaults();
+        let scene = Scene::new("S");
+        let stray = World::new().spawn();
+        assert!(scene.subtree_desc(&assets, stray).is_none());
     }
 
     #[test]

@@ -29,8 +29,8 @@ use ecs::app::App;
 use ecs::assets::AssetRegistry;
 #[cfg(not(target_arch = "wasm32"))]
 use ecs::assets::ScriptAsset;
-use ecs::components::RigidBody;
-use ecs::scene::{Scene, propagate_transforms};
+use ecs::components::{LocalTransform, RigidBody};
+use ecs::scene::{Scene, instantiate_into_with, propagate_transforms};
 use physics::PhysicsWorld;
 use render::{Frame, IblConfig, Renderer};
 #[cfg(not(target_arch = "wasm32"))]
@@ -80,6 +80,20 @@ impl std::fmt::Display for RunSummary {
 /// has to find the bytes — from a project's store, a bundle, or disk.
 pub type SceneLoader = Box<dyn Fn(&str) -> Result<String, String>>;
 
+/// A scene switch requested by a script this frame, applied at the frame
+/// boundary (the closure systems cannot mutate the runtime directly).
+///
+/// `carry` names an entity — with its subtree — to move from the outgoing scene
+/// into the incoming one, landing at the target's `Entry` marker (see
+/// [`Runtime::apply_scene_request`]).
+#[derive(Clone, Debug)]
+struct SceneRequest {
+    /// The scene path to load, resolved by the scene loader.
+    path: String,
+    /// The entity to carry across the load, if any.
+    carry: Option<String>,
+}
+
 /// The game/export loop.
 ///
 /// Generic over the script host so callers can pick a backend; the default is
@@ -100,9 +114,10 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     pub(crate) captured: bool,
     /// The resolver that turns a `load_scene` path into scene JSON, if any.
     scene_loader: Option<SceneLoader>,
-    /// A scene requested by `load_scene` this frame, applied at the end of the
-    /// tick (the closure systems cannot mutate the runtime directly).
-    scene_request: Arc<Mutex<Option<String>>>,
+    /// A scene requested by `load_scene`/`teleport_scene` this frame, applied at
+    /// the end of the tick (the closure systems cannot mutate the runtime
+    /// directly).
+    scene_request: Arc<Mutex<Option<SceneRequest>>>,
     /// A cursor-capture request from `set_mouse_captured`, applied at the end of
     /// the tick.
     capture_request: Arc<Mutex<Option<bool>>>,
@@ -152,7 +167,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         let mut script_runtime = ScriptRuntime::with_host(host);
         script_runtime.set_components(scene.components.clone());
         let script = Arc::new(Mutex::new(script_runtime));
-        let scene_request: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let scene_request: Arc<Mutex<Option<SceneRequest>>> = Arc::new(Mutex::new(None));
         let capture_request: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 
         let mut app = App::new(scene.name.clone());
@@ -245,7 +260,13 @@ impl<H: ScriptHost + 'static> Runtime<H> {
                             }
                         }
                         ScriptCommand::LoadScene { path } => {
-                            *lock(&requests) = Some(path);
+                            *lock(&requests) = Some(SceneRequest { path, carry: None });
+                        }
+                        ScriptCommand::TeleportScene { path, carry } => {
+                            *lock(&requests) = Some(SceneRequest {
+                                path,
+                                carry: Some(carry),
+                            });
                         }
                         ScriptCommand::SetMouseCaptured { captured } => {
                             *lock(&captures) = Some(captured);
@@ -329,23 +350,34 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         };
         if self.current_scene.as_deref() != Some(home.as_str()) {
             self.resume_scene = self.current_scene.clone();
-            *lock(&self.scene_request) = Some(home);
+            *lock(&self.scene_request) = Some(SceneRequest {
+                path: home,
+                carry: None,
+            });
             self.captured = false;
         } else if let Some(resume) = self.resume_scene.take() {
-            *lock(&self.scene_request) = Some(resume);
+            *lock(&self.scene_request) = Some(SceneRequest {
+                path: resume,
+                carry: None,
+            });
         }
     }
 
-    /// Perform a scene switch requested by `load_scene` during this tick.
+    /// Perform a scene switch requested by `load_scene`/`teleport_scene` during
+    /// this tick.
     ///
     /// The new scene replaces the current one and physics is rebuilt for it;
     /// scripting restarts, so the new scene's scripts run `on_start` next frame.
+    /// When the request carries an entity, its subtree is lifted out of the
+    /// outgoing scene and re-instantiated in the new one, its root placed at the
+    /// target's `Entry` marker (or kept where it was when the target has none).
     /// The outgoing scripts are dropped without `on_destroy` (the whole world is
     /// going away). A missing loader or a load error is logged, not fatal.
     fn apply_scene_request(&mut self) {
-        let Some(path) = lock(&self.scene_request).take() else {
+        let Some(request) = lock(&self.scene_request).take() else {
             return;
         };
+        let SceneRequest { path, carry } = request;
         let json = {
             let Some(loader) = self.scene_loader.as_ref() else {
                 log::warn!("load_scene({path:?}) ignored: no scene loader is configured");
@@ -359,14 +391,52 @@ impl<H: ScriptHost + 'static> Runtime<H> {
                 }
             }
         };
+
+        // Resolve the carried subtree in the *outgoing* scene, before it is
+        // replaced: its descriptor travels, then re-instantiates in the target.
+        let carried = carry.as_ref().and_then(|name| {
+            let assets = &self.app.context.assets;
+            let found = self
+                .app
+                .context
+                .scene
+                .entity_named(name)
+                .and_then(|root| self.app.context.scene.subtree_desc(assets, root));
+            if found.is_none() {
+                log::warn!("teleport_scene({path:?}): no entity named {name:?} to carry");
+            }
+            found
+        });
+
         let components = self.app.context.scene.components.clone();
-        let scene = match Scene::from_json_with(&json, &self.app.context.assets, &components) {
+        let mut scene = match Scene::from_json_with(&json, &self.app.context.assets, &components) {
             Ok(scene) => scene,
             Err(err) => {
                 log::warn!("load_scene({path:?}) failed to parse the scene: {err}");
                 return;
             }
         };
+
+        if let Some(desc) = carried {
+            // The target's `Entry` names where arrivals land; without one the
+            // carried root keeps its pre-switch transform.
+            let entry = scene
+                .entity_named("Entry")
+                .and_then(|e| scene.world.get::<LocalTransform>(e).copied());
+            let spawned = instantiate_into_with(
+                &mut scene.world,
+                &desc,
+                &self.app.context.assets,
+                None,
+                &components,
+            );
+            // The subtree root serializes as id 0, so it re-instantiates first.
+            if let (Some(root), Some(transform)) = (spawned.first().copied(), entry) {
+                scene.world.insert(root, transform);
+            }
+            scene.update_transforms();
+        }
+
         log::info!("loaded scene {path:?}");
         self.current_scene = Some(path.clone());
         self.app.context.scene = scene;
@@ -634,7 +704,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ecs::components::{GlobalTransform, LocalTransform, Name, Script};
+    use ecs::components::{GlobalTransform, LocalTransform, Name, Parent, Script};
     use ecs::reflect::ComponentRegistry;
     use math::vec3_approx_eq;
     use script::{RecordingHost, ScriptApi};
@@ -763,6 +833,155 @@ mod tests {
         assert!(
             entity_named(&runtime, "Ball").is_none(),
             "the old scene's entities remain"
+        );
+    }
+
+    #[test]
+    fn a_scene_switch_carries_the_player_to_the_entry() {
+        // A named Player (with a child) whose script teleports itself into a
+        // scene that declares an `Entry`.
+        let source = r#"{
+            "name": "Source",
+            "entities": [
+                { "id": 0, "name": "Player",
+                  "transform": { "translation": [1,0,1], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [] },
+                { "id": 1, "name": "Facing", "parent": 0,
+                  "transform": { "translation": [0,0,-1], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [] },
+                { "id": 2, "name": "Runner",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [
+                    { "type": "script", "source": "function on_update() {}", "path": null, "enabled": true }
+                  ] }
+            ]
+        }"#;
+        let assets = AssetRegistry::with_defaults();
+        let scene = Scene::from_json(source, &assets).expect("source parses");
+
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.teleport_scene("scenes/physics.scene.json", "Player");
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(scene, config, host);
+        runtime.set_scene_loader(Box::new(|_path| {
+            Ok(r#"{
+                "name": "Target",
+                "entities": [
+                    { "id": 0, "name": "Entry",
+                      "transform": { "translation": [5,0,5], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                      "components": [] },
+                    { "id": 1, "name": "Target Floor",
+                      "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                      "components": [] }
+                ]
+            }"#
+            .to_string())
+        }));
+
+        runtime.tick_once();
+
+        // The Player survived the switch, landed at the target's Entry, and its
+        // child came along still parented to it.
+        let player = entity_named(&runtime, "Player").expect("the Player carried over");
+        let pos = runtime
+            .scene()
+            .world
+            .get::<GlobalTransform>(player)
+            .expect("the Player has a global transform")
+            .position();
+        assert!(
+            vec3_approx_eq(pos, math::vec3(5.0, 0.0, 5.0), 1e-4),
+            "the Player did not land at the entry: {pos:?}"
+        );
+        let child = entity_named(&runtime, "Facing").expect("the child carried over");
+        assert_eq!(
+            runtime.scene().world.get::<Parent>(child).map(|p| p.0),
+            Some(player),
+            "the child is no longer parented to the Player"
+        );
+        // Only the carried subtree moved; the target scene loaded.
+        assert!(
+            entity_named(&runtime, "Runner").is_none(),
+            "an entity outside the subtree carried over"
+        );
+        assert!(
+            entity_named(&runtime, "Target Floor").is_some(),
+            "the target scene did not load"
+        );
+    }
+
+    #[test]
+    fn a_carry_without_an_entry_keeps_the_source_transform() {
+        let source = r#"{
+            "name": "Source",
+            "entities": [
+                { "id": 0, "name": "Player",
+                  "transform": { "translation": [1,0,1], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [] },
+                { "id": 1, "name": "Runner",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [
+                    { "type": "script", "source": "function on_update() {}", "path": null, "enabled": true }
+                  ] }
+            ]
+        }"#;
+        let assets = AssetRegistry::with_defaults();
+        let scene = Scene::from_json(source, &assets).expect("source parses");
+
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.teleport_scene("scenes/next.scene.json", "Player");
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(scene, config, host);
+        // `second_scene` has no `Entry`, so the Player keeps its position.
+        runtime.set_scene_loader(Box::new(|_path| Ok(second_scene().to_string())));
+
+        runtime.tick_once();
+
+        let player = entity_named(&runtime, "Player").expect("the Player carried over");
+        let pos = runtime
+            .scene()
+            .world
+            .get::<GlobalTransform>(player)
+            .expect("the Player has a global transform")
+            .position();
+        assert!(
+            vec3_approx_eq(pos, math::vec3(1.0, 0.0, 1.0), 1e-4),
+            "the Player did not keep its transform without an entry: {pos:?}"
+        );
+        assert!(
+            entity_named(&runtime, "Second").is_some(),
+            "the target scene did not load"
+        );
+    }
+
+    #[test]
+    fn a_carry_of_an_unknown_entity_still_switches() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            api.teleport_scene("scenes/next.scene.json", "Nobody");
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+        runtime.set_scene_loader(Box::new(|_path| Ok(second_scene().to_string())));
+
+        runtime.tick_once();
+
+        assert!(
+            entity_named(&runtime, "Second").is_some(),
+            "an unknown carry name should still load the target scene"
         );
     }
 

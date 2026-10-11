@@ -429,6 +429,18 @@ impl SlagHost {
 
         let b = Rc::clone(&self.bridge);
         self.register(
+            "teleport_scene",
+            2,
+            Box::new(move |call| {
+                if let (Some(path), Some(carry)) = (arg_string(call, 0), arg_string(call, 1)) {
+                    b.borrow_mut().teleport_scene(path, carry);
+                }
+                Ok(slag::JsValue::undefined())
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        self.register(
             "viewport_size",
             0,
             Box::new(move |_call| {

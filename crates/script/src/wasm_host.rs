@@ -115,6 +115,7 @@ enum Abi {
     GetVelocity,
     IsGrounded,
     LoadScene,
+    TeleportScene,
     ViewportSize,
     SetMouseCaptured,
     IsOverlapping,
@@ -155,6 +156,7 @@ impl Abi {
             "get_velocity" => Abi::GetVelocity,
             "is_grounded" => Abi::IsGrounded,
             "load_scene" => Abi::LoadScene,
+            "teleport_scene" => Abi::TeleportScene,
             "viewport_size" => Abi::ViewportSize,
             "set_mouse_captured" => Abi::SetMouseCaptured,
             "is_overlapping" => Abi::IsOverlapping,
@@ -180,6 +182,10 @@ impl Abi {
             Destroy => (vec![ValType::I32], vec![]),
             DestroyByName => (vec![ValType::I32, ValType::I32], vec![]),
             LoadScene => (vec![ValType::I32, ValType::I32], vec![]),
+            TeleportScene => (
+                vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+                vec![],
+            ),
             Log => (vec![ValType::I32, ValType::I32], vec![]),
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
@@ -434,6 +440,15 @@ impl Abi {
             LoadScene => {
                 if let Some(path) = memory_string_at(args, memory, 0) {
                     bridge.load_scene(path);
+                }
+                Vec::new()
+            }
+            TeleportScene => {
+                if let (Some(path), Some(carry)) = (
+                    memory_string_at(args, memory, 0),
+                    memory_string_at(args, memory, 2),
+                ) {
+                    bridge.teleport_scene(path, carry);
                 }
                 Vec::new()
             }
