@@ -4,7 +4,7 @@
 //! `NOCTIS_EMBED_PACK` when it builds this crate. This script turns that pack into
 //! `$OUT_DIR/embedded.rs`, a `&'static [EmbeddedScript]` the binary passes to
 //! `runtime::cli::run_cli_with`. With no pack set the table is empty and the
-//! client loads scripts from disk (the development shape). See `docs/scripts.md`.
+//! client loads scripts from disk (the development shape). See `.notes/scripts.md`.
 
 use std::env;
 use std::fmt::Write as _;

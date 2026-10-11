@@ -1,7 +1,7 @@
 //! The web host (`wasm32`): a `<canvas>`, a wgpu surface, and a
 //! `requestAnimationFrame` loop driving any [`AppDriver`].
 //!
-//! The browser **client** is the first target (see `docs/web.md`), so this host
+//! The browser **client** is the first target (see `.notes/web.md`), so this host
 //! renders the scene and feeds input but draws no egui overlay — the editor's UI
 //! is a later step. GPU startup is asynchronous, so it is awaited on the browser's
 //! event loop ([`Renderer::for_surface_async`]) rather than blocked on.

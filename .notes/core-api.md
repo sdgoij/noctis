@@ -107,7 +107,7 @@ Component types must be `Send + Sync + 'static`.
 The built-in components are a closed set; a consumer may register its own so they
 round-trip through a scene like a built-in. `World` already stores any
 `Send + Sync + 'static` type — only *reflection* is added. See
-[`docs/embedding.md`](embedding.md).
+[`.notes/embedding.md`](embedding.md).
 
 - `Component` — for a registered type: `const NAME: &'static str`, and
   `Send + Sync + 'static + Serialize + DeserializeOwned + Default`. Optional
@@ -189,7 +189,7 @@ round-trip through a scene like a built-in. `World` already stores any
   `NullPlugin` — an application's (or project's) Rust extension. `register` runs
   before any scene loads, so a scene using the plugin's custom components resolves;
   `build` runs after the runtime's own systems are scheduled, so plugin systems run
-  after the engine's within each stage. See `docs/embedding.md`.
+  after the engine's within each stage. See `.notes/embedding.md`.
 - `ecs::scene`: `Scene { name, mode, world }`, `SceneMode { TwoD, ThreeD }`
   (`as_str`, `is_2d`, `FromStr`; the presentation hint stored in `SceneDesc.mode`),
   `Scene::with_mode`, `Scene::try_from_desc` (errors on a missing asset

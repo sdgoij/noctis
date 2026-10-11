@@ -1,4 +1,4 @@
-// Scatter — a worked Noctis editor extension (see docs/extensions.md).
+// Scatter — a worked Noctis editor extension (see .notes/extensions.md).
 //
 // It adds one verb, `scatter`, which duplicates the current selection `n` times
 // through the editor's own command API. The duplicates are queued with

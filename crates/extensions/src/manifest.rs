@@ -19,7 +19,7 @@ pub const MANIFEST: &str = "extension.json";
 /// A declared asset: a slot an extension points at a file, read into memory.
 ///
 /// `name` is the opaque, host-registered name the scene references — never the
-/// path. See `docs/extensions.md`.
+/// path. See `.notes/extensions.md`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Asset {
     /// The logical slot name.

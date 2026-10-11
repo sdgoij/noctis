@@ -2,7 +2,7 @@
 //!
 //! A *project* is a directory with a `noctis.toml` manifest. It owns one shared
 //! asset registry, zero or more scenes, prefabs, and scripts, and it defines how
-//! the game is built. The full design is in `docs/project.md`; this crate
+//! the game is built. The full design is in `.notes/project.md`; this crate
 //! implements it.
 //!
 //! This first slice owns:

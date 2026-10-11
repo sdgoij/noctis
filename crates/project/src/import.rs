@@ -4,7 +4,7 @@
 //! kind's conventional directory, and returns the new asset path. It never
 //! clobbers an existing file: a name collision gets a `-1`, `-2`, … suffix. An
 //! unrecognised file is an error (the caller should ask the user what it is),
-//! mirroring the drag & drop table in `docs/project.md`.
+//! mirroring the drag & drop table in `.notes/project.md`.
 
 use std::path::Path;
 

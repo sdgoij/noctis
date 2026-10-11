@@ -2,7 +2,7 @@
 #
 # The project carries a `[rust]` plugin (the `rust/` crate): it registers a custom
 # component (`Spin`) and installs the systems that turn tagged entities and fly the
-# player camera. See README.md, and docs/embedding.md for the design.
+# player camera. See README.md, and .notes/embedding.md for the design.
 
 [project]
 name = "Rust Ball"

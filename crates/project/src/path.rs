@@ -2,7 +2,7 @@
 //!
 //! An *asset path* is a logical, project-relative path — the string that appears
 //! in scene and prefab JSON. It is not an OS path: the project maps it to a file
-//! under its root. See `docs/project.md`.
+//! under its root. See `.notes/project.md`.
 
 use std::fmt;
 
@@ -157,7 +157,7 @@ impl AssetKind {
     }
 
     /// The conventional project-relative directory for this kind, per
-    /// `docs/project.md`. `None` for [`AssetKind::Unknown`].
+    /// `.notes/project.md`. `None` for [`AssetKind::Unknown`].
     ///
     /// A project may relocate these with `[paths]`; this is only the default that
     /// drag & drop suggests.

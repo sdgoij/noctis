@@ -11,7 +11,7 @@
 //! - **native** (winit + egui-winit + egui-wgpu) — the windowed host, with an
 //!   egui overlay;
 //! - **web** (`wasm32`) — a `<canvas>` and a `requestAnimationFrame` loop driven
-//!   through `web-sys` (see `docs/web.md`). The browser client comes first, so the
+//!   through `web-sys` (see `.notes/web.md`). The browser client comes first, so the
 //!   web host draws no egui overlay yet.
 //!
 //! The windowed loop blocks and needs a display, so it is not unit-tested; the

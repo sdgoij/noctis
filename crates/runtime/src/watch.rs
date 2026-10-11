@@ -1,6 +1,6 @@
 //! Development hot reload: watch the project for script edits.
 //!
-//! A windowed development run loads scripts from disk (see `docs/scripts.md`).
+//! A windowed development run loads scripts from disk (see `.notes/scripts.md`).
 //! [`ScriptWatch`] wraps a `notify` watcher on the project root and collects the
 //! `.js`/`.mjs`/`.wasm` files that changed; [`Runtime`](crate::Runtime) re-reads
 //! them into the asset registry, and the script runtime reloads them because its

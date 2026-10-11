@@ -15,7 +15,7 @@ component and the whole scripting API. Copy its shape.
 
 For project **Rust** — a `[rust]` plugin that adds custom components and systems —
 the smaller worked reference is **`examples/rustball/`** (see
-[`docs/embedding.md`](docs/embedding.md)).
+[`.notes/embedding.md`](.notes/embedding.md)).
 
 ## Where things are
 

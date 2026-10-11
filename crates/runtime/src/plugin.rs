@@ -15,7 +15,7 @@
 //!   (transitively, through the plugin), so a shipped plugin game carries no
 //!   authoring tools.
 //!
-//! See `docs/embedding.md`.
+//! See `.notes/embedding.md`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

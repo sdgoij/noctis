@@ -7,8 +7,8 @@ the script reflection API; update it deliberately when the design changes.
 
 Background: `noctis` is the multicall tool *and* the embedding facade
 (`noctis::prelude`); a `Runtime` drives an `App` of staged systems
-(`crates/ecs/src/app.rs`). See [`docs/project.md`](project.md) for what a project
-is and [`docs/core-api.md`](core-api.md) for the frozen `math`/`ecs` contract.
+(`crates/ecs/src/app.rs`). See [`.notes/project.md`](project.md) for what a project
+is and [`.notes/core-api.md`](core-api.md) for the frozen `math`/`ecs` contract.
 
 ## Decisions
 
@@ -211,7 +211,7 @@ The registry travels **on the scene** (`Scene::components`), which keeps
 empty registry (built-ins only). The chosen shape is simpler than threading the
 registry through every call site; the trade is that a scene holds a snapshot of the
 registry it was built with. This is a deliberate, additive `ecs` contract change,
-mirrored in [`docs/core-api.md`](core-api.md).
+mirrored in [`.notes/core-api.md`](core-api.md).
 
 ### Editor
 

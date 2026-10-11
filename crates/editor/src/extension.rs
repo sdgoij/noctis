@@ -1,6 +1,6 @@
 //! Editor extensions: the `noctis` JavaScript global, loading, and verb dispatch.
 //!
-//! This is the host half of `docs/extensions.md`. The pure loader
+//! This is the host half of `.notes/extensions.md`. The pure loader
 //! ([`extensions`]) discovers and reads extensions; here each one is evaluated in
 //! its own Slag [`Context`](slag::Context) — Slag's "one context per realm"
 //! model — against a versioned `noctis` global, and their edits are replayed

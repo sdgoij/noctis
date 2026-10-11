@@ -6,7 +6,7 @@
 //! loads the `scene.json` bundled beside it.
 //!
 //! A release build (`noctis build`) bakes the project's scripts into this binary
-//! (see `build.rs` and `docs/scripts.md`); a development build leaves the table
+//! (see `build.rs` and `.notes/scripts.md`); a development build leaves the table
 //! empty and loads scripts from disk, watching them for edits.
 //!
 //! Development runs go through `noctis run`, which uses the same command line

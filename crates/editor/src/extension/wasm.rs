@@ -30,7 +30,7 @@
 //! handle does. Panel indices returned by `ui_panel` are module-local; the host
 //! offsets them into the frame's global panel list (see [`WasmHost::draw`]).
 //!
-//! See `docs/extensions.md`.
+//! See `.notes/extensions.md`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

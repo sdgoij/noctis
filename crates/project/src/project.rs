@@ -125,7 +125,7 @@ impl Project {
     }
 
     /// The store every project file is read and written through (see
-    /// `docs/web.md`).
+    /// `.notes/web.md`).
     pub(crate) fn store(&self) -> &dyn Store {
         self.store.as_ref()
     }
@@ -278,7 +278,7 @@ impl Project {
         Ok(Some(self.crate_package_name(&rust.crate_dir)?))
     }
 
-    /// The project's extension search directories, absolute (see `docs/extensions.md`).
+    /// The project's extension search directories, absolute (see `.notes/extensions.md`).
     pub fn extension_dirs(&self) -> Vec<PathBuf> {
         self.manifest
             .extensions

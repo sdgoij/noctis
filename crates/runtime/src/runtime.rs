@@ -258,7 +258,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
 
     /// Watch `root` for `.js`/`.mjs`/`.wasm` changes and reload scripts as they
     /// are edited. A development run ([`cli`](crate::cli)) calls this when scripts
-    /// are not embedded in the binary; see `docs/scripts.md`.
+    /// are not embedded in the binary; see `.notes/scripts.md`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn watch_scripts(&mut self, root: impl AsRef<Path>) -> std::io::Result<()> {
         self.watch = Some(

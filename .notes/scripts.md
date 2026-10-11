@@ -9,7 +9,7 @@ Background: a *script* is a `Script` component on an entity, resolved by the
 script runtime from either inline `source` or a project-relative `path` looked up
 in the asset registry's script store. A native WebAssembly module travels as the
 text descriptor `wasm:<hex>` because the script channel is text. See
-[`docs/project.md`](project.md) for what a project is.
+[`.notes/project.md`](project.md) for what a project is.
 
 ## Decisions
 

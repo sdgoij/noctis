@@ -2,7 +2,7 @@
 
 A minimal Noctis **project** whose gameplay is **Rust** rather than a script. It is
 the smallest complete demonstration of the `[rust]` plugin seam (see
-[`docs/embedding.md`](../../docs/embedding.md)): a custom, scene-authorable
+[`.notes/embedding.md`](../../.notes/embedding.md)): a custom, scene-authorable
 component and the systems that act on it.
 
 The scene holds a ball that keeps bouncing around a coloured floor and respawns

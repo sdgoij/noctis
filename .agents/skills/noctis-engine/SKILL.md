@@ -9,7 +9,7 @@ description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier
 
 - The workspace root is this repository. Crates live in `crates/<name>`.
 - `math` and `ecs` are the **frozen foundation**. Their public API is documented
-  in `docs/core-api.md`. Never change them to fit a single consumer; if a change
+  in `.notes/core-api.md`. Never change them to fit a single consumer; if a change
   is genuinely needed, change the contract and every affected crate together.
 - Read `AGENTS.md` for the non-negotiable standards.
 - `crates/noctis` is the `noctis` multicall tool (`editor`/`run`/`build`/`rename`)
@@ -18,7 +18,7 @@ description: Development guide for the Noctis 3D game engine (Rust, wgpu, rapier
 
 ## The loop
 
-1. Read `docs/core-api.md` (and the relevant `crates/*/src/*.rs`).
+1. Read `.notes/core-api.md` (and the relevant `crates/*/src/*.rs`).
 2. Make the smallest correct change.
 3. Add/extend `#[cfg(test)]` tests **in the same module**.
 4. Run **`cargo test --workspace`** and make it green. Also run

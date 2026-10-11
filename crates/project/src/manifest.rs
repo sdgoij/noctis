@@ -323,7 +323,7 @@ pub struct InputSettings {
 
 /// The `[extensions]` table: where a project keeps its editor extensions.
 ///
-/// See `docs/extensions.md`. Presence of the table is optional; an empty table
+/// See `.notes/extensions.md`. Presence of the table is optional; an empty table
 /// (or none) means the project ships no extensions of its own.
 #[derive(Clone, Debug, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]

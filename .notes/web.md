@@ -3,7 +3,7 @@
 > **Status:** the design and contract for a browser target. **Nothing is built
 > yet.** This document records the decisions, the seams to introduce, and the
 > phasing; update it deliberately when the design changes, as with
-> [`docs/project.md`](project.md) and [`docs/extensions.md`](extensions.md).
+> [`.notes/project.md`](project.md) and [`.notes/extensions.md`](extensions.md).
 >
 > **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
 > `MemoryStore` and `ZipStore` — and the extension loader, the `project` crate,
@@ -63,7 +63,7 @@ Nothing in this document is implemented; it is the plan and the contract.
    and packed by the native tool into a **bundle**; the browser fetches and runs
    the bundle. We do not run cargo (or any compiler) in the browser.
 4. **No Rust plugins on the web.** A `[rust]` plugin is compiled and linked by the
-   native tool (see [`docs/embedding.md`](embedding.md)); that path cannot run in
+   native tool (see [`.notes/embedding.md`](embedding.md)); that path cannot run in
    a browser. A web game uses **JavaScript** (and native `.wasm` scripts) only.
    That is acceptable: the plugin seam is an authoring/embedding feature, not a
    runtime requirement.
@@ -171,7 +171,7 @@ noctis.toml
 scenes/*.scene.json     (or the compact scene format scripts.md describes)
 prefabs/*.prefab.json
 assets/…                (meshes, textures, audio, fonts, HDRIs)
-scripts/…               (`.js`, `.wasm`)         [dev profile; see docs/scripts.md]
+scripts/…               (`.js`, `.wasm`)         [dev profile; see .notes/scripts.md]
 ```
 
 This is the same shape `noctis build` already writes as a folder — a bundle is
@@ -179,10 +179,10 @@ the folder zipped. It reuses:
 
 - the `Source::Zip` reader from `crates/extensions` (promoted into `vfs`), so a
   bundle and an extension archive are read by one code path;
-- [`docs/project.md`](project.md)'s manifest and canonical asset paths — the same
+- [`.notes/project.md`](project.md)'s manifest and canonical asset paths — the same
   `noctis.toml`, resolved against the bundle root instead of a directory, which is
   exactly `Project::open_in(ZipStore, root)` (`Project` now owns its `Store`);
-- [`docs/scripts.md`](scripts.md)'s profiles — a `release` bundle bakes scripts in
+- [`.notes/scripts.md`](scripts.md)'s profiles — a `release` bundle bakes scripts in
   (like the embedded pack), a `dev` bundle ships them loose and the client may
   reload them.
 
@@ -257,7 +257,7 @@ an optional DOM bridge gated by a host flag. That is the model for us:
   but no new design.
 - **Where scripts come from:** a `dev` bundle ships `scripts/` and the client
   reads them through the `Store`; a `release` bundle bakes them in (the embedded
-  pack, [`docs/scripts.md`](scripts.md)). Hot reload is native-only.
+  pack, [`.notes/scripts.md`](scripts.md)). Hot reload is native-only.
 
 ## The frame loop, async init, and audio
 
@@ -320,7 +320,7 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 - **Bundle layout.** Is `noctis.toml`-at-root enough, or does a bundle want a
   manifest that lists its parts (so a client can stream assets)? (Start with the
   plain zip.)
-- **Interaction with `docs/scripts.md` snapshots.** A baked script snapshot could
+- **Interaction with `.notes/scripts.md` snapshots.** A baked script snapshot could
   cut web startup cost; it is a native-tool concern either way.
 
 ## Phasing

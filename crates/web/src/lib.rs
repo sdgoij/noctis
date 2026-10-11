@@ -6,7 +6,7 @@
 //! [`Project::open_in`] (a `ZipStore`), imports its assets — decoded from bytes —
 //! loads the default scene, builds a [`Runtime`], and hands it to the web host
 //! (`platform::run`). The project comes from the **bundle**, not the binary, so
-//! one module runs any project. See `docs/web.md`.
+//! one module runs any project. See `.notes/web.md`.
 //!
 //! Build the artifact with:
 //!

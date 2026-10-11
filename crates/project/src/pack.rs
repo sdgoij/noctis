@@ -1,4 +1,4 @@
-//! Packaging a project into a `.zip` **bundle** (see `docs/web.md`).
+//! Packaging a project into a `.zip` **bundle** (see `.notes/web.md`).
 //!
 //! A bundle is the project at an archive's root — the same `noctis.toml`, scenes,
 //! prefabs, assets and scripts a directory holds — so a browser client (or any

@@ -175,7 +175,7 @@ pub fn run_cli(args: Vec<String>) -> ExitCode {
 ///
 /// The `noctis-game` client passes the scripts baked into it; `noctis run` passes
 /// an empty slice and loads scripts from disk (and watches them). See
-/// `docs/scripts.md`.
+/// `.notes/scripts.md`.
 pub fn run_cli_with(args: Vec<String>, embedded: &'static [EmbeddedScript]) -> ExitCode {
     run_cli_with_plugin(args, embedded, &NullPlugin)
 }

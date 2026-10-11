@@ -76,7 +76,7 @@ environment = "assets/hdris/sky.hdr"  # IBL source; omit for a neutral environme
 [input]
 controls = "input/controls.json"
 
-# Optional: where a project keeps its editor extensions (see docs/extensions.md).
+# Optional: where a project keeps its editor extensions (see .notes/extensions.md).
 # `noctis editor` discovers and runs them; no rebuild is needed.
 [extensions]
 dirs = ["tools/extensions"]       # extra search directories (project-relative)
@@ -84,7 +84,7 @@ disabled = ["com.example.wip"]    # extension ids this project turns off
 
 # Optional: the project carries Rust (a plugin of custom components and systems).
 # `noctis run`/`editor` build and run a per-project tool that links it, and
-# `noctis build` ships a plugin-linked game client. See docs/embedding.md.
+# `noctis build` ships a plugin-linked game client. See .notes/embedding.md.
 [rust]
 crate = "rust"                    # the plugin library crate directory (default "rust")
 plugin = "mygame::plugin"         # the plugin function; defaults to `<package>::plugin`
@@ -320,7 +320,7 @@ reference — a live `PrefabInstance` reference is future work.
   in `ecs::assets`, shared by the importer and the script host.
 - Scripts resolve assets and each other by the same project-relative paths.
 
-**Shipping** (see [`docs/scripts.md`](scripts.md)): the `[build] profile` decides
+**Shipping** (see [`.notes/scripts.md`](scripts.md)): the `[build] profile` decides
 how scripts travel. A `release` build embeds the scene's scripts in the client and
 omits them from the game folder; a `dev` build copies nothing — it writes a
 manifest whose `[project] root` points at the project, so the client runs it in
@@ -343,7 +343,7 @@ The tool builds a per-project binary that links the plugin and registers it befo
 loading the scene, so a project's Rust shapes the scene, the editor, and the
 exported game alike, and the component types are scene-authorable. The full design
 (component registry, scene serialization, editor, script reflection, and the
-build/export path) is in [`docs/embedding.md`](embedding.md). It is planned, not
+build/export path) is in [`.notes/embedding.md`](embedding.md). It is planned, not
 yet implemented.
 
 ## Fonts

@@ -9,7 +9,7 @@
 //! Storage is already open: [`World`] holds any `Send + Sync + 'static` type. The
 //! registry only adds *reflection* — a stable name, a default, and JSON
 //! (de)serialization — so a type the engine has never seen can round-trip through
-//! a scene. See `docs/embedding.md`.
+//! a scene. See `.notes/embedding.md`.
 
 use std::collections::HashMap;
 

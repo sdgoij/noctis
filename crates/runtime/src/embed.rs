@@ -1,7 +1,7 @@
 //! Embedded scripts: the scripts baked into a client binary.
 //!
 //! A release build embeds a project's scripts in the client, so the game folder
-//! carries no loose `scripts/` directory (see `docs/scripts.md`).
+//! carries no loose `scripts/` directory (see `.notes/scripts.md`).
 //! `crates/client/build.rs` generates a `&'static [EmbeddedScript]` from the pack
 //! `noctis build` writes, and the CLI seeds it into the asset registry at
 //! startup, so a scene's `Script.path` resolves with no file on disk.

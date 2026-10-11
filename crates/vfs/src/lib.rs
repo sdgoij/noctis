@@ -4,7 +4,7 @@
 //! prefabs; an extension's entry, module and assets) through one trait, [`Store`],
 //! rather than calling `std::fs` directly. That is what lets the same code run
 //! against a native directory, an in-memory `.zip`, or (on the web) browser
-//! storage — see [`docs/web.md`](../../docs/web.md).
+//! storage — see [`.notes/web.md`](../../.notes/web.md).
 //!
 //! Backends:
 //!

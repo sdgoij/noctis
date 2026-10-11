@@ -4,8 +4,8 @@ A production-grade, simple and straight-forward 3D game engine for Windows,
 macOS and Linux. Rust core, [wgpu](https://wgpu.rs) renderer, rapier physics,
 rodio audio, and JavaScript scripting via [Slag](https://github.com/sdgoij/slag).
 
-See [`spec.md`](spec.md) for the design goals, [`docs/project.md`](docs/project.md)
-for the project model, [`docs/core-api.md`](docs/core-api.md) for the frozen
+See [`spec.md`](spec.md) for the design goals, [`.notes/project.md`](.notes/project.md)
+for the project model, [`.notes/core-api.md`](.notes/core-api.md) for the frozen
 `math`/`ecs` interface, and [`AGENTS.md`](AGENTS.md) for how to work in this
 repository.
 
@@ -43,11 +43,11 @@ prefabs, scripts, and generated assets exercising every engine feature. See its
 
 [`examples/rustball`](examples/rustball) is a small project whose gameplay is
 **Rust** rather than a script: a `[rust]` plugin with a custom component and
-systems (see [`docs/embedding.md`](docs/embedding.md) and its
+systems (see [`.notes/embedding.md`](.notes/embedding.md) and its
 [README](examples/rustball/README.md)).
 
 The editor is **extendible**: JavaScript and WebAssembly extensions add verbs,
-panels and automation without a rebuild (see [`docs/extensions.md`](docs/extensions.md),
+panels and automation without a rebuild (see [`.notes/extensions.md`](.notes/extensions.md),
 [`examples/extensions`](examples/extensions), and
 [`examples/rustball`](examples/rustball) for the compiled `[rust]` plugin seam).
 
@@ -65,7 +65,7 @@ cargo test -p script --test showcase_scripts
 
 A **project** is a directory with a `noctis.toml` manifest. It owns one shared
 asset registry, zero or more scenes, prefabs, and scripts, and it defines the
-game's build targets. The full design is [`docs/project.md`](docs/project.md).
+game's build targets. The full design is [`.notes/project.md`](.notes/project.md).
 
 ```
 mygame/
@@ -105,7 +105,7 @@ height = 720
 
 `noctis.toml` is parsed strictly — an unknown key is an error, not silent forward
 compatibility. `[[build]]` targets and an optional `[[scene]]` list (names and
-order) are also supported; see `docs/project.md`.
+order) are also supported; see `.notes/project.md`.
 
 ### The workflow
 
@@ -231,12 +231,12 @@ platform = "host"                 # "host" | "windows" | "macos" | "linux"
 profile = "release"               # "dev" | "release"
 ```
 
-The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md))
+The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md))
 and organises the output: `dist/release/` and `dist/dev/`, so the two never
 overwrite each other. A named `[[build]]` target gets its own folder under the
 profile (`dist/release/<target>`).
 
-The **profile** decides how scripts travel (see [`docs/scripts.md`](docs/scripts.md)):
+The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md)):
 
 ```sh
 # release (the default): the project's .js/.wasm scripts are baked into the

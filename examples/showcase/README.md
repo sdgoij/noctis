@@ -6,7 +6,7 @@ engine — all thirteen components, glTF models with PBR textures, sounds, fonts
 physics, 3D and 2D scenes, and the whole JavaScript scripting API.
 
 It is both a demo to open and a working reference for how a Noctis project is
-put together (see [`docs/project.md`](../../docs/project.md) for the design).
+put together (see [`.notes/project.md`](../../.notes/project.md) for the design).
 
 ## Layout
 
@@ -152,7 +152,7 @@ executable in its folder with no arguments to play the bundled scene.
 The default `release` profile bakes the default scene's scripts into the client,
 so the game folder carries no `scripts/` directory. `--profile dev` copies nothing
 and runs the project in place, so the client hot-reloads a script (`.js`/`.wasm`)
-the moment you save it (see [`docs/scripts.md`](../../docs/scripts.md)). Builds are
+the moment you save it (see [`.notes/scripts.md`](../../.notes/scripts.md)). Builds are
 organised by profile (`dist/release/`, `dist/dev/`), so a dev build does not
 overwrite the release build.
 
@@ -208,7 +208,7 @@ The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 `instantiate_prefab`, and the component reflection calls `has_component`,
 `get_component`, `set_component`, `remove_component` (any component — a `[rust]`
 project's custom components or a built-in, whose JSON is its scene-descriptor form;
-see `docs/embedding.md`).
+see `.notes/embedding.md`).
 
 - `spinner.js` — spins an entity about Y (attach it to see it turn).
 - `bobber.js` — floats an entity up and down around its start height.

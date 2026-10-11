@@ -26,24 +26,24 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `client` | `crates/client` | The distributable `noctis-game` client: a stripped runtime binary, no editor. |
 
 The frozen interface between `math`/`ecs` and everything else is documented in
-[`docs/core-api.md`](docs/core-api.md). **Treat it as a contract**: if a consumer
+[`.notes/core-api.md`](.notes/core-api.md). **Treat it as a contract**: if a consumer
 needs a change, change the contract deliberately and update this doc and the
 affected crates together — never bend `math`/`ecs` to fit one caller.
 
 What a *project* is — the `noctis.toml` manifest, the directory conventions, asset
 paths and references, import, and build targets — is designed in
-[`docs/project.md`](docs/project.md). That document is the contract for the
+[`.notes/project.md`](.notes/project.md). That document is the contract for the
 `project` crate; update it deliberately when the design changes.
 
 Embedding the engine in a Rust application, and carrying Rust in a project (the
 `Plugin` seam, scene-authorable custom components, and script reflection), is
-designed in [`docs/embedding.md`](docs/embedding.md). The `Plugin` seam and project
+designed in [`.notes/embedding.md`](.notes/embedding.md). The `Plugin` seam and project
 Rust are shipped (it extends the `ecs` core contract — a component registry — which
-`docs/core-api.md` records); script reflection is not yet built.
+`.notes/core-api.md` records); script reflection is not yet built.
 
 Running the engine in a browser (WebAssembly) — the generic game client first, a
 `vfs` `Store` for files, a `platform-web` host, WebGPU-only rendering and
-JS-only scripting — is designed in [`docs/web.md`](docs/web.md). **Nothing is
+JS-only scripting — is designed in [`.notes/web.md`](.notes/web.md). **Nothing is
 built yet.**
 
 ## Commands
@@ -149,7 +149,7 @@ needed.
   (`has_component`/`get_component` into the module's memory/`set_component`/
   `remove_component`). The entity-level `LocalTransform`/`Name`/`Active`/`Visible`
   are not in the reflected list; they keep their dedicated bindings.
-- `noctis build` ships scripts by **profile** (see [`docs/scripts.md`](docs/scripts.md)):
+- `noctis build` ships scripts by **profile** (see [`.notes/scripts.md`](.notes/scripts.md)):
   a `release` build bakes the scene's `.js`/`.wasm` into the `noctis-game` client
   (via `NOCTIS_EMBED_PACK` → `crates/client/build.rs` → `include_bytes!`) and
   writes no `scripts/` into the game folder; a `dev` build copies them in, and the
@@ -158,7 +158,7 @@ needed.
   scripts embed for now — scenes, models, textures, audio, fonts, and HDR
   environments stay loose files, so packaging larger assets is still to come.
 - **Project Rust (a `[rust]` plugin)** is shipped (see
-  [`docs/embedding.md`](docs/embedding.md)). A project that carries Rust declares a
+  [`.notes/embedding.md`](.notes/embedding.md)). A project that carries Rust declares a
   plugin crate in `[rust]` (`crate`, `plugin`); `noctis run`/`editor` generate a
   per-project **tool** under the project's gitignored `.noctis/tool/` that links it
   and dispatches the same CLI, and `noctis build` generates a plugin-linked
@@ -171,7 +171,7 @@ needed.
   **Not yet:** script reflection over custom components (phase 3) and
   native-WebAssembly reflection.
 - **Editor extensions** are shipped for the editor only (see
-  [`docs/extensions.md`](docs/extensions.md)): a project or user directory of
+  [`.notes/extensions.md`](.notes/extensions.md)): a project or user directory of
   `extension.js`/`extension.wasm` extensions is discovered by `noctis editor`, and
   each is evaluated against a versioned `noctis` global (`on`/`command`/`edit`/
   `editor`/`ui`) in the Slag engine. The pure loader is `crates/extensions`; the
@@ -191,10 +191,10 @@ needed.
   a verb line is offered to each context in turn) with panel ids offset per
   context. A worker-thread host is still open — `Context`/`Agent` are `!Send`,
   so a worker would have to own the whole host and exchange only the bridge. See
-  `docs/extensions.md` ("Contexts and threads").
+  `.notes/extensions.md` ("Contexts and threads").
 - `noctis editor` and `noctis run` open a live windowed viewport (a window is the
   default; `--headless` opts out). Both accept
-  `--project <dir>` (a directory with a `noctis.toml`, see [`docs/project.md`](docs/project.md)):
+  `--project <dir>` (a directory with a `noctis.toml`, see [`.notes/project.md`](.notes/project.md)):
   it makes `--scene` project-relative, supplies the default scene when `--scene`
   is omitted, and drives the window title/size, gravity (for the runtime), and the
   `[render]` environment both CLIs precompute image-based lighting from, from the

@@ -11,7 +11,7 @@
 //! declared assets. JavaScript never sees a path: a declared asset is read into
 //! memory here and re-exposed under an opaque name (`ext:<id>:<slot>`).
 //!
-//! The whole design is `docs/extensions.md`.
+//! The whole design is `.notes/extensions.md`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]

@@ -3,7 +3,7 @@
 A worked **editor extension** for Noctis. Extensions are JavaScript (or
 WebAssembly) discovered at run time, so the editor grows new verbs and panels
 without a rebuild — the dynamic counterpart to a compiled
-[`[rust]` plugin](../../docs/embedding.md). See [`docs/extensions.md`](../../docs/extensions.md)
+[`[rust]` plugin](../../.notes/embedding.md). See [`.notes/extensions.md`](../../.notes/extensions.md)
 for the design.
 
 ```
@@ -28,7 +28,7 @@ export `noctis_abi() -> i32` (returning `1`), `noctis_init() -> i32` and
 can reach nothing it did not declare, and one importing an ungranted function
 fails to link. `edit`/`run` queue work the host replays after the call, in
 order, as one undo step. There is no WASI, so file I/O does not link. See
-[`docs/extensions.md`](../../docs/extensions.md#wasm-extensions) for the full
+[`.notes/extensions.md`](../../.notes/extensions.md#wasm-extensions) for the full
 ABI; the WASM host is covered by the tests in `crates/editor/src/extension`.
 
 ## Try it
