@@ -36,6 +36,10 @@ run project *args:
 test: check
     cargo test --workspace
 
+# Serve `docs/` locally with caching off, so a rebuild shows on reload.
+serve-docs port="8000":
+    python serve.py {{ publish }} {{ port }}
+
 # Build the browser demos and stage them in `docs/` for GitHub Pages. Several
 # `--project`s build one client that dispatches by project name (the Rust project
 # links its plugin); the generated `index.html` selects between them.

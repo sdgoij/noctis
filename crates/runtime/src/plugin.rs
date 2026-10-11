@@ -485,8 +485,16 @@ pub fn export_web(
     let env = root.join("crates").join("web").join("web").join("env.js");
     fs::copy(&env, destination.join("env.js"))
         .map_err(|error| format!("could not copy {}: {error}", env.display()))?;
-    fs::write(destination.join("index.html"), index_html(&entries))
-        .map_err(|error| format!("could not write index.html: {error}"))?;
+    // A content hash of the module versions the page's URLs, so a rebuild is not
+    // served from a stale cache.
+    let wasm_bytes = fs::read(destination.join("web_bg.wasm"))
+        .map_err(|error| format!("could not read web_bg.wasm: {error}"))?;
+    let version = content_hash(&wasm_bytes);
+    fs::write(
+        destination.join("index.html"),
+        index_html(&entries, &version),
+    )
+    .map_err(|error| format!("could not write index.html: {error}"))?;
     files.push("env.js".to_string());
     files.push("index.html".to_string());
 
@@ -626,7 +634,10 @@ fn web_lib(entries: &[WebEntry]) -> String {
 
 /// The generated host page: a project `<select>` that reloads with `?p=<key>`
 /// and boots that project's bundle.
-fn index_html(entries: &[WebEntry]) -> String {
+///
+/// `version` is a content hash, appended to the glue, the module, and the
+/// bundles, so a rebuild is not served from a stale cache.
+fn index_html(entries: &[WebEntry], version: &str) -> String {
     let mut options = String::new();
     for entry in entries {
         options.push_str(&format!(
@@ -635,17 +646,19 @@ fn index_html(entries: &[WebEntry]) -> String {
             escape_html(&entry.label)
         ));
     }
-    let default = &entries[0].key;
     let mut page = String::new();
     page.push_str(PAGE_HEAD);
     page.push_str(&options);
     page.push_str(PAGE_MID);
-    page.push_str(default);
+    page.push_str(version);
+    page.push_str(PAGE_SCRIPT);
+    page.push_str(&entries[0].key);
     page.push_str(PAGE_TAIL);
     page
 }
 
-/// The generated page, split around the project list and the default key.
+/// The generated page, split around the project list, the version, and the
+/// default key.
 const PAGE_HEAD: &str = r#"<!doctype html>
 <html lang="en">
   <head>
@@ -687,7 +700,11 @@ const PAGE_MID: &str = r#"        </select>
     </script>
 
     <script type="module">
-      import init, { start } from "./web.js";
+      const V = ""#;
+
+const PAGE_SCRIPT: &str = r#"";
+      // Everything is versioned by `V` so a rebuild is never served from cache.
+      const { default: init, start } = await import("./web.js?v=" + V);
       const select = document.getElementById("project");
       const canvas = document.getElementById("noctis-canvas");
       canvas.addEventListener("pointerdown", () => canvas.focus());
@@ -699,13 +716,23 @@ const PAGE_TAIL: &str = r#"";
       if ([...select.options].some((o) => o.value === picked)) select.value = picked;
       select.addEventListener("change", () => { location.search = "?p=" + select.value; });
 
-      await init();
+      await init(new URL("./web_bg.wasm?v=" + V, import.meta.url));
       // start(canvasId, project, bundleUrl) runs the bundle; it never returns.
-      start(canvas.id, select.value, "./" + select.value + ".zip");
+      start(canvas.id, select.value, "./" + select.value + ".zip?v=" + V);
     </script>
   </body>
 </html>
 "#;
+
+/// A short content hash (FNV-1a) of `bytes`, for cache-busting URLs.
+fn content_hash(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
 
 /// Escape the few characters that matter inside an HTML text node.
 fn escape_html(text: &str) -> String {
@@ -821,8 +848,8 @@ mod tests {
     }
 
     #[test]
-    fn the_page_lists_every_project_with_a_deep_link() {
-        let html = index_html(&web_fixtures());
+    fn the_page_lists_every_project_and_versions_its_assets() {
+        let html = index_html(&web_fixtures(), "deadbeef");
         assert!(
             html.contains("<option value=\"showcase\">Noctis Showcase</option>"),
             "{html}"
@@ -832,6 +859,10 @@ mod tests {
             "{html}"
         );
         assert!(html.contains(r#".get("p") ?? "showcase""#), "{html}");
+        // The glue, module, and bundles are versioned by the content hash.
+        assert!(html.contains(r#"const V = "deadbeef""#), "{html}");
+        assert!(html.contains(r#"import("./web.js?v=" + V)"#), "{html}");
+        assert!(html.contains(r#".zip?v=" + V"#), "{html}");
     }
 
     #[test]

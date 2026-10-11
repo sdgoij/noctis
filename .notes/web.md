@@ -387,7 +387,10 @@ components resolve in every scene the client reaches — as on native.
    makes the glue `web.js`/`web_bg.wasm`.
 4. `project::bundle` each project → `<key>.zip`, and write the generated
    `index.html` (a project `<select>` that reloads with `?p=<key>`) beside the
-   module and the `env.js` shim.
+   module and the `env.js` shim. The page versions its URLs — `web.js?v=…`,
+   `web_bg.wasm?v=…`, `<key>.zip?v=…` — with a content hash of the module, so a
+   rebuild is never served from a stale cache. `just serve-docs` serves `docs/`
+   with `Cache-Control: no-store` for local testing.
 
 A project with no Rust is an entry that dispatches to `run_bundle`, so
 `platform = "wasm"` works for any mix. The key is the project directory; a site is

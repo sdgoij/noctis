@@ -39,7 +39,9 @@
     </script>
 
     <script type="module">
-      import init, { start } from "./web.js";
+      const V = "8a40841f64312c87";
+      // Everything is versioned by `V` so a rebuild is never served from cache.
+      const { default: init, start } = await import("./web.js?v=" + V);
       const select = document.getElementById("project");
       const canvas = document.getElementById("noctis-canvas");
       canvas.addEventListener("pointerdown", () => canvas.focus());
@@ -49,9 +51,9 @@
       if ([...select.options].some((o) => o.value === picked)) select.value = picked;
       select.addEventListener("change", () => { location.search = "?p=" + select.value; });
 
-      await init();
+      await init(new URL("./web_bg.wasm?v=" + V, import.meta.url));
       // start(canvasId, project, bundleUrl) runs the bundle; it never returns.
-      start(canvas.id, select.value, "./" + select.value + ".zip");
+      start(canvas.id, select.value, "./" + select.value + ".zip?v=" + V);
     </script>
   </body>
 </html>
