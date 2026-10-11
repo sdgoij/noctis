@@ -1,8 +1,9 @@
 # Noctis in the browser (WebAssembly)
 
-> **Status:** the design and contract for a browser target. **Nothing is built
-> yet.** This document records the decisions, the seams to introduce, and the
-> phasing; update it deliberately when the design changes, as with
+> **Status:** the design and contract for a browser target, now largely
+> **shipped** — a generic wasm client runs a project bundle on a WebGPU canvas.
+> This document records the decisions, the seams, and the phasing; update it
+> deliberately when the design changes, as with
 > [`.notes/project.md`](project.md) and [`.notes/extensions.md`](extensions.md).
 >
 > **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
@@ -28,7 +29,9 @@
 > hosts it. The
 > native-only build/export/plugin paths (`runtime::build`/`export`/`plugin`) still
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
-> (the source is outside the project).
+> (the source is outside the project). **Audio** plays on the web through a
+> `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the
+> same `AudioEngine`, resumed on the first user gesture.
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document
@@ -90,13 +93,13 @@ Nothing in this document is implemented; it is the plan and the contract.
 | GPU | `render` | wgpu has a WebGPU backend, and device init is now `await`-able: `Renderer::headless_async`/`for_surface_async` wrap the one `open_device` await point, and the native `headless`/`for_surface` block on them (`pollster::block_on`, `#[cfg(not(target_arch = "wasm32"))]`). |
 | Window / input / UI | `platform` | A `web-sys` host (`platform/src/web.rs`, `cfg(wasm32)`) drives the same `AppDriver` seam on a `<canvas>` via `requestAnimationFrame`; the winit host is native-only. Input maps `KeyboardEvent.code` → `Key` (the same names winit uses). |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
-| Audio | `audio` (`rodio`→`cpal`) | **Weakest link.** Needs a WebAudio backend; decoding from bytes is now in place (`audio::load_clip_bytes`), so only the output sink is missing. |
+| Audio | `audio` (`rodio`→`cpal`) | **Shipped.** A `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the same `AudioEngine`; it resumes the `AudioContext` on the first user gesture. Decoding from bytes is `audio::load_clip_bytes`. |
 | Project / data | `project`, `extensions`, `editor`, `runtime` | Read and write through `vfs` (the extension loader, `project` — including `Project::open_in` — and the `editor`/`runtime` scene documents are migrated), and the decoders have byte-based entry points (`import_assets` decodes from the store). `notify` (watch), `std::process`, and cargo/plugin builds are **native-only**. |
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, `[rust]` plugins and `--watch` stay native. |
 
 **One WGSL difference to watch:** the browser's WGSL validator (Tint) is stricter than naga — e.g. it rejects `dpdx`/`dpdy` after a divergent branch that naga accepts — so shaders must keep derivatives in uniform control flow (see `crates/render/src/shaders/ssao.wgsl`, where the position gradient is taken above the background early-out).
 
-**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): **every crate on the client path compiles** — `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, `project`, `audio`, `platform`, `script`, `runtime`, `web`. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio`'s *output* sink (cpal) is still native-only, so the web client plays silently until a WebAudio sink is added; decoding works. `script` drops the native-only `jit` feature on wasm, and `runtime` gates its native-only modules. `cargo build -p web --target wasm32-unknown-unknown` then links `web.wasm`, which `wasm-bindgen` turns into `web_bg.wasm` + `web.js`; `crates/web/web/index.html` hosts it. (This all became possible once Slag stopped compiling its `runtime::jit` module on 32-bit wasm — the pin is now `66078cd6`.)
+**Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): **every crate on the client path compiles** — `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, `project`, `audio`, `platform`, `script`, `runtime`, `web`. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio` uses a `web-sys` WebAudio backend (`src/web.rs`, `cfg(wasm32)`) with the rodio sink gated to native, so the web client plays once the context is resumed by a gesture. `script` drops the native-only `jit` feature on wasm, and `runtime` gates its native-only modules. `cargo build -p web --target wasm32-unknown-unknown` then links `web.wasm`, which `wasm-bindgen` turns into `web_bg.wasm` + `web.js`; `crates/web/web/index.html` hosts it. (This all became possible once Slag stopped compiling its `runtime::jit` module on 32-bit wasm — the pin is now `66078cd6`.)
 
 ## The seams to introduce
 
@@ -160,7 +163,11 @@ New crates (names provisional; they never leak into the native-only build):
   `headless`/`for_surface` wrappers.
 - **`audio` web backend** — a WebAudio source/sink behind the same engine API
   (`AudioEngine`), with `silent()` already available for a no-audio fallback;
-  decoding via a pure-Rust decoder fed bytes.
+  decoding via a pure-Rust decoder fed bytes. **Shipped:** `crates/audio/src/web.rs`
+  (`cfg(wasm32)`) owns an `AudioContext`, builds an `AudioBuffer` per clip
+  (folded to mono/stereo), and plays it through a gain and — for a spatial sound —
+  a `StereoPannerNode` driven by the engine's own pan gains
+  (`spatial::pan_from_gains`). The context is resumed on the first gesture.
 
 ## The project bundle
 
@@ -270,8 +277,9 @@ an optional DOM bridge gated by a host flag. That is the model for us:
   the web host supplies a monotonic clock shim for the loop and for Slag's
   `now`/`now_monotonic` imports.
 - **Audio needs a gesture.** `AudioContext` must be resumed from a user gesture;
-  the first canvas interaction resumes it. `AudioEngine::silent()` already lets a
-  build run without a device, which is the fallback if WebAudio misbehaves.
+  the web backend resumes it on the first `pointerdown`/`keydown`/`touchstart`.
+  `AudioEngine::silent()` still lets a build run without a device, the fallback if
+  WebAudio misbehaves.
 
 ## Threads and headers
 
@@ -309,9 +317,10 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 
 ## Open questions
 
-- **Audio.** Does `rodio`/`cpal` publish a usable WebAudio backend at the pinned
-  version, or do we write a small `web-sys` sink behind `AudioEngine`? Resolve by
-  spike.
+- **Audio.** *(Resolved.)* `rodio`/`cpal` do build a WebAudio backend on
+  `wasm32-unknown-unknown`, but the `AudioContext` it opens starts suspended and
+  cpal never exposes it to resume, so it is silent under the autoplay policy. We
+  wrote our own `web-sys` sink behind `AudioEngine` (`crates/audio/src/web.rs`).
 - **OPFS vs IndexedDB.** OPFS is the better model but newer; do we need both, or
   is IndexedDB enough to start? (Design: `Store` hides it; ship OPFS, keep IDB as
   the fallback.)
@@ -336,7 +345,8 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 4. **`crates/web`: the generic client.** Fetch a bundle from a URL, build the
    scene/assets through the `Store`, run the loop, run Slag-interpreted scripts.
 5. **Storage backends.** OPFS (read/write) and the import/save flows.
-6. **Audio web backend** and the user-gesture resume.
+6. **Audio web backend** and the user-gesture resume. **Shipped:**
+   `crates/audio/src/web.rs`.
 7. **The browser editor.** Reuse the web host; add drag-drop import, in-browser
    save, and (optionally) the DOM bridge for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.

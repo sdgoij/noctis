@@ -7,6 +7,10 @@
 //! [`AudioEngine::update`], which reconciles the world's audio components with
 //! the live sounds.
 //!
+//! On `wasm32` playback goes through the browser's WebAudio through the same
+//! [`AudioEngine`] API; the `AudioContext` is resumed on the first user gesture,
+//! as the browser autoplay policy requires.
+//!
 //! ## Live and silent engines
 //!
 //! [`AudioEngine::new`] opens the default output device and returns an
@@ -47,10 +51,14 @@ pub mod decode;
 pub mod engine;
 pub mod spatial;
 
+/// The WebAudio output backend (`wasm32` only).
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 pub use clip_source::ClipSource;
 pub use decode::{load_clip, load_clip_bytes};
 pub use engine::{
     AudioEngine, AudioError, DEFAULT_MAX_DISTANCE, DEFAULT_ROLLOFF, Listener, PlaybackConfig,
     SoundHandle,
 };
-pub use spatial::{MonoOrStereo, attenuation, pan_gains, to_mono_or_stereo};
+pub use spatial::{MonoOrStereo, attenuation, pan_from_gains, pan_gains, to_mono_or_stereo};

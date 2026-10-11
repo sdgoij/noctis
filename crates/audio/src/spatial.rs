@@ -82,6 +82,20 @@ pub fn pan_gains(
     (left, right_gain)
 }
 
+/// The `StereoPannerNode` pan parameter that reproduces the engine's pan gains.
+///
+/// [`pan_gains`] returns equal-power gains `(left, right)` for a projection in
+/// `[-1, 1]`. A browser `StereoPannerNode` is equal-power too but parametrised
+/// differently — for a pan `w` it emits `cos((w+1)·π/4)` and `sin((w+1)·π/4)` —
+/// so the pan that reproduces `(left, right)` is `(2/π)·asin(right² − left²)`.
+/// The two curves agree at hard left, centre and hard right but differ in
+/// between, so this is not the identity. The web audio backend uses it to drive
+/// a browser panner from the gains the engine already computed.
+pub fn pan_from_gains(left: f32, right: f32) -> f32 {
+    let pan = (right * right - left * left).clamp(-1.0, 1.0);
+    pan.asin() * (2.0 / std::f32::consts::PI)
+}
+
 /// The result of normalizing a clip's channel layout to mono or stereo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonoOrStereo {
@@ -310,6 +324,35 @@ mod tests {
             pan_gains(emitter, zero, vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0)),
             (CENTER, CENTER)
         );
+    }
+
+    #[test]
+    fn pan_from_gains_matches_the_ends_and_center() {
+        assert!((pan_from_gains(1.0, 0.0) + 1.0).abs() < 1e-6, "hard left");
+        assert!((pan_from_gains(0.0, 1.0) - 1.0).abs() < 1e-6, "hard right");
+        assert!(pan_from_gains(CENTER, CENTER).abs() < 1e-6, "center");
+    }
+
+    #[test]
+    fn pan_from_gains_reproduces_gains_through_the_panner_law() {
+        // A `StereoPannerNode` with pan `w` emits equal-power gains
+        // `cos((w+1)·π/4)` and `sin((w+1)·π/4)`; converting the engine's pan
+        // gains back to `w` must reproduce them exactly (the two curves are not
+        // the same parametrisation, so the raw projection would not).
+        for projection in [-1.0f32, -0.75, -0.3, 0.0, 0.3, 0.75, 1.0] {
+            let left = ((1.0 - projection) * 0.5).sqrt();
+            let right = ((1.0 + projection) * 0.5).sqrt();
+            let pan = pan_from_gains(left, right);
+            let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+            assert!(
+                (angle.cos() - left).abs() < 1e-5,
+                "left {left} not reproduced at p={projection}"
+            );
+            assert!(
+                (angle.sin() - right).abs() < 1e-5,
+                "right {right} not reproduced at p={projection}"
+            );
+        }
     }
 
     #[test]

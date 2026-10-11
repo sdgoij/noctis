@@ -17,3 +17,19 @@ rodio.workspace = true
 # selects the matching backend cfg. Native builds do not need this.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
+# The WebAudio backend (`src/web.rs`): an `AudioContext` behind the engine's sink API.
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = [
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioContext",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioParam",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
+    "EventTarget",
+    "GainNode",
+    "StereoPannerNode",
+    "Window",
+] }

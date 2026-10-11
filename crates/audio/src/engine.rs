@@ -15,19 +15,29 @@
 
 use std::collections::HashMap;
 use std::fmt;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use ecs::assets::{AssetId, AssetRegistry, AudioClip};
 use ecs::components::{AudioSource, GlobalTransform};
 use ecs::world::{Entity, World};
 use math::{Vec3, length, vec3};
+
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::mixer::Mixer;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::source::ChannelVolume;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::{MixerDeviceSink, Player, Source};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::clip_source::ClipSource;
 use crate::spatial::{attenuation, pan_gains};
+#[cfg(target_arch = "wasm32")]
+use crate::web::{WebBackend, WebSound as LiveSink};
 
 /// Default `max_distance` for sounds started with [`AudioEngine::play`].
 pub const DEFAULT_MAX_DISTANCE: f32 = 50.0;
@@ -133,15 +143,20 @@ impl Default for Listener {
 enum Backend {
     /// No device; bookkeeping only.
     Silent,
-    /// A real device. `_sink` must outlive every player it created.
+    /// A live output. On native this is the rodio sink (which must outlive every
+    /// player it created); on the web it is the shared `AudioContext`.
+    #[cfg(not(target_arch = "wasm32"))]
     Live {
         _sink: MixerDeviceSink,
         mixer: Mixer,
     },
+    #[cfg(target_arch = "wasm32")]
+    Live { sound: WebBackend },
 }
 
 /// A live rodio player plus, for spatial sounds, the shared pan gains the
 /// player's stereo source reads on a timer.
+#[cfg(not(target_arch = "wasm32"))]
 enum LiveSink {
     Plain(Player),
     Spatial {
@@ -150,6 +165,7 @@ enum LiveSink {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl LiveSink {
     fn set_volume(&self, volume: f32) {
         match self {
@@ -261,6 +277,7 @@ impl AudioEngine {
     ///
     /// Returns [`AudioError`] instead of panicking when no device is available.
     /// Use [`AudioEngine::silent`] for a device-free engine.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Result<AudioEngine, AudioError> {
         let sink = rodio::DeviceSinkBuilder::open_default_sink().map_err(map_device_error)?;
         let mixer = sink.mixer().clone();
@@ -268,6 +285,18 @@ impl AudioEngine {
             _sink: sink,
             mixer,
         }))
+    }
+
+    /// Open the browser `AudioContext`.
+    ///
+    /// The context starts suspended (the browser autoplay policy) and is resumed
+    /// on the first user gesture; playback requested before then is queued. A
+    /// context that cannot be created is an [`AudioError::DeviceUnavailable`], so
+    /// the caller falls back to [`AudioEngine::silent`].
+    #[cfg(target_arch = "wasm32")]
+    pub fn new() -> Result<AudioEngine, AudioError> {
+        let sound = WebBackend::new()?;
+        Ok(AudioEngine::with_backend(Backend::Live { sound }))
     }
 
     /// Create a device-free engine that performs all bookkeeping but emits no
@@ -387,7 +416,10 @@ impl AudioEngine {
     ) -> Option<LiveSink> {
         match &self.backend {
             Backend::Silent => None,
+            #[cfg(not(target_arch = "wasm32"))]
             Backend::Live { mixer, .. } => spawn_sink(mixer, clip, config, initial_gains),
+            #[cfg(target_arch = "wasm32")]
+            Backend::Live { sound } => sound.play(clip, config, initial_gains),
         }
     }
 
@@ -649,6 +681,7 @@ impl AudioEngine {
 
 /// Build a live sink for a clip, wrapping it in a panned stereo chain when
 /// `spatial` is set.
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_sink(
     mixer: &Mixer,
     clip: &AudioClip,
@@ -678,6 +711,7 @@ fn spawn_sink(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn map_device_error(error: rodio::DeviceSinkError) -> AudioError {
     use rodio::DeviceSinkError;
     match error {

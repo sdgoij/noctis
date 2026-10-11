@@ -13,7 +13,7 @@ and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
 | `ecs-macros` | `crates/ecs-macros` | `#[derive(Component)]` for custom (registered) components. |
 | `render` | `crates/render` | wgpu 30 PBR renderer: glTF import, IBL, soft shadows, SSAO, HDR tonemapping, gizmos. |
 | `physics` | `crates/physics` | rapier3d 0.36 integration (`PhysicsWorld`). |
-| `audio` | `crates/audio` | rodio 0.22 engine with 3D spatialization. |
+| `audio` | `crates/audio` | rodio 0.22 engine with 3D spatialization; a WebAudio backend on `wasm32`. |
 | `script` | `crates/script` | Script runtime + engine API; JavaScript/WebAssembly via the Slag engine. |
 | `testscene` | `crates/testscene` | The all-features test scene (every component + the whole scripting API). |
 | `project` | `crates/project` | The project model: `noctis.toml`, canonical asset paths, type detection, discovery. |

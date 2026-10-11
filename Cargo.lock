@@ -184,6 +184,8 @@ dependencies = [
  "getrandom 0.4.3",
  "math",
  "rodio",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
