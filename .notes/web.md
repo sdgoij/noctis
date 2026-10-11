@@ -397,9 +397,9 @@ changes.
 
 ### Rough edges
 
-- **Native `.wasm` scripts nested.** A project's native WebAssembly scripts would
-  run as one Slang interpreter inside another on the web; correct, but a cost to
-  measure.
+- **Native `.wasm` scripts nested.** A project's native WebAssembly scripts run as
+  one Slang interpreter inside another on the web; correct, but a cost to measure.
+  A web build warns about each one it ships, pointing at `.js` or the plugin.
 - **The bundle carries source.** `pack` zips the whole project (including
   `src/`/`Cargo.toml`); harmless — the plugin is baked into the wasm — but a web
   bundle could drop them.

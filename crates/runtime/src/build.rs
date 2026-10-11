@@ -136,6 +136,18 @@ pub fn build_project(
         .or_else(|| target.map(|t| t.platform))
         .unwrap_or_default();
     if platform == Platform::Wasm {
+        // A native `.wasm` script runs *interpreted* on the web — one Slag
+        // interpreter inside another — so flag any the project ships; `.js` or
+        // the Rust plugin are the right choices there.
+        if let Ok(bundle) = bundle_files(&project, true, &components) {
+            for script in interpreted_wasm_scripts(&bundle.scripts) {
+                log::warn!(
+                    "the web build ships the WebAssembly script {:?}; on the web it runs \
+                     interpreted — prefer a `.js` script or the Rust plugin (see .notes/web.md)",
+                    script.relative
+                );
+            }
+        }
         return crate::plugin::export_web(&project, &destination, &name, profile);
     }
 
@@ -342,6 +354,17 @@ fn export_file(project: &Project, asset: &AssetPath) -> Result<ExportFile, Strin
         relative: asset.as_str().to_string(),
         source,
     })
+}
+
+/// The `.wasm` files among `scripts`.
+///
+/// A native WebAssembly script runs interpreted on the web, so a web build warns
+/// about them (see `.notes/web.md`); a `.js` script or the Rust plugin is better.
+fn interpreted_wasm_scripts(scripts: &[ExportFile]) -> Vec<&ExportFile> {
+    scripts
+        .iter()
+        .filter(|script| script.relative.ends_with(".wasm"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -704,6 +727,51 @@ mod tests {
 
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn interpreted_wasm_scripts_flags_only_wasm() {
+        let scripts = vec![
+            ExportFile {
+                relative: "scripts/player.js".to_string(),
+                source: PathBuf::from("player.js"),
+            },
+            ExportFile {
+                relative: "scripts/brain.wasm".to_string(),
+                source: PathBuf::from("brain.wasm"),
+            },
+        ];
+        let flagged = interpreted_wasm_scripts(&scripts);
+        assert_eq!(flagged.len(), 1, "only the .wasm script is flagged");
+        assert_eq!(flagged[0].relative, "scripts/brain.wasm");
+    }
+
+    #[test]
+    fn a_web_build_finds_a_native_wasm_script_to_flag() {
+        let dir = temp_dir("web-wasm-script");
+        write(&dir.join("noctis.toml"), MANIFEST);
+        write(
+            &dir.join("scenes/main.scene.json"),
+            r#"{ "name": "Main", "entities": [
+                { "id": 0, "name": "Root",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [
+                    { "type": "script", "source": null, "path": "scripts/brain.wasm", "enabled": true }
+                  ] }
+            ] }"#,
+        );
+        // A minimal wasm module (magic + version) is valid UTF-8, so `write` stages
+        // it; it imports as a script asset like any other.
+        write(&dir.join("scripts/brain.wasm"), "\0asm\u{1}\0\0\0");
+
+        let project = Project::open(&dir).expect("project opens");
+        let bundle = bundle_files(&project, true, &ComponentRegistry::new()).expect("bundles");
+        let flagged: Vec<&str> = interpreted_wasm_scripts(&bundle.scripts)
+            .iter()
+            .map(|script| script.relative.as_str())
+            .collect();
+        assert_eq!(flagged, vec!["scripts/brain.wasm"]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
