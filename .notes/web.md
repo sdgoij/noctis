@@ -346,28 +346,28 @@ just the facade (`prelude`, `ecs`, the macros). With that, `examples/rustball` �
 custom `Spin` component, systems, and input — checks clean for
 `wasm32-unknown-unknown`. *(Shipped.)*
 
-*Shipped.* `noctis build --project <dir> --platform wasm` (or a `[[build]]`
-`platform = "wasm"` target) compiles a browser client — linking the plugin for a
-Rust project — runs `wasm-bindgen`, and packs the bundle. The rest of this section
-records the shape.
+*Shipped.* `noctis build --project <dir> [--project <dir> …] --platform wasm`
+(or a `[[build]]` `platform = "wasm"` target) compiles a browser client — linking
+each project's plugin — runs `wasm-bindgen`, and packs each project's bundle. The
+rest of this section records the shape.
 
 ### The entry
 
-`crates/web` is a **library** with a feature-gated stock entry. A plugin client
-needs the plugin linked, and two `#[wasm_bindgen]` `start` exports cannot coexist
-in one module, so:
+`crates/web` is a **library** with a feature-gated stock entry, and the build
+generates a per-site entry that dispatches by project name:
 
 - `crates/web` exposes `pub fn run_bundle_with<P: Plugin>(canvas_id, bundle_url,
-  plugin)`. It fetches the bundle, registers the plugin's components
-  into a `ComponentRegistry` *before* the scene loads (so a scene using a custom
-  component resolves), builds the runtime, calls `plugin.build(runtime.app_mut())`
-  after, wires the scene loader, and hands the runtime to `platform::run`. This is
-  the web twin of `runtime::cli::build_runtime`.
-- The **stock** entry is behind the `entry` feature (on by default) for the
-  no-Rust showcase: `start` calls `run_bundle_with(…, NullPlugin)`. A generated
-  plugin client depends on `web` with `default-features = false`.
-- A **plugin** web client is a **generated** crate under `.noctis/web/` whose
-  `start` calls `run_bundle_with(…, <crate>::noctis_plugin())`.
+  plugin)` and `pub fn run_bundle(canvas_id, bundle_url)` (no plugin). Both fetch
+  the bundle, register the plugin's components into a `ComponentRegistry` *before*
+  the scene loads (so a scene using a custom component resolves), build the
+  runtime, call `plugin.build(runtime.app_mut())`, wire the scene loader, and hand
+  the runtime to `platform::run` — the web twin of `runtime::cli::build_runtime`.
+- The generated `.noctis/web/` crate (it depends on `web` with `default-features =
+  false`, so the stock `start` is absent) exports `start(canvas_id, project,
+  bundle_url)`, dispatching to `run_bundle_with(…, <crate>::noctis_plugin())` or
+  `run_bundle(…)` per project. Compiling each plugin in and choosing one at boot
+  is what lets **one** module serve several projects: only the chosen plugin
+  registers and builds, so a no-Rust project runs exactly as the stock client.
 
 Because the plugin's components land in `scene.components`, a runtime
 `load_scene`/`teleport_scene` re-parses through the registry too, so custom
@@ -375,25 +375,26 @@ components resolve in every scene the client reaches — as on native.
 
 ### The build
 
-`noctis build` has a wasm path (`runtime::plugin::export_web`, mirroring
-`build_client`):
+`noctis build` has a wasm path (`runtime::plugin::export_web`, and the multi-project
+`build_web_site`), mirroring `build_client`:
 
 1. Generate `.noctis/web/` — `Cargo.toml` (`crate-type = ["cdylib"]`; deps: `web`
-   without its `entry` feature, the plugin by path, and the engine's locked
-   `wasm-bindgen`) and `lib.rs` (the `start` entry).
+   without its `entry` feature, each project's plugin by path, and the engine's
+   locked `wasm-bindgen`) and `lib.rs` (the dispatching `start`).
 2. `cargo build --manifest-path .noctis/web/Cargo.toml --target
    wasm32-unknown-unknown --release --lib`.
 3. `wasm-bindgen --target web --out-name web --out-dir <out> <.wasm>` — `--out-name`
-   makes the glue `web.js`/`web_bg.wasm`, the names `index.html` imports. (The CLI
-   must match the crate version.)
-4. `project::bundle` → `game.zip`, and stage the module, glue, `index.html`, and
-   `env.js` beside it.
+   makes the glue `web.js`/`web_bg.wasm`.
+4. `project::bundle` each project → `<key>.zip`, and write the generated
+   `index.html` (a project `<select>` that reloads with `?p=<key>`) beside the
+   module and the `env.js` shim.
 
-A project with no Rust builds the **stock** client (`build_stock_web`) the same way,
-so `platform = "wasm"` works for any project. `just publish-wasm` is
-`noctis build --project examples/showcase --platform wasm --out docs`. The generated
-crate is cached like the native tool/client, rebuilt only when the plugin or engine
-changes.
+A project with no Rust is an entry that dispatches to `run_bundle`, so
+`platform = "wasm"` works for any mix. The key is the project directory; a site is
+one module however many projects it carries. `just publish-wasm` is
+`noctis build --platform wasm --project examples/showcase --project
+examples/rustball --out docs`. The generated crate is cached like the native
+tool/client, rebuilt only when a plugin or the engine changes.
 
 ### Rough edges
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use ecs::app::Plugin;
 use project::{AssetPath, Platform, Profile, Project};
-use runtime::build::{BuildOptions, build_project};
+use runtime::build::{BuildOptions, build_project, build_web_site};
 
 /// A top-level CLI failure, distinguished so usage problems can exit `2`.
 #[derive(Debug)]
@@ -68,7 +68,7 @@ OPTIONS:
 /// Rust project links it into the exported game and bundles its components'
 /// asset references.
 pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
-    let mut project: Option<String> = None;
+    let mut projects: Vec<String> = Vec::new();
     let mut target: Option<String> = None;
     let mut options = BuildOptions::default();
     let mut index = 0;
@@ -91,7 +91,7 @@ pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliE
             "-h" | "--help" => return Ok(BUILD_USAGE.to_string()),
             "--project" | "-p" => {
                 let (value, consumed) = value_for("--project")?;
-                project = Some(value);
+                projects.push(value);
                 index = consumed;
             }
             "--target" | "-t" => {
@@ -149,16 +149,37 @@ pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliE
         index += 1;
     }
 
-    let project =
-        project.ok_or_else(|| CliError::Usage("build requires --project <DIR>".into()))?;
+    if projects.is_empty() {
+        return Err(CliError::Usage("build requires --project <DIR>".into()));
+    }
     // Fail fast on a bad project before spending time building the client.
-    Project::open(PathBuf::from(&project)).map_err(|error| CliError::Message(error.to_string()))?;
+    for project in &projects {
+        Project::open(PathBuf::from(project))
+            .map_err(|error| CliError::Message(error.to_string()))?;
+    }
+
+    // Several projects build one browser client — a web site (see `.notes/web.md`).
+    if projects.len() > 1 {
+        if options.platform != Some(Platform::Wasm) {
+            return Err(CliError::Usage(
+                "building several projects is a web build; pass --platform wasm".into(),
+            ));
+        }
+        let dirs: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();
+        let report = build_web_site(
+            &dirs,
+            options.destination.as_deref(),
+            options.profile.unwrap_or_default(),
+        )
+        .map_err(CliError::Message)?;
+        return Ok(report.to_string());
+    }
 
     // `build_project` acquires the game client itself (embedding the project's
     // scripts for a release build, and linking the plugin for a Rust project),
     // so `noctis build` is one command.
     let report = build_project(
-        &PathBuf::from(&project),
+        &PathBuf::from(&projects[0]),
         target.as_deref(),
         &options,
         plugin,

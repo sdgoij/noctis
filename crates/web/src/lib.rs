@@ -39,9 +39,7 @@
 //!
 //! (No `#![forbid(unsafe_code)]` here: `#[wasm_bindgen]` generates the FFI glue.)
 
-#[cfg(feature = "entry")]
-use ecs::app::NullPlugin;
-use ecs::app::Plugin;
+use ecs::app::{NullPlugin, Plugin};
 use ecs::assets::AssetRegistry;
 use ecs::reflect::ComponentRegistry;
 use ecs::scene::Scene;
@@ -62,6 +60,14 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "entry")]
 #[wasm_bindgen]
 pub fn start(canvas_id: &str, bundle_url: &str) {
+    run_bundle(canvas_id, bundle_url);
+}
+
+/// Run the bundle in `canvas_id` with no plugin — the stock (no-Rust) client.
+///
+/// A generated client dispatches by project name and calls this for a project
+/// that carries no Rust (see `.notes/web.md`).
+pub fn run_bundle(canvas_id: &str, bundle_url: &str) {
     run_bundle_with(canvas_id, bundle_url, NullPlugin);
 }
 

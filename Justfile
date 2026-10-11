@@ -36,10 +36,9 @@ run project *args:
 test: check
     cargo test --workspace
 
-# Build the browser demos and stage them in `docs/` for GitHub Pages. Each demo
-# is its own self-contained build under `docs/<project>/` (the Rust project links
-# its plugin), and the committed `docs/index.html` selects between them.
+# Build the browser demos and stage them in `docs/` for GitHub Pages. Several
+# `--project`s build one client that dispatches by project name (the Rust project
+# links its plugin); the generated `index.html` selects between them.
 publish-wasm:
-    cargo run -- build --project {{ showcase }} --platform wasm --out {{ publish }}/showcase
-    cargo run -- build --project {{ rustball }} --platform wasm --out {{ publish }}/rustball
+    cargo run -- build --platform wasm --project {{ showcase }} --project {{ rustball }} --out {{ publish }}
     touch {{ publish }}/.nojekyll

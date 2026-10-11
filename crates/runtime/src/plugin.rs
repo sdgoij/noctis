@@ -111,7 +111,6 @@ pub fn build_client(
 struct PluginInfo {
     noctis_dir: PathBuf,
     runtime_dir: PathBuf,
-    web_dir: PathBuf,
     plugin_path: String,
     package: String,
     plugin_dir: PathBuf,
@@ -136,7 +135,6 @@ impl PluginInfo {
         Ok(Self {
             noctis_dir: absolute(&root.join("crates").join("noctis")),
             runtime_dir: absolute(&root.join("crates").join("runtime")),
-            web_dir: absolute(&root.join("crates").join("web")),
             plugin_path,
             package,
             plugin_dir: absolute(&plugin_dir),
@@ -372,117 +370,134 @@ fn embedded_rs(scripts: &[ExportFile]) -> String {
     out
 }
 
-/// Generate and build a project's plugin-linked **browser** client, returning
+/// One project in a web build: its bundle key, a display label, and — when it
+/// carries Rust — the plugin to link.
+struct WebEntry {
+    /// The bundle key: the project directory, sanitized. It names the page's
+    /// option, the `<key>.zip` bundle, and the `start` dispatch arm.
+    key: String,
+    /// The display label (the project's name).
+    label: String,
+    /// The plugin, when the project carries Rust (`None` runs the stock client).
+    plugin: Option<PluginLink>,
+}
+
+/// A project's plugin, as the generated crate needs it.
+struct PluginLink {
+    /// The dependency line, e.g. `rustball = { path = "…" }`.
+    dependency: String,
+    /// The call path, e.g. `rustball::noctis_plugin`.
+    call: String,
+}
+
+/// The key, label, and plugin link for each project.
+///
+/// The key is the project directory, sanitized; a project with a root
+/// `Cargo.toml` links its plugin, one without runs the stock client.
+fn web_entries(projects: &[Project]) -> Result<Vec<WebEntry>, String> {
+    let mut entries: Vec<WebEntry> = Vec::with_capacity(projects.len());
+    for project in projects {
+        let key = sanitize(&project_dir_name(project));
+        if entries.iter().any(|entry| entry.key == key) {
+            return Err(format!("two projects share the web key {key:?}"));
+        }
+        let plugin = PluginInfo::resolve(project).ok().map(|info| PluginLink {
+            dependency: info.dependency(),
+            call: info.plugin_path.clone(),
+        });
+        entries.push(WebEntry {
+            key,
+            label: project.name().to_string(),
+            plugin,
+        });
+    }
+    Ok(entries)
+}
+
+/// A project's directory name — its web key before sanitizing.
+fn project_dir_name(project: &Project) -> String {
+    project
+        .root()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| project.name())
+        .to_string()
+}
+
+/// Generate and build a **browser** client for one or more projects, returning
 /// the built `.wasm`.
 ///
-/// Generates a `cdylib` crate under `.noctis/web/` that links the plugin and
-/// `web` (the reusable client, without its own entry) and exports the
-/// wasm-bindgen `start` that runs the bundle, then compiles it for
+/// Generates a `cdylib` crate under `dir` whose `start(canvas_id, project,
+/// bundle_url)` dispatches by project name; it links `web` (without its `entry`
+/// feature) and each project's plugin, then compiles for
 /// `wasm32-unknown-unknown`.
-pub fn build_web(project: &Project, profile: Profile) -> Result<PathBuf, String> {
-    let info = PluginInfo::resolve(project)?;
+fn build_web(entries: &[WebEntry], dir: &Path, profile: Profile) -> Result<PathBuf, String> {
     let root = workspace_root().ok_or_else(|| {
-        "could not locate the engine workspace (building a project's Rust needs it)".to_string()
+        "could not locate the engine workspace (a web build needs it)".to_string()
     })?;
+    let web_dir = absolute(&root.join("crates").join("web"));
     let wasm_bindgen = locked_version(&root, "wasm-bindgen").ok_or_else(|| {
         "the engine's Cargo.lock does not pin wasm-bindgen (a web build needs it)".to_string()
     })?;
-    let name = web_crate_name(project.name());
-    let dir = project.dir(WEB_DIR);
-    let manifest = web_manifest(&name, &info.web_dir, &wasm_bindgen, &info);
-    let lib = web_lib(&info.plugin_path);
-    generate(&dir, &name, &manifest, "lib.rs", &lib, &[])?;
-    cargo_build_wasm(&dir, &name.replace('-', "_"), profile)
+
+    let name = "noctis-web";
+    let manifest = web_manifest(entries, &web_dir, &wasm_bindgen);
+    let lib = web_lib(entries);
+    generate(dir, name, &manifest, "lib.rs", &lib, &[])?;
+    cargo_build_wasm(dir, "noctis_web", profile)
 }
 
-/// Build a project for the browser: a wasm client (plugin-linked for a Rust
-/// project, else the stock client), the `.zip` bundle it fetches, and the host
-/// page — all staged in `destination`.
+/// Build one or more projects into a single browser client: a wasm module whose
+/// `start(canvas_id, project, bundle_url)` runs the chosen project, a `<key>.zip`
+/// bundle per project, and a generated `index.html` that selects between them.
+///
+/// A project that carries Rust links its plugin; one that does not runs the stock
+/// (no-plugin) client. All are staged in `destination`.
 pub fn export_web(
-    project: &Project,
+    projects: &[Project],
     destination: &Path,
-    _name: &str,
     profile: Profile,
 ) -> Result<ExportReport, String> {
-    let wasm = match PluginInfo::resolve(project) {
-        Ok(_) => build_web(project, profile)?,
-        Err(_) => build_stock_web(profile)?,
+    let Some(first) = projects.first() else {
+        return Err("a web build needs at least one project".to_string());
     };
+    let root =
+        workspace_root().ok_or_else(|| "could not locate the engine workspace".to_string())?;
+    let entries = web_entries(projects)?;
+
+    let wasm = build_web(&entries, &first.dir(WEB_DIR), profile)?;
 
     fs::create_dir_all(destination)
         .map_err(|error| format!("could not create {}: {error}", destination.display()))?;
     run_wasm_bindgen(destination, &wasm)?;
 
-    let bundle = project.bundle().map_err(|error| error.to_string())?;
-    let game_zip = destination.join("game.zip");
-    fs::write(&game_zip, &bundle)
-        .map_err(|error| format!("could not write {}: {error}", game_zip.display()))?;
-
-    let mut files = vec![
-        "web.js".to_string(),
-        "web_bg.wasm".to_string(),
-        "game.zip".to_string(),
-    ];
-    if let Some(root) = workspace_root() {
-        for file in ["index.html", "env.js"] {
-            let from = root.join("crates").join("web").join("web").join(file);
-            fs::copy(&from, destination.join(file))
-                .map_err(|error| format!("could not copy {}: {error}", from.display()))?;
-            files.push(file.to_string());
-        }
+    // Each project ships as the bundle its client fetches.
+    let mut files = vec!["web.js".to_string(), "web_bg.wasm".to_string()];
+    for (project, entry) in projects.iter().zip(&entries) {
+        let bundle = project.bundle().map_err(|error| error.to_string())?;
+        let zip = destination.join(format!("{}.zip", entry.key));
+        fs::write(&zip, &bundle)
+            .map_err(|error| format!("could not write {}: {error}", zip.display()))?;
+        files.push(format!("{}.zip", entry.key));
     }
+
+    // The generated host page (with the project selector) and the Slag `env` shim.
+    let env = root.join("crates").join("web").join("web").join("env.js");
+    fs::copy(&env, destination.join("env.js"))
+        .map_err(|error| format!("could not copy {}: {error}", env.display()))?;
+    fs::write(destination.join("index.html"), index_html(&entries))
+        .map_err(|error| format!("could not write index.html: {error}"))?;
+    files.push("env.js".to_string());
+    files.push("index.html".to_string());
 
     Ok(ExportReport {
         directory: destination.to_path_buf(),
         executable: destination.join("web_bg.wasm"),
-        scene: game_zip,
+        scene: destination.join(format!("{}.zip", entries[0].key)),
         manifest: destination.join("index.html"),
         project_manifest: None,
         files,
     })
-}
-
-/// Build the stock (no-plugin) browser client — the engine's `web` crate — for
-/// `wasm32`, returning the `.wasm`.
-fn build_stock_web(profile: Profile) -> Result<PathBuf, String> {
-    let root = workspace_root().ok_or_else(|| {
-        "could not locate the engine workspace (needed for the wasm client)".to_string()
-    })?;
-    let manifest = root.join("crates").join("web").join("Cargo.toml");
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
-    command
-        .arg("build")
-        .arg("--manifest-path")
-        .arg(&manifest)
-        .arg("--target")
-        .arg("wasm32-unknown-unknown");
-    if profile == Profile::Release {
-        command.arg("--release");
-    }
-    match command.status() {
-        Ok(status) if status.success() => {}
-        Ok(status) => return Err(format!("building the wasm client failed ({status})")),
-        Err(error) => {
-            return Err(format!(
-                "could not run cargo to build the wasm client: {error}"
-            ));
-        }
-    }
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target"));
-    let wasm = target
-        .join("wasm32-unknown-unknown")
-        .join(profile_dir(profile))
-        .join("web.wasm");
-    if !wasm.is_file() {
-        return Err(format!(
-            "the built wasm client was not found at {}",
-            wasm.display()
-        ));
-    }
-    Ok(wasm)
 }
 
 /// Build a generated web crate for `wasm32`, returning its `.wasm`.
@@ -551,21 +566,22 @@ fn run_wasm_bindgen(out_dir: &Path, wasm: &Path) -> Result<(), String> {
     }
 }
 
-/// A cargo-safe crate name for the project's web client.
-fn web_crate_name(project_name: &str) -> String {
-    format!("noctis-web-{}", sanitize(project_name))
-}
-
 /// The generated web crate's `Cargo.toml`.
 ///
-/// It links the plugin and the `web` crate *without* its `entry` feature (the
-/// generated crate supplies its own `start`), and pins `wasm-bindgen` to the
-/// engine's locked version so the glue matches the CLI.
-fn web_manifest(name: &str, web_dir: &Path, wasm_bindgen: &str, info: &PluginInfo) -> String {
-    let dependency = info.dependency();
+/// It links the `web` crate *without* its `entry` feature (the generated crate
+/// supplies its own `start`), each project's plugin, and pins `wasm-bindgen` to
+/// the engine's locked version so the glue matches the CLI.
+fn web_manifest(entries: &[WebEntry], web_dir: &Path, wasm_bindgen: &str) -> String {
+    let mut plugins = String::new();
+    for entry in entries {
+        if let Some(plugin) = &entry.plugin {
+            plugins.push_str(&plugin.dependency);
+            plugins.push('\n');
+        }
+    }
     format!(
         "[package]\n\
-         name = {name:?}\n\
+         name = \"noctis-web\"\n\
          version = \"0.0.0\"\n\
          edition = \"2024\"\n\
          publish = false\n\n\
@@ -575,22 +591,127 @@ fn web_manifest(name: &str, web_dir: &Path, wasm_bindgen: &str, info: &PluginInf
          [dependencies]\n\
          web = {{ path = {web_dir:?}, default-features = false }}\n\
          wasm-bindgen = {{ version = \"={wasm_bindgen}\" }}\n\
-         {dependency}\n\n\
+         {plugins}\n\
          [workspace]\n"
     )
 }
 
-/// The generated web crate's `lib.rs`: the wasm-bindgen `start` that runs the
-/// bundle with the project's plugin.
-fn web_lib(plugin_path: &str) -> String {
+/// The generated web crate's `lib.rs`: `start(canvas_id, project, bundle_url)`
+/// dispatches to the chosen project's client.
+fn web_lib(entries: &[WebEntry]) -> String {
+    let mut arms = String::new();
+    for entry in entries {
+        let key = &entry.key;
+        match &entry.plugin {
+            Some(plugin) => {
+                let call = &plugin.call;
+                arms.push_str(&format!(
+                    "        {key:?} => web::run_bundle_with(canvas_id, bundle_url, {call}()),\n"
+                ));
+            }
+            None => arms.push_str(&format!(
+                "        {key:?} => web::run_bundle(canvas_id, bundle_url),\n"
+            )),
+        }
+    }
     format!(
-        "//! Generated by `noctis`: the project's plugin-linked browser client.\n\
+        "//! Generated by `noctis`: a browser client for one or more projects.\n\
          //!\n\
-         //! Do not edit; it is rewritten from the project's `Cargo.toml` on every build.\n\n\
+         //! Do not edit; it is rewritten on every build.\n\n\
          #[wasm_bindgen::prelude::wasm_bindgen]\n\
-         pub fn start(canvas_id: &str, bundle_url: &str) {{\n    \
-         web::run_bundle_with(canvas_id, bundle_url, {plugin_path}());\n}}\n"
+         pub fn start(canvas_id: &str, project: &str, bundle_url: &str) {{\n    \
+         match project {{\n{arms}        _ => {{}}\n    }}\n}}\n"
     )
+}
+
+/// The generated host page: a project `<select>` that reloads with `?p=<key>`
+/// and boots that project's bundle.
+fn index_html(entries: &[WebEntry]) -> String {
+    let mut options = String::new();
+    for entry in entries {
+        options.push_str(&format!(
+            "        <option value=\"{}\">{}</option>\n",
+            entry.key,
+            escape_html(&entry.label)
+        ));
+    }
+    let default = &entries[0].key;
+    let mut page = String::new();
+    page.push_str(PAGE_HEAD);
+    page.push_str(&options);
+    page.push_str(PAGE_MID);
+    page.push_str(default);
+    page.push_str(PAGE_TAIL);
+    page
+}
+
+/// The generated page, split around the project list and the default key.
+const PAGE_HEAD: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noctis</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #0b0d10; color: #8a93a0;
+        font: 13px/1.4 ui-monospace, monospace; display: grid;
+        grid-template-rows: auto 1fr; }
+      header { display: flex; gap: 12px; align-items: center; padding: 10px 16px;
+        border-bottom: 1px solid #1c2128; }
+      label { display: inline-flex; gap: 6px; align-items: center; }
+      select { background: #12161c; color: inherit; border: 1px solid #2a323c;
+        border-radius: 6px; padding: 5px 8px; font: inherit; }
+      main { display: grid; place-items: center; padding: 16px; }
+      #noctis-canvas { display: block; width: min(100%, 1280px); aspect-ratio: 16 / 9;
+        max-height: 100%; background: #000; border-radius: 8px;
+        box-shadow: 0 8px 40px rgb(0 0 0 / 60%); outline: none; }
+      #noctis-canvas:focus-visible { box-shadow: 0 8px 40px rgb(0 0 0 / 60%), 0 0 0 2px #4c8dff; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label>Project
+        <select id="project">
+"#;
+
+const PAGE_MID: &str = r#"        </select>
+      </label>
+    </header>
+    <main><canvas id="noctis-canvas" tabindex="0"></canvas></main>
+
+    <!-- Slag (the script engine), compiled to wasm, imports its clock from a
+         module named `env`; this map points it at the shim alongside. -->
+    <script type="importmap">
+      { "imports": { "env": "./env.js" } }
+    </script>
+
+    <script type="module">
+      import init, { start } from "./web.js";
+      const select = document.getElementById("project");
+      const canvas = document.getElementById("noctis-canvas");
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      const picked =
+        new URLSearchParams(location.search).get("p") ?? ""#;
+
+const PAGE_TAIL: &str = r#"";
+      if ([...select.options].some((o) => o.value === picked)) select.value = picked;
+      select.addEventListener("change", () => { location.search = "?p=" + select.value; });
+
+      await init();
+      // start(canvasId, project, bundleUrl) runs the bundle; it never returns.
+      start(canvas.id, select.value, "./" + select.value + ".zip");
+    </script>
+  </body>
+</html>
+"#;
+
+/// Escape the few characters that matter inside an HTML text node.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// The version `name` is locked to in the engine's `Cargo.lock`.
@@ -619,11 +740,36 @@ mod tests {
         PluginInfo {
             noctis_dir: PathBuf::from("/engine/crates/noctis"),
             runtime_dir: PathBuf::from("/engine/crates/runtime"),
-            web_dir: PathBuf::from("/engine/crates/web"),
             plugin_path: "my_game::noctis_plugin".to_string(),
             package: "my-game".to_string(),
             plugin_dir: PathBuf::from("/project/game"),
         }
+    }
+
+    /// A web entry for a project with (or without) a plugin.
+    fn web_entry(key: &str, label: &str, plugin: Option<(&str, &str)>) -> WebEntry {
+        WebEntry {
+            key: key.to_string(),
+            label: label.to_string(),
+            plugin: plugin.map(|(dependency, call)| PluginLink {
+                dependency: dependency.to_string(),
+                call: call.to_string(),
+            }),
+        }
+    }
+
+    fn web_fixtures() -> Vec<WebEntry> {
+        vec![
+            web_entry("showcase", "Noctis Showcase", None),
+            web_entry(
+                "rustball",
+                "Rust Ball",
+                Some((
+                    "my_game = { package = \"my-game\", path = \"/project/game\" }",
+                    "my_game::noctis_plugin",
+                )),
+            ),
+        ]
     }
 
     #[test]
@@ -633,18 +779,11 @@ mod tests {
         assert_eq!(tool_crate_name("--weird--"), "noctis-tool-weird");
         assert_eq!(tool_crate_name("!!!"), "noctis-tool-game");
         assert_eq!(client_crate_name("Showcase"), "noctis-client-showcase");
-        assert_eq!(web_crate_name("Showcase"), "noctis-web-showcase");
-        assert_eq!(web_crate_name("My Game!"), "noctis-web-my-game");
     }
 
     #[test]
-    fn the_web_manifest_links_web_without_its_entry_and_pins_wasm_bindgen() {
-        let manifest = web_manifest(
-            "noctis-web-game",
-            Path::new("/engine/crates/web"),
-            "0.2.129",
-            &info(),
-        );
+    fn the_web_manifest_links_web_without_its_entry_and_each_plugin() {
+        let manifest = web_manifest(&web_fixtures(), Path::new("/engine/crates/web"), "0.2.129");
         assert!(manifest.contains("crate-type = [\"cdylib\"]"), "{manifest}");
         assert!(manifest.contains("path = \"lib.rs\""), "{manifest}");
         assert!(
@@ -663,16 +802,36 @@ mod tests {
     }
 
     #[test]
-    fn the_web_lib_starts_with_the_plugin() {
-        let lib = web_lib("my_game::noctis_plugin");
+    fn the_web_lib_dispatches_by_project() {
+        let lib = web_lib(&web_fixtures());
         assert!(
-            lib.contains("pub fn start(canvas_id: &str, bundle_url: &str)"),
+            lib.contains("pub fn start(canvas_id: &str, project: &str, bundle_url: &str)"),
             "{lib}"
         );
         assert!(
-            lib.contains("web::run_bundle_with(canvas_id, bundle_url, my_game::noctis_plugin())"),
+            lib.contains("\"showcase\" => web::run_bundle(canvas_id, bundle_url)"),
             "{lib}"
         );
+        assert!(
+            lib.contains(
+                "\"rustball\" => web::run_bundle_with(canvas_id, bundle_url, my_game::noctis_plugin())"
+            ),
+            "{lib}"
+        );
+    }
+
+    #[test]
+    fn the_page_lists_every_project_with_a_deep_link() {
+        let html = index_html(&web_fixtures());
+        assert!(
+            html.contains("<option value=\"showcase\">Noctis Showcase</option>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<option value=\"rustball\">Rust Ball</option>"),
+            "{html}"
+        );
+        assert!(html.contains(r#".get("p") ?? "showcase""#), "{html}");
     }
 
     #[test]

@@ -237,13 +237,18 @@ and organises the output: `dist/release/` and `dist/dev/`, so the two never
 overwrite each other. A named `[[build]]` target gets its own folder under the
 profile (`dist/release/<target>`).
 
-A **wasm** platform builds a browser client instead: a wasm module (with the
-project's Rust plugin linked in, if it has one) plus a `game.zip` bundle and the
-host page (`index.html` + glue), all in the output folder (see
-[`.notes/web.md`](.notes/web.md)).
+A **wasm** platform builds a browser client instead: a wasm module (with each
+project's Rust plugin linked in and chosen at boot) plus one `<name>.zip` bundle
+per project and a generated `index.html` (a `<select>` plus the wasm-bindgen glue),
+all in the output folder (see [`.notes/web.md`](.notes/web.md)). `--project` may
+repeat, so several projects share one client.
 
 ```sh
 cargo run -- build --project mygame --platform wasm --out dist/web
+
+# A demo site: one client that runs either project.
+cargo run -- build --platform wasm \
+    --project examples/showcase --project examples/rustball --out docs
 ```
 
 The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md)):

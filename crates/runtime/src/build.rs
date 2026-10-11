@@ -136,19 +136,8 @@ pub fn build_project(
         .or_else(|| target.map(|t| t.platform))
         .unwrap_or_default();
     if platform == Platform::Wasm {
-        // A native `.wasm` script runs *interpreted* on the web — one Slag
-        // interpreter inside another — so flag any the project ships; `.js` or
-        // the Rust plugin are the right choices there.
-        if let Ok(bundle) = bundle_files(&project, true, &components) {
-            for script in interpreted_wasm_scripts(&bundle.scripts) {
-                log::warn!(
-                    "the web build ships the WebAssembly script {:?}; on the web it runs \
-                     interpreted — prefer a `.js` script or the Rust plugin (see .notes/web.md)",
-                    script.relative
-                );
-            }
-        }
-        return crate::plugin::export_web(&project, &destination, &name, profile);
+        warn_interpreted_wasm_scripts(&project, &components);
+        return crate::plugin::export_web(std::slice::from_ref(&project), &destination, profile);
     }
 
     // A development build runs the project in place: the client plus a manifest
@@ -194,6 +183,41 @@ pub fn build_project(
         project.default_scene(),
     )
     .map_err(|error| error.to_string())
+}
+
+/// Build a **web site**: one or more projects into a single browser client (a
+/// wasm module that dispatches by project name), a `<key>.zip` bundle each, and a
+/// generated `index.html` that selects between them (see `.notes/web.md`).
+///
+/// Unlike [`build_project`], there is no target/scene resolution: each project
+/// ships whole, and `destination` defaults to `dist/<profile>/wasm`.
+pub fn build_web_site(
+    project_dirs: &[PathBuf],
+    destination: Option<&Path>,
+    profile: Profile,
+) -> Result<ExportReport, String> {
+    let mut projects = Vec::with_capacity(project_dirs.len());
+    for dir in project_dirs {
+        projects.push(
+            Project::open(dir)
+                .map_err(|error| format!("failed to open project {}: {error}", dir.display()))?,
+        );
+    }
+    let Some(first) = projects.first() else {
+        return Err("a web build needs at least one project".to_string());
+    };
+    let destination = destination.map(PathBuf::from).unwrap_or_else(|| {
+        first
+            .dir("dist")
+            .join(profile_directory(profile))
+            .join("wasm")
+    });
+
+    let components = ComponentRegistry::new();
+    for project in &projects {
+        warn_interpreted_wasm_scripts(project, &components);
+    }
+    crate::plugin::export_web(&projects, &destination, profile)
 }
 
 /// The `dist/` subdirectory a build profile writes to: `dev` or `release`.
@@ -354,6 +378,24 @@ fn export_file(project: &Project, asset: &AssetPath) -> Result<ExportFile, Strin
         relative: asset.as_str().to_string(),
         source,
     })
+}
+
+/// Warn about a project's native `.wasm` scripts.
+///
+/// A native WebAssembly script runs *interpreted* on the web — one Slag
+/// interpreter inside another — so a web build flags any the project ships; `.js`
+/// or the Rust plugin are the right choices there.
+fn warn_interpreted_wasm_scripts(project: &Project, components: &ComponentRegistry) {
+    let Ok(bundle) = bundle_files(project, true, components) else {
+        return;
+    };
+    for script in interpreted_wasm_scripts(&bundle.scripts) {
+        log::warn!(
+            "the web build ships the WebAssembly script {:?}; on the web it runs \
+             interpreted — prefer a `.js` script or the Rust plugin (see .notes/web.md)",
+            script.relative
+        );
+    }
 }
 
 /// The `.wasm` files among `scripts`.
