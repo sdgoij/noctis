@@ -39,11 +39,15 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 mod commands;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
 
+#[cfg(not(target_arch = "wasm32"))]
 use commands::CliError;
+#[cfg(not(target_arch = "wasm32"))]
 use ecs::app::{NullPlugin, Plugin};
 
 pub mod prelude;
@@ -56,6 +60,7 @@ pub use ecs;
 /// the tool finds it through the crate's `Cargo.toml`.
 pub use ecs::plugin;
 
+#[cfg(not(target_arch = "wasm32"))]
 const USAGE: &str = "\
 noctis — the Noctis engine tool
 
@@ -73,6 +78,7 @@ COMMANDS:
 Run `noctis <COMMAND> --help` for a command's options.";
 
 /// Where a command line routes, so the routing is testable without a process.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 enum Route {
     /// Print `text` and exit successfully.
@@ -92,6 +98,7 @@ enum Route {
     Fail(CliError),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn route(args: &[String]) -> Route {
     let Some(command) = args.first() else {
         return Route::Print(USAGE.to_string());
@@ -114,6 +121,7 @@ fn route(args: &[String]) -> Route {
 }
 
 /// Print a command's output and turn it into an exit code.
+#[cfg(not(target_arch = "wasm32"))]
 fn outcome(result: Result<String, CliError>) -> ExitCode {
     match result {
         Ok(text) => {
@@ -124,6 +132,7 @@ fn outcome(result: Result<String, CliError>) -> ExitCode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn report(error: CliError) -> ExitCode {
     match error {
         CliError::Usage(message) => {
@@ -144,6 +153,7 @@ fn report(error: CliError) -> ExitCode {
 /// Rust (custom components and systems) is registered before the scene loads and
 /// a build bundles the plugin's component asset references. `rename` does not
 /// consult it.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dispatch(args: &[String], plugin: &dyn Plugin) -> ExitCode {
     match route(args) {
         Route::Print(text) => {
@@ -163,6 +173,7 @@ pub fn dispatch(args: &[String], plugin: &dyn Plugin) -> ExitCode {
 /// Dispatch the process's own command line with `plugin`.
 ///
 /// This is the entry point a generated per-project binary calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn dispatch_with_plugin<P: Plugin>(plugin: P) -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     dispatch(&args, &plugin)
@@ -174,6 +185,7 @@ pub fn dispatch_with_plugin<P: Plugin>(plugin: P) -> ExitCode {
 /// the project is run through its generated plugin-aware tool (built on demand);
 /// otherwise the stock tool
 /// dispatches with no plugin.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn main_entry(args: &[String]) -> ExitCode {
     if let Some(project) = runtime::plugin::plugin_project(args) {
         return match runtime::plugin::delegate(&project, args) {
@@ -187,7 +199,7 @@ pub fn main_entry(args: &[String]) -> ExitCode {
     dispatch(args, &NullPlugin)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
 

@@ -4,11 +4,11 @@ import * as import2 from "env"
 
 
 /**
- * Run the project bundle at `bundle_url` in the canvas `canvas_id` (an empty
- * id uses `#noctis-canvas`).
+ * The stock browser entry point: run the bundle in `canvas_id` with no plugin.
  *
- * Returns immediately; the game runs until the page unloads. A failure is logged
- * to the browser console — there is no caller left to return to.
+ * A project that carries Rust generates its own `start` and depends on this
+ * crate with `default-features = false`, so this export is absent (see the
+ * crate docs).
  * @param {string} canvas_id
  * @param {string} bundle_url
  */

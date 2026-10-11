@@ -1,18 +1,26 @@
 #![cfg(target_arch = "wasm32")]
 //! # web — the Noctis browser client (`wasm32`)
 //!
-//! A generic wasm client: one export, [`start`], runs a packaged project **bundle**
-//! on a `<canvas>`. It fetches the `.zip` (`noctis pack`), opens it through
-//! [`Project::open_in`] (a `ZipStore`), imports its assets — decoded from bytes —
-//! loads the default scene, builds a [`Runtime`], and hands it to the web host
-//! (`platform::run`). The project comes from the **bundle**, not the binary, so
-//! one module runs any project. See `.notes/web.md`.
+//! A browser client: [`run_bundle_with`] fetches a packaged project **bundle**
+//! (the `.zip` `noctis pack` writes), opens it through [`Project::open_in`] (a
+//! `ZipStore`), imports its assets — decoded from bytes — registers a
+//! [`Plugin`], loads the default scene, builds a [`Runtime`], and hands it to the
+//! web host (`platform::run`). The project comes from the **bundle**, not the
+//! binary, so one module runs any project. See `.notes/web.md`.
 //!
-//! Build the artifact with:
+//! The crate is generic: `NullPlugin` in [`start`] is the stock, no-Rust client.
+//! A project that carries Rust (a root `Cargo.toml`, see `.notes/embedding.md`)
+//! generates its own entry that calls [`run_bundle_with`] with the project's
+//! plugin, so its custom components load and its systems run on the web too. The
+//! generated entry depends on this crate with `default-features = false`, which
+//! turns off the `entry` feature — two `#[wasm_bindgen] start` exports cannot
+//! coexist in one module.
+//!
+//! Build the stock artifact with:
 //!
 //! ```sh
-//! cargo build -p web --target wasm32-unknown-unknown
-//! wasm-bindgen --target web --out-dir dist target/wasm32-unknown-unknown/debug/web.wasm
+//! cargo build -p web --target wasm32-unknown-unknown --release
+//! wasm-bindgen --target web --out-dir dist target/wasm32-unknown-unknown/release/web.wasm
 //! ```
 //!
 //! then, from JS:
@@ -31,6 +39,9 @@
 //!
 //! (No `#![forbid(unsafe_code)]` here: `#[wasm_bindgen]` generates the FFI glue.)
 
+#[cfg(feature = "entry")]
+use ecs::app::NullPlugin;
+use ecs::app::Plugin;
 use ecs::assets::AssetRegistry;
 use ecs::reflect::ComponentRegistry;
 use ecs::scene::Scene;
@@ -40,15 +51,27 @@ use runtime::{Runtime, RuntimeConfig};
 use script::engine_host::EngineHost;
 use vfs::ZipStore;
 use wasm_bindgen::JsCast;
+#[cfg(feature = "entry")]
 use wasm_bindgen::prelude::*;
 
+/// The stock browser entry point: run the bundle in `canvas_id` with no plugin.
+///
+/// A project that carries Rust generates its own `start` and depends on this
+/// crate with `default-features = false`, so this export is absent (see the
+/// crate docs).
+#[cfg(feature = "entry")]
+#[wasm_bindgen]
+pub fn start(canvas_id: &str, bundle_url: &str) {
+    run_bundle_with(canvas_id, bundle_url, NullPlugin);
+}
+
 /// Run the project bundle at `bundle_url` in the canvas `canvas_id` (an empty
-/// id uses `#noctis-canvas`).
+/// id uses `#noctis-canvas`), with `plugin`'s components registered before the
+/// default scene loads and its systems added after.
 ///
 /// Returns immediately; the game runs until the page unloads. A failure is logged
 /// to the browser console — there is no caller left to return to.
-#[wasm_bindgen]
-pub fn start(canvas_id: &str, bundle_url: &str) {
+pub fn run_bundle_with<P: Plugin + 'static>(canvas_id: &str, bundle_url: &str, plugin: P) {
     let canvas_id = if canvas_id.is_empty() {
         DEFAULT_CANVAS_ID.to_string()
     } else {
@@ -56,14 +79,14 @@ pub fn start(canvas_id: &str, bundle_url: &str) {
     };
     let bundle_url = bundle_url.to_string();
     wasm_bindgen_futures::spawn_local(async move {
-        if let Err(error) = run(&canvas_id, &bundle_url).await {
+        if let Err(error) = run(&canvas_id, &bundle_url, plugin).await {
             log::error!("noctis: {error}");
         }
     });
 }
 
-/// Fetch the bundle, open it, and run its default scene.
-async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
+/// Fetch the bundle, open it, register `plugin`, and run its default scene.
+async fn run<P: Plugin>(canvas_id: &str, bundle_url: &str, plugin: P) -> Result<(), String> {
     let bytes = fetch(bundle_url).await?;
     let store = ZipStore::new(&bytes).map_err(|error| format!("not a readable bundle: {error}"))?;
     let project = Project::open_in(Box::new(store), format!("noctis-bundle/{canvas_id}"))
@@ -80,7 +103,11 @@ async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
         );
     }
 
-    let scene = load_scene(&project, &imported.registry)?;
+    // The plugin's components must exist before the scene that uses them loads.
+    let mut components = ComponentRegistry::new();
+    plugin.register(&mut components);
+
+    let scene = load_scene(&project, &imported.registry, &components)?;
 
     // Gravity and the `[render] environment` (IBL) the manifest names — without
     // the latter the renderer falls back to its white neutral IBL and looks
@@ -94,6 +121,9 @@ async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
         EngineHost::new().map_err(|error| format!("failed to start the script engine: {error}"))?;
     let mut runtime: Runtime<EngineHost> =
         Runtime::from_parts(scene, imported.registry, config, host);
+
+    // The plugin's systems run after the engine's within each stage.
+    plugin.build(runtime.app_mut());
 
     // A script switches scenes with `load_scene`/`teleport_scene`; the path is
     // read through the bundle's store, so its other scenes resolve too. Without a
@@ -121,8 +151,13 @@ async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
     platform::run(runtime, config).map_err(|error| format!("failed to start the web host: {error}"))
 }
 
-/// Load the project's default scene through the bundle's store.
-fn load_scene(project: &Project, assets: &AssetRegistry) -> Result<Scene, String> {
+/// Load the project's default scene through the bundle's store, resolving its
+/// custom components against `components`.
+fn load_scene(
+    project: &Project,
+    assets: &AssetRegistry,
+    components: &ComponentRegistry,
+) -> Result<Scene, String> {
     let scene = project
         .default_scene()
         .ok_or_else(|| "the bundle's manifest names no default scene".to_string())?;
@@ -131,7 +166,7 @@ fn load_scene(project: &Project, assets: &AssetRegistry) -> Result<Scene, String
         .read_document(asset.file_path())
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("scene {scene:?} is not in the bundle"))?;
-    Scene::from_json_with(&json, assets, &ComponentRegistry::new())
+    Scene::from_json_with(&json, assets, components)
         .map_err(|error| format!("failed to load the scene {scene:?}: {error}"))
 }
 

@@ -355,6 +355,9 @@ pub enum Platform {
     Macos,
     /// Linux.
     Linux,
+    /// The browser (`wasm32`): a wasm client plus a `.zip` bundle (see
+    /// `.notes/web.md`).
+    Wasm,
 }
 
 /// A build profile.
@@ -437,6 +440,16 @@ platform = "linux"
         assert_eq!(manifest.build_targets[0].profile, Profile::Dev);
         assert_eq!(manifest.build_targets[1].platform, Platform::Linux);
         assert_eq!(manifest.build_targets[1].profile, Profile::Release);
+        manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_a_wasm_build_target() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"Game\"\n\n[[build]]\nname = \"web\"\nplatform = \"wasm\"\n",
+        )
+        .unwrap();
+        assert_eq!(manifest.build_targets[0].platform, Platform::Wasm);
         manifest.validate().unwrap();
     }
 

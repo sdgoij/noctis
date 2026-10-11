@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use ecs::app::Plugin;
-use project::{AssetPath, Profile, Project};
+use project::{AssetPath, Platform, Profile, Project};
 use runtime::build::{BuildOptions, build_project};
 
 /// A top-level CLI failure, distinguished so usage problems can exit `2`.
@@ -35,6 +35,8 @@ OPTIONS:
     --out <DIR>          Override the output directory.
     --profile <PROFILE>  'release' (default) embeds scripts in the client; 'dev'
                          ships them as loose files, watched at run time.
+    --platform <PLAT>    'host' (default), 'windows'/'macos'/'linux', or 'wasm'
+                         (a browser client plus a .zip bundle).
     -h, --help           Show this help.";
 
 const PACK_USAGE: &str = "\
@@ -120,6 +122,23 @@ pub(crate) fn build(args: &[String], plugin: &dyn Plugin) -> Result<String, CliE
                     other => {
                         return Err(CliError::Usage(format!(
                             "--profile must be 'dev' or 'release', got {other:?}"
+                        )));
+                    }
+                });
+                index = consumed;
+            }
+            "--platform" => {
+                let (value, consumed) = value_for("--platform")?;
+                options.platform = Some(match value.as_str() {
+                    "host" => Platform::Host,
+                    "windows" => Platform::Windows,
+                    "macos" => Platform::Macos,
+                    "linux" => Platform::Linux,
+                    "wasm" | "web" => Platform::Wasm,
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "--platform must be 'host', 'windows', 'macos', 'linux', or \
+                             'wasm', got {other:?}"
                         )));
                     }
                 });

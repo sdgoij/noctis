@@ -12,8 +12,6 @@
 # the crate version in `Cargo.lock`.
 
 showcase := "examples/showcase"
-wasm_out := "crates/web/web"
-wasm_artifact := "target/wasm32-unknown-unknown/release/web.wasm"
 publish := "docs"
 
 # List the available recipes.
@@ -37,11 +35,9 @@ run project *args:
 test: check
     cargo test --workspace
 
-# Build a new wasm, package the showcase, and stage the demo in docs/.
+# Build the browser client for the showcase and stage the demo in `docs/`.
+# `noctis build --platform wasm` builds the wasm client (the stock client here; a
+# Rust project links its plugin), runs `wasm-bindgen`, and packs the bundle.
 publish-wasm:
-    cargo build -p web --target wasm32-unknown-unknown --release
-    wasm-bindgen --target web --out-dir {{ wasm_out }} {{ wasm_artifact }}
-    cargo run -- pack --project {{ showcase }} --out {{ wasm_out }}/game.zip
-    mkdir -p {{ publish }}
-    cp {{ wasm_out }}/index.html {{ wasm_out }}/env.js {{ wasm_out }}/web.js {{ wasm_out }}/web_bg.wasm {{ wasm_out }}/game.zip {{ publish }}/
+    cargo run -- build --project {{ showcase }} --platform wasm --out {{ publish }}
     touch {{ publish }}/.nojekyll

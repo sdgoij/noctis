@@ -13,6 +13,13 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["entry"]
+# The stock `#[wasm_bindgen] start` entry (the no-Rust client). A project that
+# carries Rust generates its own entry and depends on this crate with
+# `default-features = false`, so only one `start` export exists in a module.
+entry = []
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 runtime.workspace = true
 project.workspace = true

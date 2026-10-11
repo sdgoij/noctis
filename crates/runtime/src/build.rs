@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use ecs::app::Plugin;
 use ecs::reflect::ComponentRegistry;
 use ecs::scene::SceneDesc;
-use project::{AssetKind, AssetPath, BuildTarget, Profile, Project, detect};
+use project::{AssetKind, AssetPath, BuildTarget, Platform, Profile, Project, detect};
 
 use crate::export::{ExportFile, ExportReport, export_dev_game, export_game, game_client};
 
@@ -33,6 +33,8 @@ pub struct BuildOptions {
     pub runtime: Option<PathBuf>,
     /// The build profile, overriding the target's; defaults to release.
     pub profile: Option<Profile>,
+    /// The target platform, overriding the target's; defaults to the host.
+    pub platform: Option<Platform>,
 }
 
 /// Build `project_dir` into a self-contained game folder.
@@ -126,6 +128,16 @@ pub fn build_project(
             }
         },
     };
+
+    // A wasm target ships a browser client and a project bundle instead of a
+    // native game folder (see `.notes/web.md`).
+    let platform = options
+        .platform
+        .or_else(|| target.map(|t| t.platform))
+        .unwrap_or_default();
+    if platform == Platform::Wasm {
+        return crate::plugin::export_web(&project, &destination, &name, profile);
+    }
 
     // A development build runs the project in place: the client plus a manifest
     // that points at the project, so its scripts (which the runtime watches) are

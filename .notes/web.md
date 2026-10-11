@@ -332,6 +332,80 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 - **Interaction with `.notes/scripts.md` snapshots.** A baked script snapshot could
   cut web startup cost; it is a native-tool concern either way.
 
+## Project Rust on the web
+
+A project that carries Rust (a root `Cargo.toml` whose type is `#[noctis::plugin]`,
+see [`embedding.md`](embedding.md)) should ship its plugin — custom components and
+systems — in the wasm client, not only JavaScript gameplay.
+
+**It compiles.** A plugin depends on the `noctis` **facade** (the `plugin` and
+`Component` macros resolve `ecs` through `::noctis::ecs`), so the facade must build
+for `wasm32-unknown-unknown`. It now does: the CLI (`mod commands`, `runtime::cli`,
+`runtime::plugin`) and the tool binary are native-gated, so on wasm `noctis` is
+just the facade (`prelude`, `ecs`, the macros). With that, `examples/rustball` — a
+custom `Spin` component, systems, and input — checks clean for
+`wasm32-unknown-unknown`. *(Shipped.)*
+
+*Shipped.* `noctis build --project <dir> --platform wasm` (or a `[[build]]`
+`platform = "wasm"` target) compiles a browser client — linking the plugin for a
+Rust project — runs `wasm-bindgen`, and packs the bundle. The rest of this section
+records the shape.
+
+### The entry
+
+`crates/web` is a **library** with a feature-gated stock entry. A plugin client
+needs the plugin linked, and two `#[wasm_bindgen]` `start` exports cannot coexist
+in one module, so:
+
+- `crates/web` exposes `pub fn run_bundle_with<P: Plugin>(canvas_id, bundle_url,
+  plugin)`. It fetches the bundle, registers the plugin's components
+  into a `ComponentRegistry` *before* the scene loads (so a scene using a custom
+  component resolves), builds the runtime, calls `plugin.build(runtime.app_mut())`
+  after, wires the scene loader, and hands the runtime to `platform::run`. This is
+  the web twin of `runtime::cli::build_runtime`.
+- The **stock** entry is behind the `entry` feature (on by default) for the
+  no-Rust showcase: `start` calls `run_bundle_with(…, NullPlugin)`. A generated
+  plugin client depends on `web` with `default-features = false`.
+- A **plugin** web client is a **generated** crate under `.noctis/web/` whose
+  `start` calls `run_bundle_with(…, <crate>::noctis_plugin())`.
+
+Because the plugin's components land in `scene.components`, a runtime
+`load_scene`/`teleport_scene` re-parses through the registry too, so custom
+components resolve in every scene the client reaches — as on native.
+
+### The build
+
+`noctis build` has a wasm path (`runtime::plugin::export_web`, mirroring
+`build_client`):
+
+1. Generate `.noctis/web/` — `Cargo.toml` (`crate-type = ["cdylib"]`; deps: `web`
+   without its `entry` feature, the plugin by path, and the engine's locked
+   `wasm-bindgen`) and `lib.rs` (the `start` entry).
+2. `cargo build --manifest-path .noctis/web/Cargo.toml --target
+   wasm32-unknown-unknown --release --lib`.
+3. `wasm-bindgen --target web --out-name web --out-dir <out> <.wasm>` — `--out-name`
+   makes the glue `web.js`/`web_bg.wasm`, the names `index.html` imports. (The CLI
+   must match the crate version.)
+4. `project::bundle` → `game.zip`, and stage the module, glue, `index.html`, and
+   `env.js` beside it.
+
+A project with no Rust builds the **stock** client (`build_stock_web`) the same way,
+so `platform = "wasm"` works for any project. `just publish-wasm` is
+`noctis build --project examples/showcase --platform wasm --out docs`. The generated
+crate is cached like the native tool/client, rebuilt only when the plugin or engine
+changes.
+
+### Rough edges
+
+- **Native `.wasm` scripts nested.** A project's native WebAssembly scripts would
+  run as one Slang interpreter inside another on the web; correct, but a cost to
+  measure.
+- **The bundle carries source.** `pack` zips the whole project (including
+  `src/`/`Cargo.toml`); harmless — the plugin is baked into the wasm — but a web
+  bundle could drop them.
+- **Cold build cost.** The generated crate compiles the engine + plugin for wasm
+  (about a minute cold), then cached, like `.noctis/tool`.
+
 ## Phasing
 
 1. **`vfs` + `Store`.** Extract the `Source`/zip reader from `extensions`; move
@@ -350,3 +424,7 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 7. **The browser editor.** Reuse the web host; add drag-drop import, in-browser
    save, and (optionally) the DOM bridge for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
+9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
+   links into the browser client (`run_bundle_with`, feature-gated stock entry), and
+   `noctis build --platform wasm` generates `.noctis/web/`, builds it, runs
+   `wasm-bindgen`, and packs the bundle. `examples/rustball` builds and runs live.

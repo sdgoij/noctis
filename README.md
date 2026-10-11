@@ -228,7 +228,7 @@ like:
 name = "mygame"
 scene = "scenes/main.scene.json"  # defaults to project.settings.default_scene
 output = "dist/mygame"            # optional; default is dist/<profile>/
-platform = "host"                 # "host" | "windows" | "macos" | "linux"
+platform = "host"                 # "host" | "windows" | "macos" | "linux" | "wasm"
 profile = "release"               # "dev" | "release"
 ```
 
@@ -236,6 +236,15 @@ The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scr
 and organises the output: `dist/release/` and `dist/dev/`, so the two never
 overwrite each other. A named `[[build]]` target gets its own folder under the
 profile (`dist/release/<target>`).
+
+A **wasm** platform builds a browser client instead: a wasm module (with the
+project's Rust plugin linked in, if it has one) plus a `game.zip` bundle and the
+host page (`index.html` + glue), all in the output folder (see
+[`.notes/web.md`](.notes/web.md)).
+
+```sh
+cargo run -- build --project mygame --platform wasm --out dist/web
+```
 
 The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md)):
 

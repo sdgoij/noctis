@@ -185,6 +185,12 @@ needed.
   consumers and `noctis`-only plugin crates, and `noctis`'s `editor` is a default
   feature so a shipped plugin game can drop it. A worked example (a custom `Spin`
   component, a fly-camera system, and a simulated ball) is `examples/rustball`.
+  `noctis build --platform wasm` (or a `[[build]]` `platform = "wasm"` target)
+  additionally builds a **browser** client: the plugin is linked into a generated
+  `.noctis/web/` crate, compiled for `wasm32-unknown-unknown`, run through
+  `wasm-bindgen`, and staged with the project bundle — `crates/web` exposes a
+  plugin-aware `run_bundle_with`, and the `noctis` facade builds for wasm (its CLI
+  is native-gated). See [`.notes/web.md`](.notes/web.md).
   **Not yet:** script reflection over custom components (phase 3) and
   native-WebAssembly reflection.
 - **Editor extensions** are shipped for the editor only (see
