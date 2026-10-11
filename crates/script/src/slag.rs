@@ -682,10 +682,22 @@ impl ScriptHost for SlagHost {
         self.bridge.borrow_mut().begin(ctx, reflect);
         self.handles.borrow_mut().clear();
 
-        let function = format!("globalThis.__noctis_ns_{module}.{func}");
-        if let Ok(callee) = self.context.eval(&function)
-            && !callee.is_null()
-            && !callee.is_undefined()
+        // Reach the lifecycle function through the module's namespace object
+        // rather than `eval`ing `globalThis.__noctis_ns_N.func` on every call:
+        // the parser allocated ~40 times per call, per entity, per frame — the
+        // bulk of the wasm stutter. A property get uses the engine's caches and
+        // keeps the callee reachable from the global object, so it stays valid
+        // across the call's GC (no handle rooting needed here).
+        let callee = self
+            .context
+            .global()
+            .ok()
+            .and_then(|global| global.get(&format!("__noctis_ns_{module}")).ok())
+            .and_then(|namespace| namespace.as_object())
+            .and_then(|namespace| namespace.get(func).ok());
+
+        if let Some(callee) = callee
+            && callee.is_callable()
             && let Some(entity) = ctx.entity
         {
             let handle = handle_of(&mut self.handles.borrow_mut(), entity);
