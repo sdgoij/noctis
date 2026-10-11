@@ -30,6 +30,13 @@ enum NewObject {
     Camera,
 }
 
+/// One entry in the scene picker: a project scene's display name and its file.
+#[derive(Clone, Debug)]
+struct SceneChoice {
+    name: String,
+    path: PathBuf,
+}
+
 /// The gizmo shaft length as a fraction of the viewport height.
 const GIZMO_SCREEN_FRACTION: f32 = 0.15;
 /// How close (as a fraction of the shaft length) a ray must pass to a handle to
@@ -98,8 +105,15 @@ pub struct EditorDriver {
     orbit_pivot: Option<Vec3>,
     /// Inspector UI state (the add-component selection).
     inspector: InspectorState,
-    /// The open project, if any: a dropped file is imported into it.
+    /// The open project, if any: a dropped file is imported into it, and Save
+    /// writes the current scene and prefabs back into it.
     project: Option<Project>,
+    /// The current scene's file (absolute), for Save and the scene picker.
+    scene_path: Option<PathBuf>,
+    /// The project's scenes (name + absolute path), for the picker.
+    scenes: Vec<SceneChoice>,
+    /// The last Save / scene-switch result, shown in the menu bar.
+    status: Option<String>,
     /// The extension host, when extensions are enabled.
     extensions: Option<ExtensionHost>,
     /// The enablement config and the file it is written to.
@@ -154,6 +168,9 @@ impl EditorDriver {
             orbit_pivot: None,
             inspector: InspectorState::default(),
             project: None,
+            scene_path: None,
+            scenes: Vec::new(),
+            status: None,
             extensions: None,
             extension_config: None,
             extension_reload: None,
@@ -165,9 +182,17 @@ impl EditorDriver {
         }
     }
 
-    /// Associate an open project, so a dropped file is imported into it.
+    /// Associate an open project: a dropped file is imported into it, Save writes
+    /// the scene and prefabs back into it, and its scenes populate the picker.
     pub fn with_project(mut self, project: Option<Project>) -> Self {
+        self.scenes = project.as_ref().map(scene_choices).unwrap_or_default();
         self.project = project;
+        self
+    }
+
+    /// Set the current scene's file (absolute), for Save and the scene picker.
+    pub fn with_scene_path(mut self, path: Option<PathBuf>) -> Self {
+        self.scene_path = path;
         self
     }
 
@@ -524,6 +549,90 @@ impl EditorDriver {
         self.hovered_axis = None;
     }
 
+    /// Save the current scene (and the prefab library) back into the project, or
+    /// to the scene's own file for a loose `--scene`.
+    fn save(&mut self) {
+        let target = match self.scene_path.clone() {
+            Some(path) => path,
+            None => match self.project.as_ref() {
+                Some(project) => project.scenes_dir().join(format!(
+                    "{}.scene.json",
+                    scene_file_stem(self.editor.scene_name())
+                )),
+                None => {
+                    self.status =
+                        Some("Nothing to save to: open a project or pass --scene".to_string());
+                    return;
+                }
+            },
+        };
+
+        if let Err(error) = self.editor.save(&target) {
+            self.status = Some(format!("Save failed: {error}"));
+            return;
+        }
+
+        let mut message = match self.project.as_ref() {
+            Some(project) => format!(
+                "Saved {}",
+                target
+                    .strip_prefix(project.root())
+                    .unwrap_or(&target)
+                    .display()
+            ),
+            None => format!("Saved {}", target.display()),
+        };
+
+        // The prefab library lives in the project, so save it there too.
+        if let Some(project) = self.project.as_mut() {
+            for prefab in self.editor.prefabs() {
+                if let Err(error) = project.save_prefab(prefab) {
+                    message = format!("Saved the scene, but a prefab failed: {error}");
+                    break;
+                }
+            }
+        }
+
+        self.scene_path = Some(target);
+        self.status = Some(message);
+    }
+
+    /// Destroy the selected entity (and its descendants), undoably.
+    fn delete_selected(&mut self) {
+        let Some(entity) = self.selected else {
+            return;
+        };
+        self.editor.destroy(entity);
+        self.selected = None;
+        self.drag = None;
+        self.hovered_axis = None;
+    }
+
+    /// The picker index of the current scene, when it is one of the project's.
+    fn current_scene_index(&self) -> Option<usize> {
+        let path = self.scene_path.as_ref()?;
+        self.scenes.iter().position(|choice| &choice.path == path)
+    }
+
+    /// Switch to the project scene at `index`, replacing the current scene.
+    fn switch_scene(&mut self, index: usize) {
+        let Some(choice) = self.scenes.get(index) else {
+            return;
+        };
+        let path = choice.path.clone();
+        let name = choice.name.clone();
+        match self.editor.open_or_new(&path) {
+            Ok(()) => {
+                self.scene_path = Some(path);
+                self.selected = None;
+                self.drag = None;
+                self.hovered_axis = None;
+                self.status = Some(format!("Opened {name}"));
+            }
+            Err(error) => self.status = Some(format!("Open failed: {error}")),
+        }
+    }
+
     /// The camera-navigation bindings, for remapping.
     pub fn camera_controls(&self) -> &CameraControls {
         &self.controls
@@ -694,6 +803,7 @@ impl EditorDriver {
 
     fn outliner(&mut self, ui: &mut egui::Ui) {
         ui.heading("Outliner");
+        let mut delete = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("Add:");
             if ui.button("Cube").clicked() {
@@ -711,7 +821,17 @@ impl EditorDriver {
             if ui.button("Camera").clicked() {
                 self.add_object(NewObject::Camera);
             }
+            ui.separator();
+            if ui
+                .add_enabled(self.selected.is_some(), egui::Button::new("Delete"))
+                .clicked()
+            {
+                delete = true;
+            }
         });
+        if delete {
+            self.delete_selected();
+        }
         ui.separator();
         let entities = self.editor.list_entities();
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1170,9 +1290,30 @@ impl AppDriver for EditorDriver {
         ui.style_mut().interaction.selectable_labels = false;
 
         egui::Panel::top("noctis_menu").show(ui, |ui| {
+            let mut switch = None;
             ui.horizontal(|ui| {
                 ui.strong("Noctis Editor");
                 ui.separator();
+                if !self.scenes.is_empty() {
+                    ui.label("Scene:");
+                    let current = self.current_scene_index();
+                    let label = current
+                        .map(|index| self.scenes[index].name.clone())
+                        .unwrap_or_else(|| self.editor.scene_name().to_string());
+                    egui::ComboBox::from_id_salt("noctis_scene")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            for (index, choice) in self.scenes.iter().enumerate() {
+                                if ui
+                                    .selectable_label(current == Some(index), &choice.name)
+                                    .clicked()
+                                {
+                                    switch = Some(index);
+                                }
+                            }
+                        });
+                    ui.separator();
+                }
                 ui.toggle_value(&mut self.show_outliner, "Outliner");
                 ui.toggle_value(&mut self.show_inspector, "Inspector");
                 ui.toggle_value(&mut self.show_console, "Console");
@@ -1210,9 +1351,23 @@ impl AppDriver for EditorDriver {
                     self.sync_selection();
                 }
                 ui.separator();
+                let can_save = self.scene_path.is_some() || self.project.is_some();
+                if ui
+                    .add_enabled(can_save, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    self.save();
+                }
+                ui.separator();
                 ui.label(format!("{} entities", self.editor.list_entities().len()));
-                ui.label("|  WASD/QE: fly  ·  MMB: orbit  ·  Shift+MMB: pan  ·  wheel: zoom");
+                if let Some(status) = &self.status {
+                    ui.separator();
+                    ui.label(status);
+                }
             });
+            if let Some(index) = switch {
+                self.switch_scene(index);
+            }
         });
 
         // Tool and edit shortcuts. These go through egui's input (not the engine's
@@ -1220,7 +1375,7 @@ impl AppDriver for EditorDriver {
         // text field has focus. The tools use 1/2/3 because W/E/R would collide
         // with the WASD fly camera.
         if !ui.ctx().egui_wants_keyboard_input() {
-            let (tool, undo, redo) = ui.ctx().input(|input| {
+            let (tool, undo, redo, delete, save) = ui.ctx().input(|input| {
                 let key = |k: egui::Key| input.key_pressed(k);
                 let tool = if key(egui::Key::Num1) {
                     Some(GizmoMode::Translate)
@@ -1234,7 +1389,15 @@ impl AppDriver for EditorDriver {
                 let command = input.modifiers.command;
                 let shift = input.modifiers.shift;
                 let z = key(egui::Key::Z);
-                (tool, command && z && !shift, command && z && shift)
+                let delete = key(egui::Key::Delete) || key(egui::Key::Backspace);
+                let save = command && key(egui::Key::S);
+                (
+                    tool,
+                    command && z && !shift,
+                    command && z && shift,
+                    delete,
+                    save,
+                )
             });
             if let Some(mode) = tool {
                 self.set_gizmo_mode(mode);
@@ -1244,6 +1407,12 @@ impl AppDriver for EditorDriver {
             }
             if redo && self.editor.redo() {
                 self.sync_selection();
+            }
+            if delete {
+                self.delete_selected();
+            }
+            if save {
+                self.save();
             }
         }
 
@@ -1316,6 +1485,45 @@ impl AppDriver for EditorDriver {
     }
 }
 
+/// The project's scenes as picker choices (name + absolute file).
+fn scene_choices(project: &Project) -> Vec<SceneChoice> {
+    project
+        .scenes()
+        .map(|scenes| {
+            scenes
+                .into_iter()
+                .map(|info| SceneChoice {
+                    path: project.file_for(&info.path),
+                    name: info.name,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A file-safe stem for a scene named `name` (used when a new scene is saved).
+fn scene_file_stem(name: &str) -> String {
+    let mut slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// The extension host plus the config the Extensions screen writes, attached to
 /// a windowed run.
 #[derive(Debug)]
@@ -1334,10 +1542,13 @@ pub struct AttachedExtensions {
 pub fn run(
     editor: Editor,
     config: WindowConfig,
+    scene_path: Option<PathBuf>,
     project: Option<Project>,
     extensions: Option<AttachedExtensions>,
 ) -> Result<(), PlatformError> {
-    let driver = EditorDriver::new(editor).with_project(project);
+    let driver = EditorDriver::new(editor)
+        .with_project(project)
+        .with_scene_path(scene_path);
     platform::run(attach(driver, extensions), config)
 }
 
@@ -1346,10 +1557,13 @@ pub fn run_with_controls(
     editor: Editor,
     config: WindowConfig,
     controls: CameraControls,
+    scene_path: Option<PathBuf>,
     project: Option<Project>,
     extensions: Option<AttachedExtensions>,
 ) -> Result<(), PlatformError> {
-    let mut driver = EditorDriver::new(editor).with_project(project);
+    let mut driver = EditorDriver::new(editor)
+        .with_project(project)
+        .with_scene_path(scene_path);
     *driver.camera_controls_mut() = controls;
     platform::run(attach(driver, extensions), config)
 }
@@ -1422,6 +1636,114 @@ mod tests {
         assert!(driver.editor_mut().undo());
         let light = driver.editor().component::<Light>(entity).unwrap();
         assert_eq!(light.intensity, 1.0, "the whole drag undoes at once");
+    }
+
+    fn project_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("noctis-window-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("noctis.toml"), "[project]\nname = \"T\"\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn save_writes_a_new_scene_into_the_project() {
+        let dir = project_dir("save");
+        let project = Project::open(&dir).expect("project");
+        let mut editor = Editor::new();
+        editor.spawn("Thing", None);
+        let mut driver = EditorDriver::new(editor).with_project(Some(project));
+
+        driver.save();
+
+        let written = dir.join("scenes/untitled.scene.json");
+        assert!(written.is_file(), "the scene was written to {written:?}");
+        assert_eq!(driver.scene_path.as_deref(), Some(written.as_path()));
+        assert!(
+            driver
+                .status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Saved")),
+            "{:?}",
+            driver.status
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_without_a_target_reports_it() {
+        let mut driver = EditorDriver::new(Editor::new());
+        driver.save();
+        assert!(
+            driver
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("Nothing to save to")),
+            "{:?}",
+            driver.status
+        );
+    }
+
+    #[test]
+    fn delete_selected_removes_the_entity_and_undoes() {
+        let mut editor = Editor::new();
+        let entity = editor.spawn("Thing", None);
+        let mut driver = EditorDriver::new(editor);
+        driver.select(entity);
+        assert_eq!(driver.editor().list_entities().len(), 1);
+
+        driver.delete_selected();
+        assert!(driver.editor().list_entities().is_empty());
+        assert!(driver.selected.is_none());
+
+        assert!(driver.editor_mut().undo(), "delete is undoable");
+        assert_eq!(driver.editor().list_entities().len(), 1);
+    }
+
+    #[test]
+    fn switching_scenes_loads_the_chosen_file() {
+        let dir = project_dir("switch");
+        std::fs::create_dir_all(dir.join("scenes")).unwrap();
+
+        let a = Editor::new();
+        a.save(dir.join("scenes/a.scene.json")).unwrap();
+        let mut b = Editor::new();
+        b.spawn("FromB", None);
+        b.save(dir.join("scenes/b.scene.json")).unwrap();
+
+        let project = Project::open(&dir).expect("project");
+        let mut driver = EditorDriver::new(Editor::new()).with_project(Some(project));
+        assert_eq!(driver.scenes.len(), 2, "{:?}", driver.scenes);
+
+        let index = |driver: &EditorDriver, file: &str| {
+            driver
+                .scenes
+                .iter()
+                .position(|choice| choice.path.ends_with(file))
+                .unwrap_or_else(|| panic!("{file} is listed"))
+        };
+
+        let b = index(&driver, "b.scene.json");
+        driver.switch_scene(b);
+        assert!(
+            driver.editor().find_by_name("FromB").is_some(),
+            "the loaded scene has its entity"
+        );
+
+        let a = index(&driver, "a.scene.json");
+        driver.switch_scene(a);
+        assert!(driver.editor().find_by_name("FromB").is_none());
+        assert_eq!(driver.editor().list_entities().len(), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scene_file_stem_slugifies() {
+        assert_eq!(scene_file_stem("Main Menu"), "main-menu");
+        assert_eq!(scene_file_stem("Level 1!"), "level-1");
+        assert_eq!(scene_file_stem("  "), "untitled");
     }
 
     fn extension_root(name: &str) -> PathBuf {

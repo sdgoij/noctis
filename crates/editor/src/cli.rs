@@ -585,6 +585,13 @@ fn project_controls_path(project: Option<&Project>) -> Option<String> {
 fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> {
     let mut project = open_project(options)?;
     let mut editor = build_editor(options, project.as_ref(), plugin)?;
+    // The scene the editor opened, so Save can write it back; the test scene and
+    // a bare invocation have no file.
+    let scene_path = if options.testscene {
+        None
+    } else {
+        resolve_scene(options, project.as_ref())
+    };
     let extensions = attach_extensions(&mut editor, options, project.as_ref())?;
     finalize(&mut editor, options, project.as_mut())?;
     let config = window_config(project.as_ref());
@@ -609,10 +616,12 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
         Some(path) => {
             let controls = crate::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
-            crate::window::run_with_controls(editor, config, controls, project, attached)
-                .map_err(|e| CliError::Message(e.to_string()))
+            crate::window::run_with_controls(
+                editor, config, controls, scene_path, project, attached,
+            )
+            .map_err(|e| CliError::Message(e.to_string()))
         }
-        None => crate::window::run(editor, config, project, attached)
+        None => crate::window::run(editor, config, scene_path, project, attached)
             .map_err(|e| CliError::Message(e.to_string())),
     }
 }

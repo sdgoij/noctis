@@ -204,7 +204,11 @@ needed.
   egui panels (outliner, inspector, transform editing), supports click-to-select
   viewport picking (a ray vs. mesh AABBs), and a full transform gizmo (Move /
   Rotate / Scale handles, drawn world- or entity-oriented, one undo step per
-  drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo. The
+  drag) driven through `AppDriver::gizmo`; the toolbar also has Undo/Redo, **Save**
+  (Ctrl+S — writes the scene and the prefab library back into the project, or to
+  the loose `--scene` file), and a **scene picker** that switches between the
+  project's scenes; the outliner's **Delete** button (or Delete/Backspace) removes
+  the selection. The
   inspector edits every component of the selection — name, Active/Visible, the
   transform, and Camera/Light/MeshRenderer/RigidBody/Collider/AudioSource/Script
   — with add/remove buttons, asset pickers for meshes/materials/audio clips, and
