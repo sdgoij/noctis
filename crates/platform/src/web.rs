@@ -5,6 +5,12 @@
 //! renders the scene and feeds input but draws no egui overlay — the editor's UI
 //! is a later step. GPU startup is asynchronous, so it is awaited on the browser's
 //! event loop ([`Renderer::for_surface_async`]) rather than blocked on.
+//!
+//! Input follows the same [`AppDriver`] contract as the native host: keys, mouse
+//! buttons and motion reach [`AppDriver::input_mut`], `Esc` reaches
+//! [`AppDriver::on_escape`], and [`AppDriver::cursor_captured`] drives the
+//! browser's **pointer lock** (with `movementX`/`Y` supplying the delta while
+//! locked), so mouse-look works the same as it does in a window.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,10 +26,28 @@ use crate::error::PlatformError;
 /// A DOM event captured between frames, applied to the driver's input at the next
 /// frame.
 enum RawEvent {
-    Key { name: String, down: bool },
-    Button { button: u16, down: bool },
-    Cursor { x: f32, y: f32 },
-    Wheel { points: f32 },
+    Key {
+        name: String,
+        down: bool,
+    },
+    /// `Esc` was pressed: a driver action, not input state.
+    Escape,
+    Button {
+        button: u16,
+        down: bool,
+    },
+    Cursor {
+        x: f32,
+        y: f32,
+    },
+    /// Raw pointer motion (`movementX`/`Y`) while the cursor is locked.
+    Motion {
+        dx: f32,
+        dy: f32,
+    },
+    Wheel {
+        points: f32,
+    },
 }
 
 /// The per-frame loop state.
@@ -34,6 +58,9 @@ struct Loop<D: AppDriver> {
     events: Rc<RefCell<Vec<RawEvent>>>,
     last: f64,
     size: (u32, u32),
+    /// The pointer-lock state last applied, so a driver's wish is only pushed to
+    /// the browser when it changes.
+    captured: bool,
 }
 
 /// Run `driver` in the browser, driven by `requestAnimationFrame`.
@@ -86,6 +113,7 @@ async fn start<D: AppDriver + 'static>(
         events,
         last: now(&window),
         size,
+        captured: false,
     }));
     request_frame(&window, state);
     Ok(())
@@ -140,7 +168,12 @@ fn install_listeners(
                 if ecs::resources::Key::from_name(&name).is_some() {
                     event.prevent_default();
                 }
-                events.borrow_mut().push(RawEvent::Key { name, down });
+                let mut pending = events.borrow_mut();
+                // `Esc` pauses the game: a driver action, not input state.
+                if down && name == "Escape" {
+                    pending.push(RawEvent::Escape);
+                }
+                pending.push(RawEvent::Key { name, down });
             },
         );
         let kind = if down { "keydown" } else { "keyup" };
@@ -152,10 +185,25 @@ fn install_listeners(
         let events = Rc::clone(events);
         let closure =
             Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
-                events.borrow_mut().push(RawEvent::Cursor {
-                    x: event.offset_x() as f32,
-                    y: event.offset_y() as f32,
-                });
+                // While the cursor is locked, the browser reports the absolute
+                // position as frozen and offers raw motion instead; feed that as
+                // the delta (the captured-cursor path).
+                let locked = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.pointer_lock_element())
+                    .is_some();
+                let mut pending = events.borrow_mut();
+                if locked {
+                    pending.push(RawEvent::Motion {
+                        dx: event.movement_x() as f32,
+                        dy: event.movement_y() as f32,
+                    });
+                } else {
+                    pending.push(RawEvent::Cursor {
+                        x: event.offset_x() as f32,
+                        y: event.offset_y() as f32,
+                    });
+                }
             });
         let _ =
             canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
@@ -241,6 +289,9 @@ fn tick<D: AppDriver + 'static>(state: &Rc<RefCell<Loop<D>>>) {
 
         state.driver.update(dt);
 
+        // Mouse-look: request or release the pointer lock as the driver wishes.
+        sync_pointer_lock(&mut state);
+
         // Split the borrow so `renderer` and `driver` are disjoint.
         let Loop {
             driver, renderer, ..
@@ -258,11 +309,21 @@ fn tick<D: AppDriver + 'static>(state: &Rc<RefCell<Loop<D>>>) {
 /// Apply the pending DOM events to the driver's input, then clear the queue.
 fn apply_events<D: AppDriver>(state: &mut Loop<D>) {
     let pending: Vec<RawEvent> = std::mem::take(&mut *state.events.borrow_mut());
+
+    // `Esc` asks the driver to pause; it is not an input-state event.
+    if pending
+        .iter()
+        .any(|event| matches!(event, RawEvent::Escape))
+    {
+        state.driver.on_escape();
+    }
+
     let Some(input) = state.driver.input_mut() else {
         return;
     };
     for event in pending {
         match event {
+            RawEvent::Escape => {}
             RawEvent::Key { name, down } => {
                 if let Some(key) = ecs::resources::Key::from_name(&name) {
                     if down {
@@ -286,8 +347,29 @@ fn apply_events<D: AppDriver>(state: &mut Loop<D>) {
                 }
             }
             RawEvent::Cursor { x, y } => input.set_mouse_position(x, y),
+            RawEvent::Motion { dx, dy } => input.add_mouse_motion(dx, dy),
             RawEvent::Wheel { points } => input.add_scroll(points),
         }
+    }
+}
+
+/// Request or release the browser's pointer lock to match
+/// [`AppDriver::cursor_captured`], only when the driver's wish changes.
+///
+/// A browser requires a user gesture for a lock request; the game asks for the
+/// cursor on the frame after the click or key that started it, still inside the
+/// gesture's transient-activation window. If a request is refused, mouse-look
+/// falls back to the unlocked absolute-`mousemove` path.
+fn sync_pointer_lock<D: AppDriver>(state: &mut Loop<D>) {
+    let want = state.driver.cursor_captured();
+    if want == state.captured {
+        return;
+    }
+    state.captured = want;
+    if want {
+        state.canvas.request_pointer_lock();
+    } else if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+        document.exit_pointer_lock();
     }
 }
 
