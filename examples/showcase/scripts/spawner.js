@@ -56,10 +56,11 @@ function on_update(entity, dt) {
   }
   xWasDown = x;
 
-  // Remove anything that has fallen off the floor. A stored handle stays valid
-  // across frames, so this reads each crate's real height.
+  // Drop crates that have fallen off the floor — or that are already gone (their
+  // lifetime ended), which read as `undefined`.
   for (let i = spawned.length - 1; i >= 0; i--) {
-    if (get_position(spawned[i])[1] < KILL_Y) {
+    const p = get_position(spawned[i]);
+    if (p === undefined || p[1] < KILL_Y) {
       destroy(spawned[i]);
       spawned.splice(i, 1);
     }

@@ -147,6 +147,9 @@ pub(crate) struct Bridge {
     pub(crate) scales: HashMap<EntityId, Vec3>,
     /// Names in the snapshot, for `find`.
     pub(crate) names: HashMap<String, EntityId>,
+    /// Every entity alive in this call's snapshot, plus placeholders spawned
+    /// during the call — the basis of [`Bridge::is_alive`].
+    pub(crate) alive: HashSet<EntityId>,
     /// Registered components in the snapshot, keyed by entity then component
     /// name, as JSON strings (the reflection registry's serialization).
     pub(crate) components: HashMap<EntityId, HashMap<String, String>>,
@@ -179,6 +182,7 @@ impl Bridge {
         self.rotations.clear();
         self.scales.clear();
         self.names.clear();
+        self.alive.clear();
         self.components.clear();
         self.grounded.clear();
         self.velocities.clear();
@@ -195,6 +199,7 @@ impl Bridge {
 
         for entity in ctx.world.entities().iter() {
             let id = entity_id(entity);
+            self.alive.insert(id);
             if let Some(name) = ctx.world.get::<Name>(entity) {
                 self.names.insert(name.0.clone(), id);
             }
@@ -226,6 +231,7 @@ impl Bridge {
     pub(crate) fn spawn(&mut self, name: Option<String>) -> EntityId {
         let id = placeholder_id(self.next_placeholder);
         self.next_placeholder += 1;
+        self.alive.insert(id);
         if let Some(name) = &name {
             self.names.insert(name.clone(), id);
         }
@@ -302,6 +308,7 @@ impl Bridge {
     ) -> EntityId {
         let root = placeholder_id(self.next_placeholder);
         self.next_placeholder += 1;
+        self.alive.insert(root);
         self.commands.push(ScriptCommand::InstantiatePrefab {
             json,
             parent,
@@ -314,6 +321,14 @@ impl Bridge {
     /// The handle of the entity named `name`, if the snapshot has one.
     pub(crate) fn find(&self, name: &str) -> Option<EntityId> {
         self.names.get(name).copied()
+    }
+
+    /// Whether `id` names an entity that exists in this call's snapshot — a world
+    /// entity, or a placeholder spawned during the call. A read of a handle whose
+    /// entity has since been destroyed answers `undefined` (rather than a default),
+    /// so a script can tell a destroyed entity from one at the origin.
+    pub(crate) fn is_alive(&self, id: EntityId) -> bool {
+        self.alive.contains(&id)
     }
 
     /// Whether the snapshot has the component `name` on `id`.

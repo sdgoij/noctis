@@ -208,7 +208,7 @@ impl SlagHost {
             "get_position",
             1,
             Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
-                Some(id) => vec_array(call, b.borrow().position(id)),
+                Some(id) => alive_vec(call, &b.borrow(), id, Bridge::position),
                 None => Ok(slag::JsValue::undefined()),
             }),
         )?;
@@ -245,7 +245,7 @@ impl SlagHost {
             "get_rotation_euler",
             1,
             Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
-                Some(id) => vec_array(call, b.borrow().rotation(id)),
+                Some(id) => alive_vec(call, &b.borrow(), id, Bridge::rotation),
                 None => Ok(slag::JsValue::undefined()),
             }),
         )?;
@@ -269,7 +269,7 @@ impl SlagHost {
             "get_scale",
             1,
             Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
-                Some(id) => vec_array(call, b.borrow().scale(id)),
+                Some(id) => alive_vec(call, &b.borrow(), id, Bridge::scale),
                 None => Ok(slag::JsValue::undefined()),
             }),
         )?;
@@ -402,7 +402,7 @@ impl SlagHost {
             "get_velocity",
             1,
             Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
-                Some(id) => vec_array(call, b.borrow().velocity(id)),
+                Some(id) => alive_vec(call, &b.borrow(), id, Bridge::velocity),
                 None => Ok(slag::JsValue::undefined()),
             }),
         )?;
@@ -657,6 +657,21 @@ fn parse_vec_str(text: &str) -> Option<Vec3> {
     let y = parts.next()?.trim().parse::<f32>().ok()?;
     let z = parts.next()?.trim().parse::<f32>().ok()?;
     Some(vec3(x, y, z))
+}
+
+/// A vector read for `id`, or `undefined` when the entity no longer exists — so a
+/// script can tell a destroyed entity from one sitting at the origin.
+fn alive_vec(
+    call: &slag::FunctionCall<'_>,
+    bridge: &Bridge,
+    id: EntityId,
+    read: impl Fn(&Bridge, EntityId) -> Vec3,
+) -> Result<slag::JsValue, slag::JsError> {
+    if bridge.is_alive(id) {
+        vec_array(call, read(bridge, id))
+    } else {
+        Ok(slag::JsValue::undefined())
+    }
 }
 
 /// A local vector as a JavaScript array, `[x, y, z]`.
@@ -928,6 +943,48 @@ mod tests {
         assert!(
             (t.x - 3.0).abs() < 1e-4 && (t.y - 2.0).abs() < 1e-4 && (t.z - 3.0).abs() < 1e-4,
             "kept should have been advanced to (3,2,3), got {t:?}"
+        );
+    }
+
+    #[test]
+    fn reading_a_destroyed_entity_is_undefined() {
+        // A handle to an entity that has been destroyed reads as `undefined`
+        // (not the origin), so a script can prune it.
+        const DESTROYED: &str = "
+            var kept = undefined;
+            function on_start(entity, dt) {
+                kept = spawn('Gone');
+                destroy(kept);
+            }
+            function on_update(entity, dt) {
+                log('gone=' + (get_position(kept) === undefined));
+            }
+        ";
+        let host = SlagHost::new().expect("slag engine starts");
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let owner = world.spawn();
+        world.insert(owner, Script::from_source(DESTROYED));
+
+        runtime.run_start(&mut world, &assets); // spawn then destroy 'Gone'
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        assert!(
+            world.query::<Name>().all(|(_, n)| n.0 != "Gone"),
+            "Gone should have been destroyed"
+        );
+        assert!(
+            runtime.command_log().iter().any(|c| matches!(
+                c, ScriptCommand::Log { message, .. } if message.contains("gone=true")
+            )),
+            "a destroyed handle should read undefined: {:?}",
+            runtime.command_log()
+        );
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
         );
     }
 

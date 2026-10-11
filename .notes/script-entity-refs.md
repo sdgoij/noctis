@@ -36,13 +36,21 @@ Two details make it correct:
 Both backends share one table type (`bridge::HandleTables`), so JavaScript and
 WebAssembly behave identically.
 
+## Aliveness on reads
+
+`get_position` (and the other vector getters) return `undefined` for a handle
+whose entity has since been destroyed, so a script can tell "destroyed" from "at
+the origin". The per-call snapshot carries an alive set (`bridge::Bridge::alive`:
+every world entity, plus any placeholder spawned during the call) and the
+JavaScript getters check it. `spawner.js` uses this to drop crates whose
+lifetime already ended.
+
+The WebAssembly ABI has no `undefined` (its vectors are multi-value floats), so a
+destroyed entity reads as the zero vector there — a float-ABI limitation, not a
+safety gap.
+
 ## Out of scope (deferred)
 
-- **Aliveness on reads.** `get_position` of a handle whose entity has since been
-  destroyed returns the zero vector, not `undefined`, so a script cannot yet tell
-  "destroyed" from "at the origin". That needs the per-call snapshot to carry an
-  alive set; deferred. It is not a safety gap — the handle resolves to the dead
-  id, and reads/writes against it are no-ops, never aliases.
 - **Table growth.** A table grows with the number of distinct entities a script
   addresses over its life (bounded in the showcase by the crate lifetime); a dead
   entity's entry is not reclaimed until the instance ends.
