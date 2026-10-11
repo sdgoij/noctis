@@ -452,6 +452,23 @@ impl SlagHost {
         let b = Rc::clone(&self.bridge);
         let h = Rc::clone(&self.handles);
         self.register(
+            "is_overlapping",
+            2,
+            Box::new(move |call| {
+                let overlapping = match (
+                    arg_entity(&h.borrow(), call, 0),
+                    arg_entity(&h.borrow(), call, 1),
+                ) {
+                    (Some(first), Some(second)) => b.borrow().is_overlapping(first, second),
+                    _ => false,
+                };
+                Ok(slag::JsValue::boolean(overlapping))
+            }),
+        )?;
+
+        let b = Rc::clone(&self.bridge);
+        let h = Rc::clone(&self.handles);
+        self.register(
             "add_script",
             2,
             Box::new(move |call| {

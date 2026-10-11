@@ -208,6 +208,9 @@ impl<H: ScriptHost + 'static> Runtime<H> {
                             physics.is_grounded(&ctx.scene.world, entity, GROUND_PROBE),
                         );
                     }
+                    for (a, b) in physics.overlaps() {
+                        view.add_overlap(script::entity_id(a), script::entity_id(b));
+                    }
                     view
                 };
                 let commands = {
@@ -818,6 +821,59 @@ mod tests {
         runtime.on_escape();
         runtime.tick_once();
         assert_eq!(runtime.scene().name, "game", "Esc did not resume");
+    }
+
+    #[test]
+    fn a_sensor_overlap_can_switch_the_scene() {
+        // A sensor pad with a body already inside it, and a script that loads
+        // another scene while the overlap holds.
+        let json = r#"{
+            "name": "Trigger",
+            "entities": [
+                { "id": 0, "name": "Pad",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [
+                    { "type": "rigid_body", "body_type": "fixed", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 1.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
+                    { "type": "collider", "shape": { "kind": "cuboid", "half_extents": [1,1,1] }, "offset": [0,0,0], "is_sensor": true, "friction": 0.5, "restitution": 0.0 }
+                  ]
+                },
+                { "id": 1, "name": "Ball",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [
+                    { "type": "rigid_body", "body_type": "dynamic", "mass": 1.0, "restitution": 0.0, "friction": 0.5, "gravity_scale": 0.0, "linear_velocity": [0,0,0], "angular_velocity": [0,0,0] },
+                    { "type": "collider", "shape": { "kind": "ball", "radius": 0.5 }, "offset": [0,0,0], "is_sensor": false, "friction": 0.5, "restitution": 0.0 }
+                  ]
+                },
+                { "id": 2, "name": "Runner",
+                  "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                  "components": [ { "type": "script", "source": "function on_update() {}", "path": null, "enabled": true } ]
+                }
+            ]
+        }"#;
+        let assets = AssetRegistry::with_defaults();
+        let scene = Scene::from_json(json, &assets).expect("scene parses");
+
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            if let (Some(pad), Some(ball)) = (api.find_entity("Pad"), api.find_entity("Ball"))
+                && api.is_overlapping(pad, ball)
+            {
+                api.load_scene("scenes/next.scene.json");
+            }
+        });
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(scene, config, host);
+        runtime.set_scene_loader(Box::new(|_path| Ok(second_scene().to_string())));
+
+        runtime.tick_once();
+
+        assert!(
+            entity_named(&runtime, "Second").is_some(),
+            "the sensor overlap did not switch the scene"
+        );
     }
 
     #[test]

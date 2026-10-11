@@ -335,6 +335,12 @@
           "is_sensor": true,
           "friction": 0.5,
           "restitution": 0.0
+        },
+        {
+          "type": "script",
+          "source": null,
+          "path": "scripts/trigger.js",
+          "enabled": true
         }
       ]
     },

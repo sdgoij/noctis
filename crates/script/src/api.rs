@@ -267,6 +267,8 @@ impl<'a> ScriptContext<'a> {
 pub struct PhysicsView {
     pub(crate) grounded: std::collections::HashSet<EntityId>,
     pub(crate) velocities: std::collections::HashMap<EntityId, Vec3>,
+    /// Sensor overlap pairs (a sensor and what it contains), as handles.
+    pub(crate) overlaps: Vec<(EntityId, EntityId)>,
 }
 
 impl PhysicsView {
@@ -279,6 +281,7 @@ impl PhysicsView {
     pub fn clear(&mut self) {
         self.grounded.clear();
         self.velocities.clear();
+        self.overlaps.clear();
     }
 
     /// Record whether `entity` is grounded.
@@ -295,6 +298,11 @@ impl PhysicsView {
         self.velocities.insert(entity, velocity);
     }
 
+    /// Record a sensor overlap between `a` and `b`.
+    pub fn add_overlap(&mut self, a: EntityId, b: EntityId) {
+        self.overlaps.push((a, b));
+    }
+
     /// Whether `entity` is grounded.
     pub fn is_grounded(&self, entity: EntityId) -> bool {
         self.grounded.contains(&entity)
@@ -303,6 +311,13 @@ impl PhysicsView {
     /// `entity`'s linear velocity, or zero when unknown.
     pub fn velocity(&self, entity: EntityId) -> Vec3 {
         self.velocities.get(&entity).copied().unwrap_or_else(zero3)
+    }
+
+    /// Whether `a` and `b` are overlapping (through a sensor), in either order.
+    pub fn is_overlapping(&self, a: EntityId, b: EntityId) -> bool {
+        self.overlaps
+            .iter()
+            .any(|(x, y)| (*x == a && *y == b) || (*x == b && *y == a))
     }
 }
 
@@ -636,6 +651,13 @@ impl<'api, 'ctx> ScriptApi<'api, 'ctx> {
     /// Whether the entity is grounded, from this frame's snapshot.
     pub fn is_grounded(&self, id: EntityId) -> bool {
         self.ctx.physics.is_some_and(|view| view.is_grounded(id))
+    }
+
+    /// Whether `a` and `b` overlap through a sensor, from this frame's snapshot.
+    pub fn is_overlapping(&self, a: EntityId, b: EntityId) -> bool {
+        self.ctx
+            .physics
+            .is_some_and(|view| view.is_overlapping(a, b))
     }
 
     // -- scenes -------------------------------------------------------------

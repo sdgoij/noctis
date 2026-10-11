@@ -518,6 +518,25 @@ impl PhysicsWorld {
             .collect()
     }
 
+    /// Every currently-overlapping pair that involves a sensor collider, as
+    /// entities.
+    ///
+    /// A sensor detects overlaps without resolving them, so its pairs live in the
+    /// narrow phase's intersection graph (not the contact graph). A pair whose
+    /// colliders are not both bridge-managed is skipped.
+    pub fn overlaps(&self) -> Vec<(Entity, Entity)> {
+        self.narrow_phase
+            .intersection_pairs()
+            .filter(|(_, _, intersecting)| *intersecting)
+            .filter_map(|(a, b, _)| {
+                Some((
+                    self.collider_to_entity.get(&a).copied()?,
+                    self.collider_to_entity.get(&b).copied()?,
+                ))
+            })
+            .collect()
+    }
+
     /// Whether `entity`'s collider is resting on (or within `probe` of) a surface.
     ///
     /// A short ray is cast downward from just below the collider's lowest point;
@@ -764,6 +783,40 @@ mod tests {
         assert!(
             (rest - 1.0).abs() < 0.2,
             "ball did not rest on floor: y = {rest}"
+        );
+    }
+
+    #[test]
+    fn a_sensor_reports_its_overlaps() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::default();
+        let pad = spawn_body(
+            &mut world,
+            vec3(0.0, 0.0, 0.0),
+            fixed(),
+            Collider {
+                shape: ColliderShape::Cuboid {
+                    half_extents: vec3(1.0, 1.0, 1.0),
+                },
+                is_sensor: true,
+                ..Collider::default()
+            },
+        );
+        let ball = spawn_body(
+            &mut world,
+            vec3(0.0, 0.0, 0.0),
+            RigidBody::default(),
+            ball(0.5),
+        );
+        physics.sync_from_world(&world);
+        physics.step(&mut world, 1.0 / 60.0);
+
+        let overlaps = physics.overlaps();
+        assert!(
+            overlaps
+                .iter()
+                .any(|&(a, b)| (a == pad && b == ball) || (a == ball && b == pad)),
+            "the sensor did not report the ball: {overlaps:?}"
         );
     }
 

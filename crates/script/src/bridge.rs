@@ -92,6 +92,8 @@ pub(crate) struct Bridge {
     pub(crate) grounded: HashSet<EntityId>,
     /// Linear velocities from the physics snapshot, keyed by entity handle.
     pub(crate) velocities: HashMap<EntityId, Vec3>,
+    /// Sensor overlap pairs from the physics snapshot.
+    pub(crate) overlaps: Vec<(EntityId, EntityId)>,
     /// The number of placeholders handed out so far this call.
     pub(crate) next_placeholder: u64,
     /// Commands queued during the call, replayed afterwards.
@@ -112,6 +114,7 @@ impl Bridge {
         self.components.clear();
         self.grounded.clear();
         self.velocities.clear();
+        self.overlaps.clear();
         self.next_placeholder = 0;
         self.commands.clear();
 
@@ -119,6 +122,7 @@ impl Bridge {
             self.grounded.extend(view.grounded.iter().copied());
             self.velocities
                 .extend(view.velocities.iter().map(|(id, v)| (*id, *v)));
+            self.overlaps.extend(view.overlaps.iter().copied());
         }
 
         // Reflected components (built-ins in scene form, registered customs in
@@ -294,6 +298,13 @@ impl Bridge {
             .get(&id)
             .copied()
             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+    }
+
+    /// Whether the snapshot has `a` and `b` overlapping (in either order).
+    pub(crate) fn is_overlapping(&self, a: EntityId, b: EntityId) -> bool {
+        self.overlaps
+            .iter()
+            .any(|(x, y)| (*x == a && *y == b) || (*x == b && *y == a))
     }
 
     /// Queue a linear-velocity overwrite (applied by the runtime).

@@ -678,6 +678,40 @@ mod tests {
     }
 
     #[test]
+    fn the_physics_snapshot_reports_overlaps() {
+        let mut host = RecordingHost::new();
+        host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
+            if let (Some(a), Some(b)) = (api.find_entity("A"), api.find_entity("B"))
+                && api.is_overlapping(a, b)
+            {
+                api.log("overlap");
+            }
+        });
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let a = world.spawn();
+        world.insert(a, Name::new("A"));
+        world.insert(a, Script::from_source("s();"));
+        let b = world.spawn();
+        world.insert(b, Name::new("B"));
+
+        let mut view = PhysicsView::new();
+        view.add_overlap(entity_id(a), entity_id(b));
+        runtime.set_physics_view(view);
+
+        runtime.run_update(&mut world, &assets, 0.016);
+        assert!(
+            runtime
+                .command_log()
+                .iter()
+                .any(|c| matches!(c, ScriptCommand::Log { message, .. } if message == "overlap")),
+            "the overlap did not reach the script: {:?}",
+            runtime.command_log()
+        );
+    }
+
+    #[test]
     fn prefab_instantiation_via_api_creates_entities() {
         let json = r#"{
             "name": "Pack",

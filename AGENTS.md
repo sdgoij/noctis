@@ -129,7 +129,7 @@ needed.
   `key_down`/`mouse_down`, pointer motion (`mouse_move`/`mouse_position`/
   `mouse_scroll`), driving a dynamic body (`set_velocity`/`add_velocity`/
   `apply_impulse`; the runtime applies these to physics) and reading it back
-  (`get_velocity`, `is_grounded`), and timing), and `engine_host::EngineHost`, which runs
+  (`get_velocity`, `is_grounded`, `is_overlapping`), and timing), and `engine_host::EngineHost`, which runs
   both languages in one runtime. Both backends address entities through small
   per-call handle indices rather than raw ids, because a JavaScript `f64` cannot
   represent a 64-bit `EntityId` exactly. A WebAssembly module travels as a

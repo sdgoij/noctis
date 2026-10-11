@@ -117,6 +117,7 @@ enum Abi {
     LoadScene,
     ViewportSize,
     SetMouseCaptured,
+    IsOverlapping,
     TimeDelta,
     TimeElapsed,
 }
@@ -156,6 +157,7 @@ impl Abi {
             "load_scene" => Abi::LoadScene,
             "viewport_size" => Abi::ViewportSize,
             "set_mouse_captured" => Abi::SetMouseCaptured,
+            "is_overlapping" => Abi::IsOverlapping,
             "time_delta" => Abi::TimeDelta,
             "time_elapsed" => Abi::TimeElapsed,
             _ => return None,
@@ -181,6 +183,7 @@ impl Abi {
             Log => (vec![ValType::I32, ValType::I32], vec![]),
             Spawn | FindEntity => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             KeyDown | MouseDown => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
+            IsOverlapping => (vec![ValType::I32, ValType::I32], vec![ValType::I32]),
             // Mouse reads take no arguments; motion/position return two floats.
             MouseMove | MousePosition => (vec![], vec![ValType::F32, ValType::F32]),
             MouseScroll => (vec![], vec![ValType::F32]),
@@ -442,6 +445,13 @@ impl Abi {
                 let captured = i32_of(args.first().copied().unwrap_or(Value::I32(0))) != 0;
                 bridge.set_mouse_captured(captured);
                 Vec::new()
+            }
+            IsOverlapping => {
+                let overlapping = match (handle(0), handle(1)) {
+                    (Some(a), Some(b)) => bridge.is_overlapping(a, b),
+                    _ => false,
+                };
+                vec![Value::I32(i32::from(overlapping))]
             }
             TimeDelta => vec![Value::F32(bridge.delta.to_bits())],
             TimeElapsed => vec![Value::F32(bridge.elapsed.to_bits())],
