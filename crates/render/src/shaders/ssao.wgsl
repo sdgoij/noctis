@@ -50,15 +50,20 @@ fn fs_main(in: VsOut) -> @location(0) f32 {
     let depth_scale = depth_size / ssao.resolution.xy;
     let coord = vec2<i32>(in.pos.xy * depth_scale);
     let center_depth = textureLoad(depth_map, coord, 0);
+    let center = view_position_from_depth(in.uv, center_depth);
+
+    // Derivatives must be taken in *uniform* control flow — the WebGPU WGSL
+    // validator (Tint) rejects them after a divergent branch — so reconstruct the
+    // centre and take the position gradient *before* the background early-out. The
+    // discarded gradient is harmless: the value is returned unmodified below.
+    // The view-space normal comes from that gradient.
+    let dx = dpdx(center);
+    let dy = dpdy(center);
+
     if (center_depth >= 1.0) {
         return 1.0;
     }
 
-    let center = view_position_from_depth(in.uv, center_depth);
-
-    // The view-space normal from the gradient of the reconstructed position.
-    let dx = dpdx(center);
-    let dy = dpdy(center);
     var normal = normalize(cross(dx, dy));
     // View space looks down -Z, so a front-facing normal points toward +Z.
     if (normal.z < 0.0) {
