@@ -24,6 +24,11 @@ use rapier3d::pipeline::{PhysicsPipeline, QueryFilter, QueryPipeline};
 use crate::config::PhysicsConfig;
 use crate::convert;
 
+/// How far below a collider's lowest point the ground probe starts. Small enough
+/// that the probe still begins inside a thin ground slab, but non-zero so a body
+/// resting exactly on a surface reads as grounded.
+const GROUND_EPSILON: f32 = 0.02;
+
 /// The result of [`PhysicsWorld::raycast`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
@@ -513,13 +518,13 @@ impl PhysicsWorld {
             .collect()
     }
 
-    /// Whether `entity`'s collider is resting on a surface: a short ray cast from
-    /// just below the collider's lowest point hits something that is not the
-    /// entity itself.
+    /// Whether `entity`'s collider is resting on (or within `probe` of) a surface.
     ///
-    /// `probe` is how far below the collider the ray starts and how far it looks
-    /// (twice that); `0.1`–`0.2` suits a human-scale body. An entity without a
-    /// collider or a `GlobalTransform` is never grounded.
+    /// A short ray is cast downward from just below the collider's lowest point;
+    /// hitting anything other than the entity means it is supported. The ray
+    /// starts only a hair below the collider (so it still begins *inside* a thin
+    /// ground slab) and reaches `probe` further down to tolerate a small gap. An
+    /// entity without a collider or a `GlobalTransform` is never grounded.
     pub fn is_grounded(&self, world: &World, entity: Entity, probe: f32) -> bool {
         let (Some(collider), Some(global)) = (
             world.get::<Collider>(entity),
@@ -530,10 +535,10 @@ impl PhysicsWorld {
         let base = global.position() + collider.offset;
         let origin = vec3(
             base.x,
-            base.y - collider.shape.half_height() - probe,
+            base.y - collider.shape.half_height() - GROUND_EPSILON,
             base.z,
         );
-        self.raycast(origin, vec3(0.0, -1.0, 0.0), probe * 2.0)
+        self.raycast(origin, vec3(0.0, -1.0, 0.0), probe)
             .is_some_and(|hit| hit.entity != Some(entity))
     }
 
@@ -795,6 +800,33 @@ mod tests {
         // An entity with no collider is never grounded.
         let bare = world.spawn();
         assert!(!physics.is_grounded(&world, bare, 0.15));
+    }
+
+    #[test]
+    fn is_grounded_on_a_thin_floor() {
+        // The showcase floor is a thin slab; the probe must still begin *inside* it.
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::default();
+        spawn_body(
+            &mut world,
+            vec3(0.0, 0.0, 0.0),
+            fixed(),
+            floor(vec3(5.0, 0.05, 5.0)),
+        );
+        let ball_e = spawn_body(
+            &mut world,
+            vec3(0.0, 0.6, 0.0),
+            RigidBody::default(),
+            ball(0.5),
+        );
+        physics.sync_from_world(&world);
+        for _ in 0..300 {
+            physics.step(&mut world, 1.0 / 60.0);
+        }
+        assert!(
+            physics.is_grounded(&world, ball_e, 0.15),
+            "ball did not report grounded on a thin floor"
+        );
     }
 
     #[test]

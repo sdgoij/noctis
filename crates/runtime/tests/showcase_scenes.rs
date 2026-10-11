@@ -127,6 +127,7 @@ fn the_third_person_controller_moves_the_player_and_camera() {
     let end = transform(&runtime, "Player").translation;
     let moved = ((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt();
     assert!(moved > 1.0, "the player did not move: {start:?} -> {end:?}");
+    assert!(end.y > 0.5, "the player fell through the floor: {end:?}");
 
     // The follow camera is placed behind the player, not at its authored spot.
     let camera = transform(&runtime, "Main Camera").translation;
