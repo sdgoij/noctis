@@ -27,9 +27,10 @@
 //!   `FunctionCall`, `Context::register_fn` / `eval` / `call`). Slag is a
 //!   fast-moving, spec-first engine; if a revision renames part of that
 //!   surface the backend may need a small update.
-//! * Vector getters (`get_position`, ...) return a JSON string (`"[x,y,z]"`)
-//!   because the minimal embedding surface shown in Slag's README does not
-//!   describe composite value construction.
+//! * Composite getters (`get_position`, `get_rotation_euler`, `get_scale`,
+//!   `get_velocity`, `mouse_move`, `mouse_position`, `viewport_size`) return a
+//!   JavaScript **array** (`[x, y, z]` / `[a, b]`), matching the WebAssembly
+//!   ABI's multi-value floats; `FunctionCall::create_array` builds them.
 //! * JS runs on the thread that owns the host; the host is not `Send`.
 
 use std::cell::RefCell;
@@ -205,10 +206,9 @@ impl SlagHost {
         self.register(
             "get_position",
             1,
-            Box::new(move |call| {
-                let out =
-                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().position(id)));
-                Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
+            Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
+                Some(id) => vec_array(call, b.borrow().position(id)),
+                None => Ok(slag::JsValue::undefined()),
             }),
         )?;
 
@@ -243,10 +243,9 @@ impl SlagHost {
         self.register(
             "get_rotation_euler",
             1,
-            Box::new(move |call| {
-                let out =
-                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().rotation(id)));
-                Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
+            Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
+                Some(id) => vec_array(call, b.borrow().rotation(id)),
+                None => Ok(slag::JsValue::undefined()),
             }),
         )?;
 
@@ -268,9 +267,9 @@ impl SlagHost {
         self.register(
             "get_scale",
             1,
-            Box::new(move |call| {
-                let out = arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().scale(id)));
-                Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
+            Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
+                Some(id) => vec_array(call, b.borrow().scale(id)),
+                None => Ok(slag::JsValue::undefined()),
             }),
         )?;
 
@@ -334,9 +333,9 @@ impl SlagHost {
         self.register(
             "mouse_move",
             0,
-            Box::new(move |_call| {
+            Box::new(move |call| {
                 let d = b.borrow().input.mouse.delta;
-                Ok(slag::JsValue::string(format!("[{},{}]", d[0], d[1])))
+                pair_array(call, d[0], d[1])
             }),
         )?;
 
@@ -344,9 +343,9 @@ impl SlagHost {
         self.register(
             "mouse_position",
             0,
-            Box::new(move |_call| {
+            Box::new(move |call| {
                 let p = b.borrow().input.mouse.position;
-                Ok(slag::JsValue::string(format!("[{},{}]", p[0], p[1])))
+                pair_array(call, p[0], p[1])
             }),
         )?;
 
@@ -401,10 +400,9 @@ impl SlagHost {
         self.register(
             "get_velocity",
             1,
-            Box::new(move |call| {
-                let out =
-                    arg_entity(&h.borrow(), call, 0).map(|id| vec_json(b.borrow().velocity(id)));
-                Ok(out.map_or_else(slag::JsValue::undefined, slag::JsValue::string))
+            Box::new(move |call| match arg_entity(&h.borrow(), call, 0) {
+                Some(id) => vec_array(call, b.borrow().velocity(id)),
+                None => Ok(slag::JsValue::undefined()),
             }),
         )?;
 
@@ -448,9 +446,9 @@ impl SlagHost {
         self.register(
             "viewport_size",
             0,
-            Box::new(move |_call| {
+            Box::new(move |call| {
                 let v = b.borrow().input.viewport();
-                Ok(slag::JsValue::string(format!("[{},{}]", v[0], v[1])))
+                pair_array(call, v[0], v[1])
             }),
         )?;
 
@@ -660,8 +658,25 @@ fn parse_vec_str(text: &str) -> Option<Vec3> {
     Some(vec3(x, y, z))
 }
 
-fn vec_json(v: Vec3) -> String {
-    format!("[{},{},{}]", v.x, v.y, v.z)
+/// A local vector as a JavaScript array, `[x, y, z]`.
+fn vec_array(call: &slag::FunctionCall<'_>, v: Vec3) -> Result<slag::JsValue, slag::JsError> {
+    call.create_array(&[
+        slag::JsValue::number(v.x as f64),
+        slag::JsValue::number(v.y as f64),
+        slag::JsValue::number(v.z as f64),
+    ])
+}
+
+/// A 2-vector (pointer delta/position, viewport size) as `[a, b]`.
+fn pair_array(
+    call: &slag::FunctionCall<'_>,
+    a: f32,
+    b: f32,
+) -> Result<slag::JsValue, slag::JsError> {
+    call.create_array(&[
+        slag::JsValue::number(a as f64),
+        slag::JsValue::number(b as f64),
+    ])
 }
 
 impl ScriptHost for SlagHost {
@@ -794,8 +809,8 @@ mod tests {
     fn mouse_reads_reach_a_real_script() {
         const MOUSE: &str = "
             function on_update(entity, dt) {
-                var m = String(mouse_move()).slice(1, -1).split(',').map(Number);
-                log('dx=' + m[0] + ' scroll=' + mouse_scroll());
+                var m = mouse_move();
+                log('dx=' + m[0] + ' arr=' + Array.isArray(m) + ' scroll=' + mouse_scroll());
             }
         ";
         let host = SlagHost::new().expect("slag engine starts");
@@ -819,6 +834,50 @@ mod tests {
                 c, ScriptCommand::Log { message, .. } if message.contains("dx=50")
             )),
             "mouse_move did not reach the script: {:?}",
+            runtime.command_log()
+        );
+    }
+
+    #[test]
+    fn vector_getters_return_arrays() {
+        const GETTERS: &str = "
+            function on_update(entity, dt) {
+                var p = get_position(entity);
+                log('isArray=' + Array.isArray(p) + ' len=' + p.length +
+                    ' x=' + p[0] + ' y=' + p[1] + ' z=' + p[2]);
+            }
+        ";
+        let host = SlagHost::new().expect("slag engine starts");
+        let mut runtime = ScriptRuntime::with_host(host);
+        let assets = AssetRegistry::new();
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            LocalTransform {
+                translation: vec3(1.0, 2.0, 3.0),
+                ..Default::default()
+            },
+        );
+        world.insert(entity, Script::from_source(GETTERS));
+
+        runtime.run_update(&mut world, &assets, 0.016);
+
+        assert!(
+            runtime.host().errors().is_empty(),
+            "unexpected script errors: {:?}",
+            runtime.host().errors()
+        );
+        assert!(
+            runtime.command_log().iter().any(|c| matches!(
+                c, ScriptCommand::Log { message, .. }
+                    if message.contains("isArray=true")
+                        && message.contains("len=3")
+                        && message.contains("x=1")
+                        && message.contains("y=2")
+                        && message.contains("z=3")
+            )),
+            "get_position did not yield an array: {:?}",
             runtime.command_log()
         );
     }

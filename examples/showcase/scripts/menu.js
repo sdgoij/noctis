@@ -19,8 +19,8 @@ function on_update(entity, dt) {
   // screen maps linearly onto `[-half..half]`).
   const cursor = find_entity(CURSOR);
   if (cursor !== undefined) {
-    const m = pair(mouse_position());
-    const vp = pair(viewport_size());
+    const m = mouse_position();
+    const vp = viewport_size();
     const aspect = vp[0] / vp[1];
     const x = (m[0] / vp[0] - 0.5) * ORTHO_HEIGHT * aspect;
     const y = (0.5 - m[1] / vp[1]) * ORTHO_HEIGHT;
@@ -30,8 +30,4 @@ function on_update(entity, dt) {
   if (key_down("Space") || key_down("Enter") || mouse_down("left")) {
     load_scene(SHOWCASE);
   }
-}
-
-function pair(raw) {
-  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
 }

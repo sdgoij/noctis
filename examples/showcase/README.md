@@ -205,13 +205,13 @@ function on_destroy(entity, dt) {}  // when the entity is removed
 ```
 
 `entity` is a numeric handle and `dt` is the frame time in seconds. Vector
-getters (`get_position`, `get_rotation_euler`, `get_scale`) return a
-`"[x,y,z]"` **string**; the scripts here parse it with a small `vec3` helper.
+getters (`get_position`, `get_rotation_euler`, `get_scale`) return a JavaScript
+**array** (`[x, y, z]`), as do the 2-vectors below.
 The rest of the surface: `spawn`, `destroy`, `destroy_by_name`, `find_entity`,
 `set_position`/`translate`, `set_rotation_euler`, `set_scale`, `time_delta`,
 `time_elapsed`, `key_down` (winit key names such as `KeyW`, `Space`,
 `ArrowUp`), `mouse_down` (`left`/`right`/`middle`), pointer motion
-(`mouse_move` → `"[dx,dy]"`, `mouse_position` → `"[x,y]"`, `mouse_scroll`),
+(`mouse_move` → `[dx,dy]`, `mouse_position` → `[x,y]`, `mouse_scroll`),
 driving a dynamic body (`set_velocity`/`add_velocity`/`apply_impulse`, applied to
 physics by the runtime; `get_velocity` and `is_grounded` read back this frame's
 snapshot, and `is_overlapping(a, b)` reports a sensor overlap), `add_script`,

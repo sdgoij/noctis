@@ -257,8 +257,9 @@ exported game has the component types.
 
 ## Scripts read and write components
 
-The JavaScript boundary is string/number based (vector getters already return
-`"[x,y,z]"` strings), so reflection is **JSON**, one generic pair, not a binding per
+The JavaScript boundary is value-based: a fixed-shape tuple (a vector, a pointer
+delta, the viewport size) comes back as a real array, and a component's
+open-ended structure travels as **JSON** — one generic pair, not a binding per
 type. It works for a registered custom component and a built-in alike:
 
 ```js

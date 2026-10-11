@@ -45,7 +45,7 @@ const TRANSFORM_SCRIPT: &str = "
         var marker = spawn('Marker');
         set_position(marker, 1, -1, 0.5);
         set_scale(marker, 5, 6, 7);
-        log(get_position(marker));
+        log('pos=' + get_position(marker) + ' arr=' + Array.isArray(get_position(marker)));
     }
 ";
 
@@ -80,13 +80,16 @@ fn runs_a_full_lifecycle_through_the_real_engine() {
     ));
     assert!(vec3_approx_eq(marker.scale, vec3(5.0, 6.0, 7.0), 1e-4));
 
-    // `get_position` returned a JSON vector, and the script ran cleanly.
+    // `get_position` returned an array (whose `toString` is `1,-1,0.5`), and the
+    // script ran cleanly.
     assert!(
         runtime.command_log().iter().any(|c| matches!(
             c,
-            script::ScriptCommand::Log { message, .. } if message.starts_with('[')
+            script::ScriptCommand::Log { message, .. }
+                if message == "pos=1,-1,0.5 arr=true"
         )),
-        "get_position should have produced a JSON vector log"
+        "get_position should have produced an array log: {:?}",
+        runtime.command_log()
     );
     assert!(
         runtime.host().errors().is_empty(),

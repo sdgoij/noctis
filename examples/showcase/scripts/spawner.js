@@ -56,9 +56,11 @@ function on_update(entity, dt) {
   }
   xWasDown = x;
 
-  // Remove anything that has fallen off the floor.
+  // Remove anything that has fallen off the floor. A handle from an earlier
+  // call may be absent in this call's table, so `get_position` can be undefined.
   for (let i = spawned.length - 1; i >= 0; i--) {
-    if (vec3(get_position(spawned[i]))[1] < KILL_Y) {
+    const p = get_position(spawned[i]);
+    if (p !== undefined && p[1] < KILL_Y) {
       destroy(spawned[i]);
       spawned.splice(i, 1);
     }
@@ -118,11 +120,6 @@ const LIFETIME_SOURCE =
   LIFETIME +
   ") { destroy(entity); }" +
   "}";
-
-// Parse a "[x,y,z]" string (what the getters return) into an array.
-function vec3(raw) {
-  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
-}
 
 // A prefab as inline JSON — the same shape as a `prefabs/*.prefab.json` file.
 const CRATE_PREFAB =

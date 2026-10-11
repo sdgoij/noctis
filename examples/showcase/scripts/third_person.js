@@ -32,7 +32,7 @@ function on_start(entity, dt) {
 
 function on_update(entity, dt) {
   // --- mouse look ---
-  const m = pair(mouse_move());
+  const m = mouse_move();
   yaw -= m[0] * YAW_SENSITIVITY;
   pitch = clamp(pitch - m[1] * PITCH_SENSITIVITY, PITCH_MIN, PITCH_MAX);
 
@@ -74,21 +74,12 @@ function on_update(entity, dt) {
   // --- follow camera ---
   const camera = find_entity("Main Camera");
   if (camera !== undefined) {
-    const p = vec3(get_position(entity));
+    const p = get_position(entity);
     const behind = CAM_DISTANCE * Math.cos(pitch);
     const rise = CAM_DISTANCE * Math.sin(pitch) + CAM_HEIGHT;
     set_position(camera, p[0] + s * behind, p[1] + rise, p[2] + c * behind);
     set_rotation_euler(camera, -pitch, yaw, 0.0);
   }
-}
-
-// Parse a "[a,b]" / "[a,b,c]" string (what the getters return) into an array.
-function pair(raw) {
-  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
-}
-
-function vec3(raw) {
-  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
 }
 
 function clamp(v, lo, hi) {

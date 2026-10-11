@@ -10,20 +10,16 @@ const SPEED = 1.6;     // radians per second
 const bases = [];
 
 function on_start(entity, dt) {
-  bases[entity] = vec3(get_position(entity))[1];
+  bases[entity] = get_position(entity)[1];
 }
 
 function on_update(entity, dt) {
   let base = bases[entity];
   if (base === undefined) {
-    base = vec3(get_position(entity))[1];
+    base = get_position(entity)[1];
     bases[entity] = base;
   }
-  const p = vec3(get_position(entity));
+  const p = get_position(entity);
   const y = base + Math.sin(time_elapsed() * SPEED) * AMPLITUDE;
   set_position(entity, p[0], y, p[2]);
-}
-
-function vec3(raw) {
-  return Array.isArray(raw) ? raw : String(raw).slice(1, -1).split(",").map(Number);
 }

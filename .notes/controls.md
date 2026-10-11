@@ -75,7 +75,7 @@ These were agreed before implementation:
 **Goal.** Scripts read per-frame mouse motion and scroll; the windowed game
 captures the cursor so look-controls do not stall at the window edge.
 
-**Surface.** `mouse_move() -> "[dx, dy]"`, `mouse_position() -> "[x, y]"`,
+**Surface.** `mouse_move() -> [dx, dy]`, `mouse_position() -> [x, y]`,
 `mouse_scroll() -> number`.
 
 **State.** `InputState.mouse` already carries `position`/`delta`/`scroll`
