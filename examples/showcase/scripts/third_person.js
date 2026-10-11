@@ -29,7 +29,7 @@ function on_update(entity, dt) {
   // --- mouse look ---
   const m = pair(mouse_move());
   yaw -= m[0] * YAW_SENSITIVITY;
-  pitch = clamp(pitch + m[1] * PITCH_SENSITIVITY, PITCH_MIN, PITCH_MAX);
+  pitch = clamp(pitch - m[1] * PITCH_SENSITIVITY, PITCH_MIN, PITCH_MAX);
 
   // The body is kinematic with a symmetric capsule, so turn the entity itself;
   // its "Player Facing" child swings to show the heading.
