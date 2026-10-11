@@ -12,6 +12,7 @@
 # the crate version in `Cargo.lock`.
 
 showcase := "examples/showcase"
+rustball := "examples/rustball"
 publish := "docs"
 
 # List the available recipes.
@@ -35,9 +36,10 @@ run project *args:
 test: check
     cargo test --workspace
 
-# Build the browser client for the showcase and stage the demo in `docs/`.
-# `noctis build --platform wasm` builds the wasm client (the stock client here; a
-# Rust project links its plugin), runs `wasm-bindgen`, and packs the bundle.
+# Build the browser demos and stage them in `docs/` for GitHub Pages. Each demo
+# is its own self-contained build under `docs/<project>/` (the Rust project links
+# its plugin), and the committed `docs/index.html` selects between them.
 publish-wasm:
-    cargo run -- build --project {{ showcase }} --platform wasm --out {{ publish }}
+    cargo run -- build --project {{ showcase }} --platform wasm --out {{ publish }}/showcase
+    cargo run -- build --project {{ rustball }} --platform wasm --out {{ publish }}/rustball
     touch {{ publish }}/.nojekyll

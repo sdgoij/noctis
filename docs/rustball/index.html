@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noctis</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d10;
+        overflow: hidden;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        font: 13px/1.4 ui-monospace, monospace;
+        color: #8a93a0;
+      }
+      /* A 16:9 viewport like a video embed, not the whole page. */
+      #noctis-canvas {
+        display: block;
+        width: min(100vw - 32px, 1280px);
+        aspect-ratio: 16 / 9;
+        max-height: calc(100vh - 32px);
+        background: #000;
+        border-radius: 8px;
+        box-shadow: 0 8px 40px rgb(0 0 0 / 60%);
+        outline: none;
+      }
+      #noctis-canvas:focus-visible {
+        box-shadow:
+          0 8px 40px rgb(0 0 0 / 60%),
+          0 0 0 2px #4c8dff;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The Noctis browser client host page. Serve this directory over HTTP (a
+      `file://` page cannot fetch the bundle), with the generated wasm-bindgen
+      files (`web.js` / `web_bg.wasm`) and a project bundle (`game.zip`, from
+      `noctis pack`) alongside it:
+
+        cargo build -p web --target wasm32-unknown-unknown --release
+        wasm-bindgen --target web --out-dir crates/web/web \
+          target/wasm32-unknown-unknown/release/web.wasm
+        noctis pack --project examples/showcase --out crates/web/web/game.zip
+        # then serve crates/web/web/ and open index.html
+
+      `?bundle=<url>` overrides the bundle to load.
+    -->
+    <canvas id="noctis-canvas" tabindex="0"></canvas>
+
+    <!--
+      Slag (the script engine) compiled to wasm imports its clock from a module
+      named `env` (`slag_host_now_ms`, `slag_host_now_monotonic_ms`). wasm-bindgen
+      emits a bare `import * as … from "env"`, which a browser cannot resolve
+      without a mapping, so this import map points `env` at the shim below.
+    -->
+   </title> <script type="importmap">
+      { "imports": { "env": "./env.js" } }
+    </script>
+
+    <script type="module">
+      import init, { start } from "./web.js";
+
+      const bundle =
+        new URLSearchParams(location.search).get("bundle") ?? "./game.zip";
+      const canvas = document.getElementById("noctis-canvas");
+
+      // Keyboard events go to the focused element; focus the canvas on click so
+      // the game receives them (window-level listeners still catch keys, but
+      // focus makes it reliable).
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      await init();
+      // `start(canvasId, bundleUrl)` runs the bundle; it never returns.
+      start(canvas.id, bundle);
+    </script>
+  </body>
+</html>

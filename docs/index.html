@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Noctis</title>
+    <title>Noctis demos</title>
     <style>
       :root {
         color-scheme: dark;
@@ -13,74 +13,79 @@
         margin: 0;
         height: 100%;
         background: #0b0d10;
-        overflow: hidden;
-      }
-      body {
-        display: grid;
-        place-items: center;
-        font: 13px/1.4 ui-monospace, monospace;
         color: #8a93a0;
+        font: 13px/1.4 ui-monospace, monospace;
+        display: grid;
+        grid-template-rows: auto 1fr;
       }
-      /* A 16:9 viewport like a video embed, not the whole page. */
-      #noctis-canvas {
+      header {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 16px;
+        border-bottom: 1px solid #1c2128;
+      }
+      label {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+      }
+      select {
+        background: #12161c;
+        color: inherit;
+        border: 1px solid #2a323c;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font: inherit;
+      }
+      a {
+        color: #4c8dff;
+        margin-left: auto;
+      }
+      iframe {
         display: block;
-        width: min(100vw - 32px, 1280px);
-        aspect-ratio: 16 / 9;
-        max-height: calc(100vh - 32px);
+        width: 100%;
+        height: 100%;
+        border: 0;
         background: #000;
-        border-radius: 8px;
-        box-shadow: 0 8px 40px rgb(0 0 0 / 60%);
-        outline: none;
-      }
-      #noctis-canvas:focus-visible {
-        box-shadow:
-          0 8px 40px rgb(0 0 0 / 60%),
-          0 0 0 2px #4c8dff;
       }
     </style>
   </head>
   <body>
     <!--
-      The Noctis browser client host page. Serve this directory over HTTP (a
-      `file://` page cannot fetch the bundle), with the generated wasm-bindgen
-      files (`web.js` / `web_bg.wasm`) and a project bundle (`game.zip`, from
-      `noctis pack`) alongside it:
-
-        cargo build -p web --target wasm32-unknown-unknown --release
-        wasm-bindgen --target web --out-dir crates/web/web \
-          target/wasm32-unknown-unknown/release/web.wasm
-        noctis pack --project examples/showcase --out crates/web/web/game.zip
-        # then serve crates/web/web/ and open index.html
-
-      `?bundle=<url>` overrides the bundle to load.
+      The Noctis demo chooser (served by GitHub Pages). Each demo is its own
+      self-contained build under `docs/<project>/` — `index.html`, the wasm-bindgen
+      glue + module, `env.js`, and `game.zip` — because a project that carries Rust
+      needs the *plugin-linked* module, not the stock one. The iframe swaps between
+      them; `?p=<project>` deep-links.
     -->
-    <canvas id="noctis-canvas" tabindex="0"></canvas>
-
-    <!--
-      Slag (the script engine) compiled to wasm imports its clock from a module
-      named `env` (`slag_host_now_ms`, `slag_host_now_monotonic_ms`). wasm-bindgen
-      emits a bare `import * as … from "env"`, which a browser cannot resolve
-      without a mapping, so this import map points `env` at the shim below.
-    -->
-   </title> <script type="importmap">
-      { "imports": { "env": "./env.js" } }
-    </script>
-
-    <script type="module">
-      import init, { start } from "./web.js";
-
-      const bundle =
-        new URLSearchParams(location.search).get("bundle") ?? "./game.zip";
-      const canvas = document.getElementById("noctis-canvas");
-
-      // Keyboard events go to the focused element; focus the canvas on click so
-      // the game receives them (window-level listeners still catch keys, but
-      // focus makes it reliable).
-      canvas.addEventListener("pointerdown", () => canvas.focus());
-
-      await init();
-      // `start(canvasId, bundleUrl)` runs the bundle; it never returns.
-      start(canvas.id, bundle);
+    <header>
+      <label>
+        Demo
+        <select id="project">
+          <option value="showcase">Showcase — JavaScript gameplay</option>
+          <option value="rustball">Rust Ball — Rust plugin</option>
+        </select>
+      </label>
+      <a id="open" href="showcase/index.html">open in a tab →</a>
+    </header>
+    <iframe id="frame" src="showcase/index.html" title="Noctis demo"></iframe>
+    <script>
+      const frame = document.getElementById("frame");
+      const open = document.getElementById("open");
+      const select = document.getElementById("project");
+      const load = () => {
+        const url = select.value + "/index.html";
+        frame.src = url;
+        open.href = url;
+      };
+      select.addEventListener("change", load);
+      // A deep link (?p=rustball) preselects a demo.
+      const picked = new URLSearchParams(location.search).get("p");
+      if (picked) {
+        select.value = picked;
+      }
+      load();
     </script>
   </body>
 </html>

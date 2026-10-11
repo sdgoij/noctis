@@ -16,4 +16,4 @@
 
 # The `docs/` demo is committed, but wasm-bindgen's type declarations are not
 # needed to serve it.
-/docs/*.d.ts
+/docs/**/*.d.ts
