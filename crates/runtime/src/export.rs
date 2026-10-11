@@ -257,7 +257,8 @@ fn workspace_root_from(manifest_dir: &Path) -> Option<PathBuf> {
 /// into the folder (preserving its relative path), and writes a [`MANIFEST`].
 /// When any file is bundled, a [`BUNDLED_PROJECT`] manifest is written too, so the
 /// exported runtime imports the bundled assets and keeps its settings — including
-/// `environment`, the project-relative `.hdr` the game's IBL is precomputed from.
+/// `environment`, the project-relative `.hdr` the game's IBL is precomputed from,
+/// and `default_scene` (the project's start scene, so the game boots into it).
 /// Re-exporting over an existing folder overwrites the executable, scene,
 /// manifest, and files.
 pub fn export_game(
@@ -267,6 +268,7 @@ pub fn export_game(
     files: &[ExportFile],
     environment: Option<&str>,
     runtime: Option<&Path>,
+    default_scene: Option<&str>,
 ) -> Result<ExportReport, ExportError> {
     if !valid_name(name) {
         return Err(ExportError::InvalidName(name.to_string()));
@@ -314,7 +316,11 @@ pub fn export_game(
         None
     } else {
         let path = destination.join(BUNDLED_PROJECT);
-        fs::write(&path, bundled_project_toml(name, environment)).map_err(io)?;
+        fs::write(
+            &path,
+            bundled_project_toml(name, environment, default_scene),
+        )
+        .map_err(io)?;
         Some(path)
     };
 
@@ -436,12 +442,16 @@ fn dev_project_toml(name: &str, root: &Path, scene: &str, environment: Option<&s
 
 /// The `noctis.toml` an exported folder carries: a project that runs its bundled
 /// scene and imports its bundled assets.
-fn bundled_project_toml(name: &str, environment: Option<&str>) -> String {
+fn bundled_project_toml(
+    name: &str,
+    environment: Option<&str>,
+    default_scene: Option<&str>,
+) -> String {
     // `name` is already validated as a single-component file name, but TOML
     // string escaping is not needed for the `[project].name` we write.
     let mut toml = format!(
         "[project]\nname = {name:?}\n\n[project.settings]\ndefault_scene = {scene:?}\n",
-        scene = BUNDLED_SCENE
+        scene = default_scene.unwrap_or(BUNDLED_SCENE)
     );
     if let Some(environment) = environment {
         toml.push_str(&format!("\n[render]\nenvironment = {environment:?}\n"));
@@ -486,7 +496,8 @@ mod tests {
     fn export_writes_a_self_contained_folder() {
         let dir = temp_dir("folder");
         let scene_json = r#"{"name":"Level"}"#;
-        let report = export_game(&dir, "my-game", scene_json, &[], None, None).expect("export");
+        let report =
+            export_game(&dir, "my-game", scene_json, &[], None, None, None).expect("export");
 
         assert!(report.executable.is_file());
         assert_eq!(
@@ -520,7 +531,8 @@ mod tests {
     #[test]
     fn export_rejects_an_unsafe_name_without_touching_disk() {
         let dir = temp_dir("bad-name");
-        let error = export_game(&dir, "../evil", "{}", &[], None, None).expect_err("must reject");
+        let error =
+            export_game(&dir, "../evil", "{}", &[], None, None, None).expect_err("must reject");
         assert!(matches!(error, ExportError::InvalidName(_)));
         assert!(!dir.exists());
     }
@@ -541,6 +553,7 @@ mod tests {
             "my-game",
             "{}",
             std::slice::from_ref(&file),
+            None,
             None,
             None,
         )
@@ -579,6 +592,7 @@ mod tests {
             std::slice::from_ref(&file),
             Some("assets/hdris/sky.hdr"),
             None,
+            None,
         )
         .expect("export");
 
@@ -608,7 +622,7 @@ mod tests {
             source: PathBuf::from("whatever"),
         };
         let error =
-            export_game(&dir, "my-game", "{}", &[file], None, None).expect_err("must reject");
+            export_game(&dir, "my-game", "{}", &[file], None, None, None).expect_err("must reject");
         assert!(matches!(error, ExportError::InvalidPath(_)));
         assert!(!valid_relative_path("../evil"));
         assert!(valid_relative_path("assets/models/a.glb"));

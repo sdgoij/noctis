@@ -2,11 +2,13 @@
 //!
 //! A build resolves a scene (an explicit `--scene`, a `[[build]]` target's scene,
 //! or the project's `default_scene`), imports the project's assets, and bundles
-//! the files the scene references alongside the runtime executable, the scene
-//! document, a project manifest (so the exported runtime can import its assets),
-//! and a game manifest. This is what drives `noctis build` and `noctis run
-//! --export`.
+//! **every** scene the project ships — each scene document and the files it
+//! references (deduplicated) — alongside the runtime executable, the built
+//! scene, a project manifest (so the exported runtime can import its assets and
+//! reach any scene through `load_scene`), and a game manifest. This is what
+//! drives `noctis build` and `noctis run --export`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ecs::app::Plugin;
@@ -147,7 +149,7 @@ pub fn build_project(
     }
 
     // A release build embeds the scripts in the client and copies the rest.
-    let bundle = bundle_files(&project, &scene_json, true, &components)?;
+    let bundle = bundle_files(&project, true, &components)?;
     let pack = if bundle.scripts.is_empty() {
         None
     } else {
@@ -165,6 +167,7 @@ pub fn build_project(
         &bundle.files,
         bundle.environment.as_deref(),
         Some(&client),
+        project.default_scene(),
     )
     .map_err(|error| error.to_string())
 }
@@ -220,18 +223,29 @@ fn write_script_pack(project: &Project, scripts: &[ExportFile]) -> Result<PathBu
 /// The environment is returned alongside the files because it is referenced by
 /// the *manifest*, not by the scene, so the exported `noctis.toml` has to name it
 /// even though no entity refers to it.
-/// The files a build bundles: the ones copied into the folder, the scripts to
-/// embed in the client (empty when not embedding), and the `[render]`
-/// environment named by the manifest.
+/// The files a build bundles: the ones copied into the folder (every scene's
+/// document and the files it references), the scripts to embed in the client
+/// (empty when not embedding), and the `[render]` environment named by the
+/// manifest.
 struct Bundle {
     files: Vec<ExportFile>,
     scripts: Vec<ExportFile>,
     environment: Option<String>,
 }
 
+/// Bundle every scene the project ships, not just the one being built: each
+/// scene's document (so the runtime's `load_scene` can read it) and the files it
+/// references, deduplicated across scenes. A referenced file that is absent from
+/// disk is an error (the build would ship a broken game).
+///
+/// When `embed_scripts` is set, script files are returned separately in `scripts`
+/// (to bake into the client) instead of in `files` (to copy into the folder).
+///
+/// The environment is returned alongside the files because it is referenced by the
+/// *manifest*, not by any scene, so the exported `noctis.toml` has to name it even
+/// though no entity refers to it.
 fn bundle_files(
     project: &Project,
-    scene_json: &str,
     embed_scripts: bool,
     components: &ComponentRegistry,
 ) -> Result<Bundle, String> {
@@ -245,19 +259,39 @@ fn bundle_files(
             error.message
         );
     }
-    let desc: SceneDesc = serde_json::from_str(scene_json)
-        .map_err(|error| format!("failed to parse the scene for the build: {error}"))?;
-    let referenced = project::referenced_files_with(&desc, &imported.lookup, components)
-        .map_err(|error| format!("cannot bundle the scene: {error}"))?;
-    let mut files = Vec::with_capacity(referenced.len());
+
+    let mut files = Vec::new();
     let mut scripts = Vec::new();
-    for asset in referenced {
-        let file = export_file(project, &asset)?;
-        // An embedded script rides inside the client, not as a loose file.
-        if embed_scripts && detect(asset.as_str()) == AssetKind::Script {
-            scripts.push(file);
-        } else {
-            files.push(file);
+    let mut seen: HashSet<String> = HashSet::new();
+
+    let scenes = project.scenes().map_err(|error| error.to_string())?;
+    for scene in &scenes {
+        // The scene document itself, at its project path, so a runtime
+        // `load_scene("scenes/..")` can find it in the exported project.
+        let document = export_file(project, &scene.path)?;
+        if seen.insert(document.relative.clone()) {
+            files.push(document);
+        }
+
+        // Everything the scene references.
+        let path = project.file_for(&scene.path);
+        let json = std::fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read scene '{}': {error}", scene.path.as_str()))?;
+        let desc: SceneDesc = serde_json::from_str(&json)
+            .map_err(|error| format!("failed to parse scene '{}': {error}", scene.path.as_str()))?;
+        for asset in project::referenced_files_with(&desc, &imported.lookup, components)
+            .map_err(|error| format!("cannot bundle scene '{}': {error}", scene.name))?
+        {
+            let file = export_file(project, &asset)?;
+            if !seen.insert(file.relative.clone()) {
+                continue;
+            }
+            // An embedded script rides inside the client, not as a loose file.
+            if embed_scripts && detect(asset.as_str()) == AssetKind::Script {
+                scripts.push(file);
+            } else {
+                files.push(file);
+            }
         }
     }
 
@@ -270,8 +304,9 @@ fn bundle_files(
         .map(str::to_string);
     if let Some(path) = &environment {
         let asset = AssetPath::parse(path).map_err(|error| error.to_string())?;
-        if !files.iter().any(|file| file.relative == asset.as_str()) {
-            files.push(export_file(project, &asset)?);
+        let file = export_file(project, &asset)?;
+        if seen.insert(file.relative.clone()) {
+            files.push(file);
         }
     }
     Ok(Bundle {
@@ -383,12 +418,83 @@ mod tests {
         )
         .expect("build");
 
-        assert_eq!(report.files, vec!["assets/audio/beep.wav".to_string()]);
+        assert_eq!(
+            report.files,
+            vec![
+                "scenes/main.scene.json".to_string(),
+                "assets/audio/beep.wav".to_string()
+            ]
+        );
         assert_eq!(
             std::fs::read(out.join("assets/audio/beep.wav")).expect("bundled"),
             tiny_wav()
         );
         assert!(out.join("noctis.toml").is_file());
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&out).ok();
+    }
+
+    #[test]
+    fn a_release_build_bundles_every_scene() {
+        // The default scene is the menu; another scene references an asset. Both
+        // scenes and the asset must ship so a runtime `load_scene` can reach them.
+        let project = temp_dir("all-scenes");
+        write(
+            &project.join("noctis.toml"),
+            "[project]\nname = \"Game\"\n\n[project.settings]\ndefault_scene = \"scenes/menu.scene.json\"\n",
+        );
+        write(
+            &project.join("scenes/menu.scene.json"),
+            "{ \"name\": \"Menu\", \"entities\": [] }",
+        );
+        std::fs::create_dir_all(project.join("assets/audio")).expect("audio dir");
+        std::fs::write(project.join("assets/audio/level.wav"), tiny_wav()).expect("wav");
+        write(
+            &project.join("scenes/level.scene.json"),
+            r#"{
+                "name": "Level",
+                "entities": [{
+                    "id": 0, "name": "Sound",
+                    "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+                    "components": [
+                        { "type": "audio_source", "clip": "assets/audio/level.wav",
+                          "volume": 1.0, "pitch": 1.0, "looped": false, "playing": true,
+                          "spatial": true, "max_distance": 20.0, "rolloff": 1.0 }
+                    ]
+                }]
+            }"#,
+        );
+
+        let out = temp_dir("all-scenes-out");
+        let options = BuildOptions {
+            destination: Some(out.clone()),
+            runtime: Some(test_runtime()),
+            ..BuildOptions::default()
+        };
+        let report = build_project(&project, None, &options, &NullPlugin).expect("build");
+
+        assert!(
+            report
+                .files
+                .contains(&"scenes/level.scene.json".to_string()),
+            "the other scene is bundled: {:?}",
+            report.files
+        );
+        assert!(
+            report.files.contains(&"assets/audio/level.wav".to_string()),
+            "the other scene's asset is bundled: {:?}",
+            report.files
+        );
+        assert!(out.join("scenes/level.scene.json").is_file());
+        assert!(out.join("assets/audio/level.wav").is_file());
+
+        // The bundled project starts on the project's default scene.
+        let manifest = std::fs::read_to_string(out.join("noctis.toml")).expect("read");
+        assert!(
+            manifest.contains("default_scene = \"scenes/menu.scene.json\""),
+            "{manifest}"
+        );
 
         std::fs::remove_dir_all(&project).ok();
         std::fs::remove_dir_all(&out).ok();
@@ -473,7 +579,13 @@ mod tests {
         let report = build_project(&project, None, &options, &NullPlugin).expect("build");
 
         // No scene references it, so bundling it is purely the manifest's doing.
-        assert_eq!(report.files, vec!["assets/hdris/sky.hdr".to_string()]);
+        assert_eq!(
+            report.files,
+            vec![
+                "scenes/main.scene.json".to_string(),
+                "assets/hdris/sky.hdr".to_string()
+            ]
+        );
         assert_eq!(
             std::fs::read(out.join("assets/hdris/sky.hdr")).expect("bundled"),
             tiny_hdr()
@@ -528,7 +640,12 @@ mod tests {
             Some(crate::export::executable_name("release").as_str())
         );
         assert!(report.scene.is_file());
-        assert!(report.project_manifest.is_none(), "no assets to bundle");
+        // Every scene's document is bundled now, so the exported project exists
+        // even when no asset is referenced (it names the start scene).
+        assert!(
+            report.project_manifest.is_some(),
+            "the project manifest ships"
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -565,8 +682,9 @@ mod tests {
         let report = build_project(&project, None, &options, &NullPlugin).expect("build");
 
         // The script is baked into the client, so it is neither copied into the
-        // folder nor listed among the bundled files — but it is in the pack.
-        assert!(report.files.is_empty(), "{:?}", report.files);
+        // folder nor listed among the bundled files — but it is in the pack. The
+        // scene document itself is bundled so `load_scene` can reach it.
+        assert_eq!(report.files, vec!["scenes/main.scene.json".to_string()]);
         assert!(!out.join("scripts/hello.js").exists());
         let pack = project.join(project::CACHE_DIR).join("scripts.pack.json");
         let pack = std::fs::read_to_string(&pack).expect("the embed pack was written");

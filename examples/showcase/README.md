@@ -145,9 +145,10 @@ cargo run -- build --project examples/showcase
 cargo run -- build --project examples/showcase --target showcase-physics
 ```
 
-A build copies the `noctis-game` client (built on demand when missing), the
-scene, every asset the scene references, and a generated `noctis.toml`; run the
-executable in its folder with no arguments to play the bundled scene.
+A build copies the `noctis-game` client (built on demand when missing), **every
+scene the project ships** — each scene document and the files it references — and
+a generated `noctis.toml`; run the executable in its folder with no arguments to
+start the project's default scene, and `load_scene` can reach the rest.
 
 The default `release` profile bakes the default scene's scripts into the client,
 so the game folder carries no `scripts/` directory. `--profile dev` copies nothing

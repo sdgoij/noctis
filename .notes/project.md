@@ -415,13 +415,14 @@ release build.
 *Implemented*: `noctis build --project <dir> [--target <name>]` (and
 `noctis run --project <dir> --export <dir> [--target <name>]`) resolves the
 target's scene (or `--scene`, or the project default), imports the assets, and
-bundles every file the scene references — resolved by
-`project::referenced_files` through the import index, so a glTF sub-asset
-referenced by name maps back to its file. Engine built-ins (`$…`,
+bundles **every** scene the project ships — each scene document and every file it
+references — resolved by `project::referenced_files` through the import index, so a
+glTF sub-asset referenced by name maps back to its file. Engine built-ins (`$…`,
 `primitives/…`) are not bundled; they are recreated at load time. The folder gets
-the runtime executable, `scene.json`, the referenced files at their relative
-paths, a generated `noctis.toml` (so the exported runtime imports its assets and
-runs the bundled scene), and `noctis-game.json`. Step 3 is partial: window/size
+the runtime executable, `scene.json` (the built scene), the bundled files at their
+relative paths, a generated `noctis.toml` (so the exported runtime imports its
+assets, starts on the project's default scene, and can `load_scene` any bundled
+one), and `noctis-game.json`. Step 3 is partial: window/size
 come from the manifest via the bundled `noctis.toml`, but per-target render/input
 overrides are not yet applied.
 

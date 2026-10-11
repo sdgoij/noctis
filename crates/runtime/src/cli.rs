@@ -515,6 +515,7 @@ fn do_export(args: &Args, destination: &str, plugin: &dyn Plugin) -> Result<Expo
         &[],
         None,
         Some(&client),
+        None,
     )
     .map_err(|err| err.to_string())
 }
