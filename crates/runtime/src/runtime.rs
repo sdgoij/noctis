@@ -106,6 +106,12 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     /// A cursor-capture request from `set_mouse_captured`, applied at the end of
     /// the tick.
     capture_request: Arc<Mutex<Option<bool>>>,
+    /// The scene `Esc` pauses to (the menu), if the game configures one.
+    home_scene: Option<String>,
+    /// The scene path currently loaded, when known; updated on every switch.
+    current_scene: Option<String>,
+    /// The scene to return to when resuming from the home scene.
+    resume_scene: Option<String>,
     /// The development script watcher, when scripts load from disk.
     #[cfg(not(target_arch = "wasm32"))]
     watch: Option<crate::watch::ScriptWatch>,
@@ -265,6 +271,9 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             scene_loader: None,
             scene_request,
             capture_request,
+            home_scene: None,
+            current_scene: None,
+            resume_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
             watch: None,
         }
@@ -291,6 +300,37 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     /// the JSON against its own asset registry, so the loader only finds bytes.
     pub fn set_scene_loader(&mut self, loader: SceneLoader) {
         self.scene_loader = Some(loader);
+    }
+
+    /// The scene `Esc` pauses to, typically the menu.
+    ///
+    /// `noctis run` sets it from the project's default scene, so `Esc` returns to
+    /// the menu and again resumes the scene it left. With none set, `Esc` just
+    /// toggles the cursor.
+    pub fn set_home_scene(&mut self, path: impl Into<String>) {
+        self.home_scene = Some(path.into());
+    }
+
+    /// Record the scene path loaded at start, so `Esc` can tell playing from the
+    /// menu.
+    pub fn set_current_scene(&mut self, path: impl Into<String>) {
+        self.current_scene = Some(path.into());
+    }
+
+    /// `Esc`: pause to the home scene, or resume the scene paused from.
+    pub fn toggle_pause(&mut self) {
+        let Some(home) = self.home_scene.clone() else {
+            // No pause scene configured: just release/capture the cursor.
+            self.captured = !self.captured;
+            return;
+        };
+        if self.current_scene.as_deref() != Some(home.as_str()) {
+            self.resume_scene = self.current_scene.clone();
+            *lock(&self.scene_request) = Some(home);
+            self.captured = false;
+        } else if let Some(resume) = self.resume_scene.take() {
+            *lock(&self.scene_request) = Some(resume);
+        }
     }
 
     /// Perform a scene switch requested by `load_scene` during this tick.
@@ -325,6 +365,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             }
         };
         log::info!("loaded scene {path:?}");
+        self.current_scene = Some(path.clone());
         self.app.context.scene = scene;
         propagate_transforms(&mut self.app.context.scene.world);
         // Rebuild physics for the new bodies.
@@ -742,6 +783,41 @@ mod tests {
             !runtime.cursor_captured(),
             "the script did not release the cursor"
         );
+    }
+
+    #[test]
+    fn escape_pauses_to_the_home_scene_and_resumes() {
+        use platform::AppDriver;
+        let host = RecordingHost::new();
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, host);
+        // A loader that names each scene after the path it was asked for.
+        runtime.set_scene_loader(Box::new(|path: &str| {
+            Ok(format!(
+                r#"{{"name":"{path}","entities":[{{
+                    "id":0, "name":"Root",
+                    "transform": {{ "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] }},
+                    "components": []
+                }}]}}"#
+            ))
+        }));
+        runtime.set_home_scene("menu");
+        runtime.set_current_scene("game");
+
+        runtime.on_escape();
+        runtime.tick_once();
+        assert_eq!(
+            runtime.scene().name,
+            "menu",
+            "Esc did not pause to the menu"
+        );
+
+        runtime.on_escape();
+        runtime.tick_once();
+        assert_eq!(runtime.scene().name, "game", "Esc did not resume");
     }
 
     #[test]

@@ -360,6 +360,11 @@ fn build_runtime(
     // A project can switch scenes at runtime: a `load_scene` path is read through
     // the project's store, so a bundled/exported project resolves its scenes too.
     if let Some(project) = project {
+        let home = project.default_scene().map(str::to_string);
+        let current = args
+            .scene
+            .clone()
+            .or_else(|| project.default_scene().map(str::to_string));
         let project = project.clone();
         runtime.set_scene_loader(Box::new(move |path: &str| {
             let asset = AssetPath::parse(path).map_err(|error| error.to_string())?;
@@ -369,6 +374,13 @@ fn build_runtime(
                 Err(error) => Err(error.to_string()),
             }
         }));
+        // `Esc` pauses to the project's default scene (the menu) and back.
+        if let Some(home) = home {
+            runtime.set_home_scene(home);
+        }
+        if let Some(current) = current {
+            runtime.set_current_scene(current);
+        }
     }
 
     if args.render {

@@ -59,9 +59,8 @@ impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
     }
 
     fn on_escape(&mut self) {
-        // While playing, `Esc` releases the cursor (and, once the menu exists,
-        // pauses); again to resume. The cursor follows the toggle.
-        self.captured = !self.captured;
+        // `Esc` pauses to the menu (and releases the cursor), or resumes.
+        self.toggle_pause();
     }
 
     fn should_exit(&self) -> bool {
