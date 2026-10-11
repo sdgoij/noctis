@@ -20,9 +20,10 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
-# The Slag JavaScript engine, for editor extensions (`noctis` global). Matched to
-# the `script` crate's feature set so the dependency graph unifies.
-slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, features = ["wasm", "jit"] }
+# The Slag JavaScript engine, for editor extensions (`noctis` global). It shares
+# the workspace's `slag` spec and adds the native JIT hook (the editor is
+# native-only).
+slag = { workspace = true, features = ["jit"] }
 
 # `--watch`: reload extensions when their files change.
 notify.workspace = true

@@ -56,6 +56,14 @@ web = { path = "crates/web" }
 noctis = { path = "crates/noctis" }
 client = { path = "crates/client" }
 
+# Scripting: the Slag JavaScript engine, pinned to a revision (a bump is a
+# one-line change here, and cargo re-resolves it everywhere — the engine
+# workspace and the generated `.noctis/*` client crates). The `wasm` JS
+# WebAssembly API is on everywhere; the Cranelift `jit` hook is native-only — it
+# does not build for wasm, so the target crates that want it add the feature
+# (see `crates/script`).
+slag = { git = "https://github.com/sdgoij/slag", rev = "e0d2b847410189b9944f70b1be6984c920efea8f", package = "slag", default-features = false, features = ["wasm"] }
+
 # Math
 glm = "0.3"
 

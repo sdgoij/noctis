@@ -118,8 +118,11 @@ needed.
   (`ecs::components::Text`) is drawn billboarded by a dedicated pass, rasterized
   from a font atlas baked on demand (`ab_glyph`); the atlas is cached per
   process, not yet persisted under `.noctis/`.
-- `script`: scripting is the pinned `github.com/sdgoij/slag` engine, a plain
-  dependency (no feature). It provides **JavaScript** (with Slag's WebAssembly JS
+- `script`: scripting is the `github.com/sdgoij/slag` engine, pinned to a
+  revision in the workspace `Cargo.toml` (`[workspace.dependencies] slag`) — a
+  plain dependency, with no feature to enable. A Slag bump is a one-line `rev`
+  change there, and cargo re-resolves it everywhere, including the generated
+  `.noctis/*` client crates. It provides **JavaScript** (with Slag's WebAssembly JS
   API and Cranelift JIT hook — hence the Cranelift build cost, ~20-30s on a cold
   build), **native WebAssembly scripts** (`wasm_host::WasmHost`, a `.wasm` module
   driven through a documented import ABI covering transforms (read and write),

@@ -13,16 +13,15 @@ ecs.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
-# The Slag JavaScript engine. It is the engine's scripting backend, so it is a
-# plain dependency rather than a feature. The WebAssembly JS API (`wasm`) is
-# enabled everywhere, so scripts see the `WebAssembly` global; the Cranelift JIT
-# hook (`jit`) is native-only — it does not build for wasm, where scripts run on
+# The Slag JavaScript engine, the engine's scripting backend (a workspace
+# dependency). The `wasm` JS WebAssembly API is on everywhere; the Cranelift
+# `jit` hook is native-only — it does not build for wasm, where scripts run on
 # the interpreter.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, features = ["wasm", "jit"] }
+slag = { workspace = true, features = ["jit"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-slag = { git = "https://github.com/sdgoij/slag", package = "slag", default-features = false, features = ["wasm"] }
+slag = { workspace = true }
 
 [dev-dependencies]
 serde.workspace = true
