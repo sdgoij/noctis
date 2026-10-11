@@ -92,7 +92,27 @@ async fn run(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
 
     let host =
         EngineHost::new().map_err(|error| format!("failed to start the script engine: {error}"))?;
-    let runtime: Runtime<EngineHost> = Runtime::from_parts(scene, imported.registry, config, host);
+    let mut runtime: Runtime<EngineHost> =
+        Runtime::from_parts(scene, imported.registry, config, host);
+
+    // A script switches scenes with `load_scene`/`teleport_scene`; the path is
+    // read through the bundle's store, so its other scenes resolve too. Without a
+    // loader the menu's Play is ignored and the game is stuck on the menu.
+    let home = project.default_scene().map(str::to_string);
+    let bundle = project.clone();
+    runtime.set_scene_loader(Box::new(move |path: &str| {
+        let asset = AssetPath::parse(path).map_err(|error| error.to_string())?;
+        match bundle.read_document(asset.file_path()) {
+            Ok(Some(json)) => Ok(json),
+            Ok(None) => Err(format!("scene {path:?} is not in the bundle")),
+            Err(error) => Err(error.to_string()),
+        }
+    }));
+    // `Esc` pauses to the project's default scene (the menu) and back.
+    if let Some(home) = home {
+        runtime.set_current_scene(home.clone());
+        runtime.set_home_scene(home);
+    }
 
     let config = WindowConfig {
         canvas_id: canvas_id.to_string(),
