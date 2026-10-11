@@ -71,10 +71,6 @@ impl ExtensionWatch {
 pub struct ExtensionReload {
     /// The filesystem watcher.
     pub(crate) watch: ExtensionWatch,
-    /// The directories the host was discovered from.
-    pub(crate) dirs: Vec<PathBuf>,
-    /// Project-level disabled ids (the user config is re-read from the driver).
-    pub(crate) disabled: Vec<String>,
 }
 
 /// `true` for the event kinds that mean a file may have changed.

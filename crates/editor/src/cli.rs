@@ -294,6 +294,16 @@ fn attach_extensions(
     options: &Options,
     project: Option<&Project>,
 ) -> Result<Option<LoadedExtensions>, CliError> {
+    attach_extensions_with_config(editor, options, project, extensions::default_config_path())
+}
+
+/// [`attach_extensions`] with an explicit config path (a seam for tests).
+fn attach_extensions_with_config(
+    editor: &mut Editor,
+    options: &Options,
+    project: Option<&Project>,
+    config_path: PathBuf,
+) -> Result<Option<LoadedExtensions>, CliError> {
     if options.no_extensions {
         return Ok(None);
     }
@@ -315,7 +325,6 @@ fn attach_extensions(
         );
     }
 
-    let config_path = extensions::default_config_path();
     let config = match extensions::ExtensionConfig::load(&config_path) {
         Ok(config) => config,
         Err(error) => {
@@ -328,13 +337,11 @@ fn attach_extensions(
         .unwrap_or_default();
     let enabled = |id: &str| config.is_enabled(id) && !project_disabled.iter().any(|d| d == id);
 
-    let any_enabled = loader
-        .extensions()
-        .iter()
-        .any(|manifest| enabled(&manifest.id));
-    // Under `--watch`, keep the (possibly empty) host so a newly created
-    // extension is picked up by the watcher without a restart.
-    if !any_enabled && options.run.is_empty() && !options.watch {
+    // Keep the host — and the Extensions screen that lists extensions and edits
+    // the config — whenever anything was discovered, even if every extension is
+    // disabled, so the screen can re-enable one. With nothing discovered there is
+    // nothing to configure, so skip the host entirely.
+    if loader.extensions().is_empty() && options.run.is_empty() && !options.watch {
         return Ok(None);
     }
 
@@ -602,6 +609,8 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
             host: loaded.host,
             config: loaded.config,
             config_path: loaded.config_path,
+            dirs: loaded.dirs,
+            disabled: loaded.disabled,
             reload,
         }
     });
@@ -632,11 +641,7 @@ fn watch_extensions(options: &Options, loaded: &LoadedExtensions) -> Option<Exte
         return None;
     }
     match ExtensionWatch::new(&loaded.dirs) {
-        Ok(watch) => Some(ExtensionReload {
-            watch,
-            dirs: loaded.dirs.clone(),
-            disabled: loaded.disabled.clone(),
-        }),
+        Ok(watch) => Some(ExtensionReload { watch }),
         Err(error) => {
             eprintln!("{PROGRAM}: warning: extension watch: {error}");
             None
@@ -913,6 +918,45 @@ mod tests {
         let mut editor = build_editor(&options, None, &NullPlugin).expect("build");
         attach_extensions(&mut editor, &options, None).expect("attach");
         assert!(editor.find_by_name("Made").is_some());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_disabled_extension_still_attaches_the_host() {
+        let dir = std::env::temp_dir().join(format!("noctis-cli-disabled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let extension = dir.join("sleeper");
+        std::fs::create_dir_all(&extension).unwrap();
+        std::fs::write(
+            extension.join("extension.json"),
+            r#"{ "id": "com.example.sleeper", "name": "Sleeper", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(extension.join("extension.js"), "noctis.log('sleeper');").unwrap();
+
+        // A config that disables it: the host is still attached, so the Extensions
+        // screen lists it and the user can re-enable it (it used to vanish).
+        let config_path = dir.join("extensions.toml");
+        std::fs::write(&config_path, "disabled = [\"com.example.sleeper\"]\n").unwrap();
+
+        let options = Options {
+            headless: true,
+            extensions: vec![dir.to_string_lossy().into_owned()],
+            ..Options::default()
+        };
+        let mut editor = build_editor(&options, None, &NullPlugin).expect("build");
+        let loaded = attach_extensions_with_config(&mut editor, &options, None, config_path)
+            .expect("attach")
+            .expect("the host is kept while an extension is disabled");
+        assert!(
+            loaded
+                .host
+                .entries()
+                .iter()
+                .any(|entry| entry.id == "com.example.sleeper" && !entry.enabled),
+            "the disabled extension stays listed"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

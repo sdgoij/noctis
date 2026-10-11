@@ -120,6 +120,11 @@ pub struct EditorDriver {
     extension_config: Option<(ExtensionConfig, PathBuf)>,
     /// When `--watch` was passed: the watcher and the inputs to rebuild the host.
     extension_reload: Option<ExtensionReload>,
+    /// The directories extensions are discovered from, so the Extensions screen can
+    /// re-discover and apply a toggle immediately.
+    extension_dirs: Vec<PathBuf>,
+    /// The project-level disabled ids.
+    extension_disabled: Vec<String>,
     /// UI interactions from the last frame, fed to panels on the next draw.
     pending_interactions: Interactions,
     /// The console's input line and scrollback.
@@ -174,6 +179,8 @@ impl EditorDriver {
             extensions: None,
             extension_config: None,
             extension_reload: None,
+            extension_dirs: Vec::new(),
+            extension_disabled: Vec::new(),
             pending_interactions: Interactions::default(),
             console_line: String::new(),
             console_log: Vec::new(),
@@ -203,9 +210,13 @@ impl EditorDriver {
         host: ExtensionHost,
         config: ExtensionConfig,
         config_path: PathBuf,
+        dirs: Vec<PathBuf>,
+        disabled: Vec<String>,
         reload: Option<ExtensionReload>,
     ) -> Self {
         self.extension_config = Some((config, config_path));
+        self.extension_dirs = dirs;
+        self.extension_disabled = disabled;
         self.extension_reload = reload;
         self.extensions = Some(host);
         self
@@ -239,8 +250,8 @@ impl EditorDriver {
         let Some((config, _)) = self.extension_config.clone() else {
             return;
         };
-        let disabled = reload.disabled.clone();
-        let dirs = reload.dirs.clone();
+        let disabled = self.extension_disabled.clone();
+        let dirs = self.extension_dirs.clone();
         self.rebuild_extensions(&dirs, &config, &disabled);
     }
 
@@ -470,7 +481,7 @@ impl EditorDriver {
                     }
                 }
                 ui.separator();
-                ui.label("Enablement is saved and applies on restart.");
+                ui.label("Enablement is saved and applied immediately.");
             });
         if let Some((id, enabled)) = toggled {
             self.set_extension_enabled(&id, enabled);
@@ -480,21 +491,26 @@ impl EditorDriver {
         }
     }
 
-    /// Persist an extension's enablement to the config file.
+    /// Persist an extension's enablement to the config file and apply it now.
     fn set_extension_enabled(&mut self, id: &str, enabled: bool) {
-        let Some((config, path)) = self.extension_config.as_mut() else {
+        let Some((mut config, path)) = self.extension_config.clone() else {
             return;
         };
         config.set_enabled(id, enabled);
-        match config.save(&*path) {
-            Ok(()) => self.console_log.push(format!(
-                "{} {id} (restart to apply)",
-                if enabled { "enabled" } else { "disabled" }
-            )),
-            Err(error) => self
-                .console_log
-                .push(format!("failed to save extension config: {error}")),
+        if let Err(error) = config.save(&path) {
+            self.console_log
+                .push(format!("failed to save extension config: {error}"));
+            return;
         }
+        self.console_log.push(format!(
+            "{} {id}",
+            if enabled { "enabled" } else { "disabled" }
+        ));
+        // Rebuild so the change takes effect now, not on the next restart.
+        self.extension_config = Some((config.clone(), path));
+        let dirs = self.extension_dirs.clone();
+        let disabled = self.extension_disabled.clone();
+        self.rebuild_extensions(&dirs, &config, &disabled);
     }
 
     /// The wrapped editor.
@@ -1534,6 +1550,10 @@ pub struct AttachedExtensions {
     pub config: ExtensionConfig,
     /// The file the config is saved to.
     pub config_path: PathBuf,
+    /// The directories the host was discovered from.
+    pub dirs: Vec<PathBuf>,
+    /// The ids the project disables.
+    pub disabled: Vec<String>,
     /// The `--watch` reload inputs, when watching.
     pub reload: Option<ExtensionReload>,
 }
@@ -1574,8 +1594,10 @@ fn attach(driver: EditorDriver, extensions: Option<AttachedExtensions>) -> Edito
             host,
             config,
             config_path,
+            dirs,
+            disabled,
             reload,
-        }) => driver.with_extensions(host, config, config_path, reload),
+        }) => driver.with_extensions(host, config, config_path, dirs, disabled, reload),
         None => driver,
     }
 }
@@ -1808,6 +1830,62 @@ mod tests {
                 .extensions()
                 .is_some_and(|host| host.ids().is_empty())
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_disabled_extension_stays_listed_and_re_enables_live() {
+        let root = extension_root("toggle");
+        write_extension(&root, "adder", "com.example.adder");
+        let dirs = vec![root.clone()];
+
+        // A host with the extension loaded, as the CLI would build it.
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+
+        let config_path = root.join("extensions.toml");
+        let mut driver = EditorDriver::new(Editor::new()).with_extensions(
+            host,
+            ExtensionConfig::default(),
+            config_path.clone(),
+            dirs,
+            Vec::new(),
+            None,
+        );
+
+        let enabled = |driver: &EditorDriver| {
+            driver
+                .extensions()
+                .expect("host")
+                .entries()
+                .iter()
+                .find(|entry| entry.id == "com.example.adder")
+                .expect("still listed")
+                .enabled
+        };
+
+        // Disabling it keeps it listed (disabled) while the host drops it.
+        driver.set_extension_enabled("com.example.adder", false);
+        assert!(!enabled(&driver), "listed as disabled");
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().is_empty()),
+            "not loaded"
+        );
+
+        // The screen can turn it back on, and it applies immediately.
+        driver.set_extension_enabled("com.example.adder", true);
+        assert!(enabled(&driver), "re-enabled");
+        assert!(
+            driver
+                .extensions()
+                .is_some_and(|host| host.ids().iter().any(|id| id == "com.example.adder")),
+            "loaded again"
+        );
+        assert!(config_path.is_file(), "the config was written");
+
         std::fs::remove_dir_all(&root).ok();
     }
 }

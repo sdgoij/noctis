@@ -321,7 +321,8 @@ on Windows, `$XDG_CONFIG_HOME/noctis/extensions.toml` or
 
 ```toml
 # Extensions the user disabled, by id. Everything discovered is enabled unless
-# listed here. Written by the extensions screen; read at startup.
+# listed here. Written by the extensions screen, which applies a toggle
+# immediately; read at startup.
 disabled = ["com.example.noisy"]
 ```
 
