@@ -598,6 +598,9 @@ pub struct WasmHost {
     bridge: Bridge,
     next_module: ModuleId,
     next_token: u64,
+    /// Whether each compiled module imports a reflection read, so its calls build
+    /// the component snapshot. See [`source_reads_components`].
+    reflect: HashMap<ModuleId, bool>,
     errors: Vec<String>,
 }
 
@@ -627,6 +630,7 @@ impl WasmHost {
             bridge: Bridge::default(),
             next_module: 1,
             next_token: 1,
+            reflect: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -743,6 +747,8 @@ impl ScriptHost for WasmHost {
     fn eval_script(&mut self, source: &str) -> ModuleId {
         let id = self.next_module;
         self.next_module += 1;
+        self.reflect
+            .insert(id, crate::bridge::source_reads_components(source));
         if !is_wasm_source(source) {
             self.errors
                 .push(format!("module {id}: not a WebAssembly source"));
@@ -761,7 +767,8 @@ impl ScriptHost for WasmHost {
     }
 
     fn call_lifecycle(&mut self, module: ModuleId, func: &str, ctx: &mut ScriptContext<'_>) {
-        self.bridge.begin(ctx);
+        let reflect = self.reflect.get(&module).copied().unwrap_or(true);
+        self.bridge.begin(ctx, reflect);
         let Some(instance) = self.instances.get(&module).copied() else {
             return;
         };

@@ -18,6 +18,13 @@
 //! Keeping all world mutation in [`ScriptApi`] means no host needs `unsafe`, and
 //! the JavaScript backend and the native WebAssembly host share one
 //! implementation of the snapshot/replay protocol.
+//!
+//! The reflected-component part of the snapshot (the JSON of every entity's
+//! components) is the expensive part, and only a script that *reads* it can
+//! observe it. So the host builds it only for a script that names a reflection
+//! read entry point (see [`source_reads_components`]); a script that never does
+//! pays nothing per frame. Transforms, names, input, timing, and the physics
+//! snapshot are always taken, since any script may read those.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +34,7 @@ use ecs::scene::reflect_components;
 use math::{Quat, Vec3, vec3};
 
 use crate::api::{EntityId, ScriptApi, ScriptCommand, ScriptContext, entity_id};
+use crate::wasm_host::{decode_source, is_wasm_source};
 
 /// The generation stamped on placeholder handles handed to a script for entities
 /// spawned during a call. Chosen so it can never collide with a real entity's
@@ -102,7 +110,13 @@ pub(crate) struct Bridge {
 
 impl Bridge {
     /// Reset the bridge to a fresh snapshot of `ctx`'s world.
-    pub(crate) fn begin(&mut self, ctx: &ScriptContext<'_>) {
+    ///
+    /// `reflect` controls whether the reflected-component JSON is built (the
+    /// dominant cost of a snapshot). Pass `false` for a script that never names
+    /// a reflection read entry point — see [`source_reads_components`] — and the
+    /// component map stays empty. Everything else (transforms, names, input,
+    /// timing, the physics snapshot) is always taken.
+    pub(crate) fn begin(&mut self, ctx: &ScriptContext<'_>, reflect: bool) {
         self.entity = ctx.entity;
         self.delta = ctx.delta;
         self.elapsed = ctx.elapsed;
@@ -125,9 +139,6 @@ impl Bridge {
             self.overlaps.extend(view.overlaps.iter().copied());
         }
 
-        // Reflected components (built-ins in scene form, registered customs in
-        // their own JSON) are serialized once per call — the cost of the generic
-        // path; a lazily-populated cache is a later optimization.
         for entity in ctx.world.entities().iter() {
             let id = entity_id(entity);
             if let Some(name) = ctx.world.get::<Name>(entity) {
@@ -138,6 +149,12 @@ impl Bridge {
                 self.rotations.insert(id, euler(t.rotation));
                 self.scales.insert(id, t.scale);
             }
+            if !reflect {
+                continue;
+            }
+            // Reflected components (built-ins in scene form, registered customs in
+            // their own JSON) are serialized once per call, for every entity — the
+            // cost of the generic path, so only taken when the script can read it.
             let mut map = HashMap::new();
             for (name, value) in reflect_components(&*ctx.world, entity, ctx.assets, ctx.components)
             {
@@ -417,5 +434,120 @@ pub(crate) fn replay(ctx: &mut ScriptContext<'_>, commands: Vec<ScriptCommand>) 
             ScriptCommand::TeleportScene { path, carry } => api.teleport_scene(path, carry),
             ScriptCommand::SetMouseCaptured { captured } => api.set_mouse_captured(captured),
         }
+    }
+}
+
+/// Whether a script source may *read* reflected components, and so needs the
+/// per-call component snapshot built (see [`Bridge::begin`]).
+///
+/// The bridge must answer reflection reads from its snapshot — its host
+/// callbacks cannot borrow the world — so whether to build the snapshot has to be
+/// decided *before* the call runs. This inspects the source for the read entry
+/// points the hosts register (`has_component`, `get_component`,
+/// `remove_component`); a script that names none can never observe the snapshot,
+/// so the host skips building it. `set_component` is deliberately not a trigger:
+/// a write needs no snapshot.
+///
+/// A `.wasm` module travels as a hex descriptor (see
+/// [`is_wasm_source`](crate::wasm_host::is_wasm_source)), so its import names are
+/// searched in the decoded binary instead of in the text.
+///
+/// The check is conservative: a false positive (a name in a string or comment)
+/// only costs the snapshot, whereas a false negative would be a correctness bug —
+/// so only a script that assembles an entry-point name dynamically (e.g.
+/// `globalThis["get_" + "component"]`) could evade it, which is pathological and
+/// discounted.
+pub(crate) fn source_reads_components(source: &str) -> bool {
+    const READS: [&[u8]; 3] = [b"has_component", b"get_component", b"remove_component"];
+    if is_wasm_source(source) {
+        return decode_source(source)
+            .is_some_and(|bytes| READS.iter().any(|read| contains(&bytes, read)));
+    }
+    READS.iter().any(|read| contains(source.as_bytes(), read))
+}
+
+/// Whether `haystack` contains the byte substring `needle`.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ScriptContext;
+    use ecs::assets::AssetRegistry;
+    use ecs::reflect::ComponentRegistry;
+    use ecs::resources::InputState;
+    use ecs::world::World;
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, ecs::Component)]
+    struct Health {
+        current: f32,
+        max: f32,
+    }
+
+    #[test]
+    fn a_script_that_names_no_read_does_not_need_components() {
+        assert!(!source_reads_components(
+            "function on_update(e, dt) { set_position(e, 1, 2, 3); }"
+        ));
+        // A write alone needs no snapshot.
+        assert!(!source_reads_components("set_component(e, 'x', '{}');"));
+    }
+
+    #[test]
+    fn any_reflection_read_needs_components() {
+        assert!(source_reads_components("has_component(e, 'x');"));
+        assert!(source_reads_components(
+            "var h = get_component(e, 'Health');"
+        ));
+        assert!(source_reads_components("remove_component(e, 'x');"));
+    }
+
+    #[test]
+    fn a_wasm_module_needs_components_only_when_it_imports_a_read() {
+        let with_read = crate::wasm_host::encode(b"\0asm\x01\0\0\0get_component");
+        let without_read = crate::wasm_host::encode(b"\0asm\x01\0\0\0set_component");
+        assert!(source_reads_components(&with_read));
+        assert!(!source_reads_components(&without_read));
+    }
+
+    #[test]
+    fn begin_builds_component_json_only_when_reflecting() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Health {
+                current: 10.0,
+                max: 20.0,
+            },
+        );
+        let id = entity_id(entity);
+
+        let assets = AssetRegistry::new();
+        let input = InputState::new();
+        let mut registry = ComponentRegistry::new();
+        registry.register::<Health>();
+        let ctx = ScriptContext::new(&mut world, &assets, &registry, &input);
+
+        let mut bridge = Bridge::default();
+        bridge.begin(&ctx, false);
+        assert!(
+            bridge.components.is_empty(),
+            "a non-reflecting call must build no component JSON"
+        );
+
+        bridge.begin(&ctx, true);
+        assert!(
+            bridge
+                .components
+                .get(&id)
+                .is_some_and(|map| map.contains_key("Health")),
+            "a reflecting call must snapshot the entity's components"
+        );
     }
 }

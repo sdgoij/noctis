@@ -33,6 +33,7 @@
 //! * JS runs on the thread that owns the host; the host is not `Send`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use ecs::resources::{Key, MouseButton};
@@ -70,6 +71,9 @@ pub struct SlagHost {
     /// receive small indices, never raw `EntityId`s.
     handles: Rc<RefCell<Vec<EntityId>>>,
     next_module: ModuleId,
+    /// Whether each compiled module reads reflected components, so its calls
+    /// build the component snapshot. See [`source_reads_components`].
+    reflect: HashMap<ModuleId, bool>,
     errors: Vec<String>,
     jit: bool,
 }
@@ -100,6 +104,7 @@ impl SlagHost {
             bridge: Rc::new(RefCell::new(Bridge::default())),
             handles: Rc::new(RefCell::new(Vec::new())),
             next_module: 1,
+            reflect: HashMap::new(),
             errors: Vec::new(),
             jit,
         };
@@ -663,6 +668,8 @@ impl ScriptHost for SlagHost {
     fn eval_script(&mut self, source: &str) -> ModuleId {
         let id = self.next_module;
         self.next_module += 1;
+        self.reflect
+            .insert(id, crate::bridge::source_reads_components(source));
         let program = self.module_program(id, source);
         if let Err(err) = self.context.eval(&program) {
             self.errors.push(format!("module {id}: {err}"));
@@ -671,7 +678,8 @@ impl ScriptHost for SlagHost {
     }
 
     fn call_lifecycle(&mut self, module: ModuleId, func: &str, ctx: &mut ScriptContext<'_>) {
-        self.bridge.borrow_mut().begin(ctx);
+        let reflect = self.reflect.get(&module).copied().unwrap_or(true);
+        self.bridge.borrow_mut().begin(ctx, reflect);
         self.handles.borrow_mut().clear();
 
         let function = format!("globalThis.__noctis_ns_{module}.{func}");
