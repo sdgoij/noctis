@@ -63,6 +63,7 @@ cargo clippy --workspace --all-targets  # lints
 cargo fmt --all                         # format (max_width = 100)
 cargo run   -- editor                   # `noctis` is the default binary (default-members)
 cargo run   -- run --project <dir>      # run a project (windowed; --headless to exit)
+cargo run   -- run --release --project <dir>  # a Rust project's plugin, optimized
 ```
 
 `noctis build` and `noctis run --export` build the `noctis-game` client

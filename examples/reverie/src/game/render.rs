@@ -4,6 +4,8 @@
  * case that will be the kitty terminal protocol.
  */
 
+use std::sync::OnceLock;
+
 use anyhow::{Context, Result, bail};
 use image::{RgbaImage, imageops};
 
@@ -42,6 +44,32 @@ const TITLE: &[u8] = include_bytes!("../../assets/backgrounds/title.png");
 const END: &[u8] = include_bytes!("../../assets/backgrounds/end.png");
 const TILESET: &[u8] = include_bytes!("../../assets/tiles/tileset.png");
 
+/// Decode `bytes` once and cache it in `slot`.
+///
+/// The originals decoded the tileset and the background from memory on *every*
+/// frame; that dominated the frame time. They never change, so decode once.
+fn cached(
+    slot: &'static OnceLock<RgbaImage>,
+    bytes: &'static [u8],
+    what: &str,
+) -> Result<&'static RgbaImage> {
+    if let Some(image) = slot.get() {
+        return Ok(image);
+    }
+    let image = image::load_from_memory(bytes)
+        .with_context(|| format!("could not decode {what}"))?
+        .into_rgba8();
+    let _ = slot.set(image);
+    Ok(slot.get().expect("the image was just stored"))
+}
+
+static STORM_IMG: OnceLock<RgbaImage> = OnceLock::new();
+static SNOW_IMG: OnceLock<RgbaImage> = OnceLock::new();
+static NEBULA_IMG: OnceLock<RgbaImage> = OnceLock::new();
+static TITLE_IMG: OnceLock<RgbaImage> = OnceLock::new();
+static END_IMG: OnceLock<RgbaImage> = OnceLock::new();
+static TILESET_IMG: OnceLock<RgbaImage> = OnceLock::new();
+
 // ok, i don't know how i feel about this currently, but this is the exact
 // colors used in the tileset.  we find those colors and treat those as indices
 // - this means we can do "palette swaps" without adding new graphics.  the
@@ -55,21 +83,16 @@ const SOURCE_PALETTE: Palette = [
 
 /// Render "title" screen
 pub fn title(frame: &mut RgbaImage) -> Result<()> {
-    overlay_image(frame, TITLE)
+    overlay_image(frame, cached(&TITLE_IMG, TITLE, "the title screen")?)
 }
 
 /// Render "end" screen
 pub fn end(frame: &mut RgbaImage) -> Result<()> {
-    overlay_image(frame, END)
+    overlay_image(frame, cached(&END_IMG, END, "the end screen")?)
 }
 
-fn overlay_image(frame: &mut RgbaImage, bytes: &[u8]) -> Result<()> {
-    let img = image::load_from_memory(bytes)
-        .context("could not decode image")?
-        .into_rgba8();
-
-    imageops::overlay(frame, &img, 0, 0);
-
+fn overlay_image(frame: &mut RgbaImage, image: &RgbaImage) -> Result<()> {
+    imageops::overlay(frame, image, 0, 0);
     Ok(())
 }
 
@@ -115,16 +138,13 @@ pub fn level(
     width: u32,
     height: u32,
 ) -> Result<RgbaImage> {
-    // load the background and get it ready to parallax
-    let background_data = match level.background.as_str() {
-        "snow" => BACKGROUND_SNOW,
-        "nebula" => BACKGROUND_NEBULA,
-        "storm" => BACKGROUND_STORM,
+    // the background, decoded once and cached (it only changes with the level)
+    let background = match level.background.as_str() {
+        "snow" => cached(&SNOW_IMG, BACKGROUND_SNOW, "the snow background")?,
+        "nebula" => cached(&NEBULA_IMG, BACKGROUND_NEBULA, "the nebula background")?,
+        "storm" => cached(&STORM_IMG, BACKGROUND_STORM, "the storm background")?,
         name => bail!("unknown background: {name}"),
     };
-    let background = image::load_from_memory(background_data)
-        .with_context(|| format!("could not decode background: {}", level.background))?
-        .into_rgba8();
     let background_width = background.width();
     let background_height = background.height();
 
@@ -144,9 +164,7 @@ pub fn level(
         )
     });
 
-    let tileset = image::load_from_memory(TILESET)
-        .context("could not decode tileset.png")?
-        .into_rgba8();
+    let tileset = cached(&TILESET_IMG, TILESET, "tileset.png")?;
 
     // loop all the blocks
     for (y, row) in level.blocks.iter().enumerate() {
@@ -168,7 +186,7 @@ pub fn level(
             // draw the sprite onte the frame
             sprite(
                 &mut frame,
-                &tileset,
+                tileset,
                 block,
                 camera.world_to_screen((x * TILE_SIZE) as f32, (y * TILE_SIZE) as f32),
                 &level.palette,
@@ -182,7 +200,7 @@ pub fn level(
     for &(x, y) in coins {
         sprite(
             &mut frame,
-            &tileset,
+            tileset,
             coin,
             camera.world_to_screen((x * TILE_SIZE) as f32, (y * TILE_SIZE) as f32),
             &level.palette,
@@ -193,7 +211,7 @@ pub fn level(
     // draw goal
     sprite(
         &mut frame,
-        &tileset,
+        tileset,
         GOAL,
         camera.world_to_screen(
             (level.goal.0 * TILE_SIZE) as f32,
@@ -207,7 +225,7 @@ pub fn level(
     if let Some(player) = player {
         sprite_sized(
             &mut frame,
-            &tileset,
+            tileset,
             PLAYER,
             camera.world_to_screen(player.x, player.y),
             &SOURCE_PALETTE,

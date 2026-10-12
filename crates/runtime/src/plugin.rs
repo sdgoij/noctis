@@ -56,7 +56,16 @@ pub fn plugin_project(args: &[String]) -> Option<Project> {
 /// child's exit code. `args` is the tool's whole command line (including the
 /// subcommand), since the generated binary dispatches it the same way.
 pub fn delegate(project: &Project, args: &[String]) -> Result<i32, String> {
-    let binary = build_tool(project, Profile::Dev)?;
+    // `--release` asks for an optimized plugin tool. It only applies to `run`
+    // (an interactive game); the tool itself accepts the flag as a no-op.
+    let release = args.first().map(String::as_str) == Some("run")
+        && args.iter().any(|arg| arg == "--release");
+    let profile = if release {
+        Profile::Release
+    } else {
+        Profile::Dev
+    };
+    let binary = build_tool(project, profile)?;
     let status = Command::new(&binary)
         .args(args)
         .status()

@@ -89,6 +89,9 @@ impl Args {
                 "--demo" => args.demo = true,
                 "--render" => args.render = true,
                 "--headless" => args.headless = true,
+                // Consumed by the outer `noctis` for a Rust plugin; accepted here
+                // so the generated tool's CLI does not reject it.
+                "--release" => {}
                 "--window" => {
                     return Err(
                         "--window was removed: a window is now the default, so pass --headless \
@@ -264,6 +267,8 @@ OPTIONS:
     --demo             Run a small built-in scene.
     --headless         Run without a window: advance --frames frames and exit.
                        Without this, a window opens and runs until it is closed.
+    --release          Build the project's Rust plugin optimized (a project with
+                       a Cargo.toml); a no-op otherwise.
     --frames <N>       Number of frames to run headlessly (default 300).
     --dt <seconds>     Frame delta time (default 1/60).
     --render           Render frames with a headless GPU (skipped if unavailable).

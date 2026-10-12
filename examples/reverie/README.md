@@ -16,12 +16,30 @@ does **not** render the engine's scene.
 From the workspace root:
 
 ```sh
+# Play (builds the plugin optimized — see Performance below):
+cargo run -- run --release --project examples/reverie
+
+# Iterate (unoptimized; the game loop is ~10x slower):
 cargo run -- run --project examples/reverie
 ```
 
 Controls (as the original): `A`/`D` or `←`/`→` move, `Space`/`W`/`↑` jump,
 `Enter` confirm, `R` restart, `1`/`3`/`4` effects/palette/debug, `2` screenshot,
 `m` mute, `8`/`9` volume, `Esc`/`Q` quit.
+
+## Performance
+
+The original was ~25 fps unoptimized and 144 fps in release; the same holds here,
+because the game is a CPU software renderer run once per frame.
+
+- **Optimize the build.** `noctis run --release` builds the project's plugin tool
+  with cargo's release profile; a plain `noctis run` builds it in debug.
+- Profiling the game loop (`update` + `render`) gave **~20 / 26 / 46 ms/frame**
+  for levels 1 / 2 / 3 in **debug**, and **~1.3 / 1.5 / 2.1 ms/frame** in
+  **release** — so the frame cost is the software renderer's per-pixel loops, and
+  a debug build is the whole story.
+- The tileset and background PNGs were being decoded *every frame* (as in the
+  original); `src/game/render.rs` now decodes each once and caches it.
 
 ## How the port maps
 
