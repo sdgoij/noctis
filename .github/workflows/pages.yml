@@ -1,5 +1,9 @@
-# Publish the browser demo to GitHub Pages: build it on `main` and deploy `docs/`
-# as a Pages artifact. The tests gate the deploy, so a broken `main` never ships.
+# Publish the browser demo to GitHub Pages: build it and deploy `docs/` as a Pages
+# artifact.
+#
+# It runs **after the CI workflow finishes on `main`, and only when CI succeeded** —
+# so the tests are not run twice, and a red `main` never ships. `workflow_dispatch`
+# runs it by hand.
 #
 # The toolchain mirrors `rust-toolchain.toml` (channel 1.98.0). The `wasm-bindgen`
 # CLI must match the crate version `Cargo.lock` pins, so it is derived from the
@@ -12,7 +16,9 @@
 name: Pages
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -30,15 +36,22 @@ concurrency:
 jobs:
   build:
     name: Build the demo
+    # A manual run has no upstream CI run to gate on.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Build exactly the commit CI validated, not the branch tip (which may have
+      # moved on); a manual run uses the default branch.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
-          components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
@@ -87,17 +100,13 @@ jobs:
           path: |
             examples/showcase/.noctis/web/target
             examples/rustball/.noctis/web/target
-          key: noctis-web-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          key: noctis-web-${{ hashFiles('Cargo.lock') }}-${{ github.event.workflow_run.head_sha || github.sha }}
           restore-keys: |
             noctis-web-${{ hashFiles('Cargo.lock') }}-
 
-      # The workspace gates (fmt, clippy, tests). `ci.yml` also runs these on
-      # every push; they are repeated here so a red `main` cannot deploy.
-      - name: Test
-        run: just test
-
       # Builds both halves of the demo into `docs/`: the client demos (one wasm
-      # module dispatching between the projects) and the browser editor.
+      # module dispatching between the projects) and the browser editor. The
+      # workspace gates (fmt, clippy, tests) already ran in CI, which gated this.
       - name: Publish the demos
         run: just publish-wasm
 
