@@ -123,7 +123,12 @@ async fn get_directory(
     dir: &FileSystemDirectoryHandle,
     name: &str,
 ) -> Result<FileSystemDirectoryHandle, StoreError> {
-    JsFuture::from(dir.get_directory_handle(name))
+    // `create: true`: the OPFS directory (and any subdirectory) is created on
+    // first use. Without it a missing directory is a `NotFoundError`, not an
+    // empty one — which is what a first run has.
+    let options = web_sys::FileSystemGetDirectoryOptions::new();
+    options.set_create(true);
+    JsFuture::from(dir.get_directory_handle_with_options(name, &options))
         .await
         .map_err(js_err)?
         .dyn_into::<FileSystemDirectoryHandle>()
@@ -184,7 +189,10 @@ async fn write_into(
     for (path, bytes) in files {
         let (parent, name) = split(path);
         let target = subdirectory(dir, parent).await?;
-        let handle = JsFuture::from(target.get_file_handle(name))
+        // `create: true`: a file written here need not exist yet.
+        let options = web_sys::FileSystemGetFileOptions::new();
+        options.set_create(true);
+        let handle = JsFuture::from(target.get_file_handle_with_options(name, &options))
             .await
             .map_err(js_err)?
             .dyn_into::<FileSystemFileHandle>()
