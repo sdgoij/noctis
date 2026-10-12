@@ -1200,8 +1200,13 @@ impl EditorDriver {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
-                    let hint = if maximized { "Restore" } else { "Maximize" };
-                    if ui.button("\u{26f6}").on_hover_text(hint).clicked() {
+                    // A single square maximises; two overlapping windows restore down.
+                    let (glyph, hint) = if maximized {
+                        ("\u{1f5d7}", "Restore")
+                    } else {
+                        ("\u{26f6}", "Maximize")
+                    };
+                    if ui.button(glyph).on_hover_text(hint).clicked() {
                         ui.ctx()
                             .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                     }
@@ -1244,6 +1249,78 @@ impl EditorDriver {
                 "noctis editor: failed to save layout to {}: {error}",
                 path.display()
             ),
+        }
+    }
+
+    /// Grips along the window's outer edges that begin an OS resize drag.
+    ///
+    /// With `WindowConfig::decorations` off the OS draws no resize border, so the
+    /// editor supplies one: a thin strip at each edge and corner. A drag on a strip
+    /// asks the host to begin a resize in that direction (the host maps
+    /// `BeginResize` to the platform). A dock's own resize grip sits on the dock's
+    /// *inner* edge, so the two do not fight.
+    fn resize_handles(&self, ui: &mut egui::Ui) {
+        // macOS keeps the native frame, so it needs no supplied edges.
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        use egui::viewport::ResizeDirection as Dir;
+        let rect = ui.ctx().viewport_rect();
+        let grip = 6.0;
+        let (l, r, t, b) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+        let strips = [
+            (
+                Dir::North,
+                egui::Rect::from_min_max(egui::pos2(l + grip, t), egui::pos2(r - grip, t + grip)),
+                egui::CursorIcon::ResizeNorth,
+            ),
+            (
+                Dir::South,
+                egui::Rect::from_min_max(egui::pos2(l + grip, b - grip), egui::pos2(r - grip, b)),
+                egui::CursorIcon::ResizeSouth,
+            ),
+            (
+                Dir::West,
+                egui::Rect::from_min_max(egui::pos2(l, t + grip), egui::pos2(l + grip, b - grip)),
+                egui::CursorIcon::ResizeWest,
+            ),
+            (
+                Dir::East,
+                egui::Rect::from_min_max(egui::pos2(r - grip, t + grip), egui::pos2(r, b - grip)),
+                egui::CursorIcon::ResizeEast,
+            ),
+            (
+                Dir::NorthWest,
+                egui::Rect::from_min_max(egui::pos2(l, t), egui::pos2(l + grip, t + grip)),
+                egui::CursorIcon::ResizeNorthWest,
+            ),
+            (
+                Dir::NorthEast,
+                egui::Rect::from_min_max(egui::pos2(r - grip, t), egui::pos2(r, t + grip)),
+                egui::CursorIcon::ResizeNorthEast,
+            ),
+            (
+                Dir::SouthWest,
+                egui::Rect::from_min_max(egui::pos2(l, b - grip), egui::pos2(l + grip, b)),
+                egui::CursorIcon::ResizeSouthWest,
+            ),
+            (
+                Dir::SouthEast,
+                egui::Rect::from_min_max(egui::pos2(r - grip, b - grip), egui::pos2(r, b)),
+                egui::CursorIcon::ResizeSouthEast,
+            ),
+        ];
+        for (index, (direction, strip, cursor)) in strips.into_iter().enumerate() {
+            let response = ui.interact(
+                strip,
+                egui::Id::new(("noctis_resize", index)),
+                egui::Sense::drag(),
+            );
+            if response.drag_started() {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+            }
+            response.on_hover_cursor(cursor);
         }
     }
 
@@ -1930,6 +2007,10 @@ impl AppDriver for EditorDriver {
                 );
                 self.viewport_interaction(ui, rect, &response);
             });
+
+        // The resize grips go on top of everything, so the outermost pixels
+        // resize the window even over the title bar's move-drag.
+        self.resize_handles(ui);
 
         // Flush any transform edit made this frame (a gizmo drag, an inspector
         // field) into the derived world transforms the renderer draws from, so

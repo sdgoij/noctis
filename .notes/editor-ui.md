@@ -525,7 +525,10 @@ Resolved before implementation:
   keeps the native chrome on macOS. `crates/platform` now applies the frame's
   `ViewportCommand`s with `egui_winit::process_viewport_commands` (egui-winit's own
   `handle_platform_output` does not — eframe normally does), and presets the
-  window's `viewport_info`.
+  window's `viewport_info`. With the OS chrome hidden there is no resize border,
+  so the editor draws thin **edge grips** that send `ViewportCommand::BeginResize`
+  (the host maps it to the platform), and the maximize button switches to a
+  *restore* glyph (`🗗`) once maximized.
 - **P4 shipped.** `extension::Panel` carries a stable `id`
   (`"{extension_id}:{title}"`); the JS and WASM hosts stamp it, and wasm `load`
   takes the owning extension id. A panel is a `View::Extension { id, title }` that
