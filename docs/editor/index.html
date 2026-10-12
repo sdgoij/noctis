@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Noctis Editor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d10;
+        overflow: hidden;
+      }
+      /* The editor is a whole window, not a 16:9 embed: fill the page. */
+      #noctis-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        background: #000;
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The Noctis browser **editor** host page. Build the wasm with the `editor`
+      feature, then serve this directory over HTTP (a `file://` page cannot fetch
+      the bundle) with the generated wasm-bindgen files and a project bundle:
+
+        cargo build -p web --features editor --target wasm32-unknown-unknown --release
+        wasm-bindgen --target web --out-dir crates/web/web \
+          target/wasm32-unknown-unknown/release/web.wasm
+        noctis pack --project examples/showcase --out crates/web/web/game.zip
+        # then serve crates/web/web/ and open editor.html
+
+      `?bundle=<url>` overrides the bundle to load. The editor draws its docks, title
+      bar and status bar over the canvas. The project lives in OPFS: the first run
+      unpacks the bundle into it, and Save writes it back.
+    -->
+    <canvas id="noctis-canvas" tabindex="0"></canvas>
+
+    <!--
+      Slag (the script engine) compiled to wasm imports its clock from a module
+      named `env` (`slag_host_now_ms`, `slag_host_now_monotonic_ms`). wasm-bindgen
+      emits a bare `import * as … from "env"`, which a browser cannot resolve
+      without a mapping, so this import map points `env` at the shim below.
+    -->
+    <script type="importmap">
+      { "imports": { "env": "./env.js" } }
+    </script>
+
+    <script type="module">
+      import init, { start_editor } from "./web.js";
+
+      const bundle =
+        new URLSearchParams(location.search).get("bundle") ?? "./game.zip";
+      const canvas = document.getElementById("noctis-canvas");
+
+      // Keyboard events go to the focused element; focus the canvas on click so
+      // the editor receives them.
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      await init();
+      // `start_editor(canvasId, bundleUrl)` runs the editor; it never returns.
+      start_editor(canvas.id, bundle);
+    </script>
+  </body>
+</html>
