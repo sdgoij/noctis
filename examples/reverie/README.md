@@ -1,10 +1,15 @@
-# Reverie Amidst Ruins — Noctis port
+# Reverie Amidst Ruins — Noctis plugin port
 
 A port of Dave Eddy's terminal platformer
 [**reverie-amidst-ruins**](https://github.com/bahamas10/reverie-amidst-ruins)
-(MIT) to a Noctis window. The original renders each frame to an RGBA image and
-ships it to the terminal over the Kitty graphics protocol; this version renders
-the same ASCII levels as flat, unlit quads on an orthographic camera.
+(MIT) to a Noctis window.
+
+This is a **project Rust** port: the project carries a `Cargo.toml` + `src/lib.rs`
+(a Noctis *plugin*), and the plugin runs the original game — vendored almost
+verbatim under `src/game/` — as its own software renderer. Every tick it draws the
+game to an RGBA image (the original's `render.rs`) and publishes it through
+`EngineContext::frame`; the window host blits that frame across the window and
+does **not** render the engine's scene.
 
 ## Run it
 
@@ -14,46 +19,35 @@ From the workspace root:
 cargo run -- run --project examples/reverie
 ```
 
-Controls: `A`/`D` or `←`/`→` move, `Space`/`W`/`↑` jump, `R` restarts the level.
+Controls (as the original): `A`/`D` or `←`/`→` move, `Space`/`W`/`↑` jump,
+`Enter` confirm, `R` restart, `1`/`3`/`4` effects/palette/debug, `2` screenshot,
+`m` mute, `8`/`9` volume, `Esc`/`Q` quit.
 
-## How it works
+## How the port maps
 
-A Noctis project is `noctis.toml` + `scenes/*.scene.json` + `scripts/*.js`, and
-this port keeps the original's shape: the **scene is the level's artwork**, and a
-**single script is the game loop**.
+| Original (Rust)                    | Here |
+| ---------------------------------- | ---- |
+| `level.rs`, `player.rs`, `camera.rs`, `color.rs`, `render.rs`, `stats.rs`, `screen.rs` | `src/game/*.rs` — **vendored nearly verbatim** (only module paths changed) |
+| `audio.rs`                          | `src/game/audio.rs` — reused; the plugin links `rodio` directly |
+| `main.rs` (the game loop)           | `src/game/mod.rs` — `Game::update` (logic) + `Game::render` (the frame) |
+| `input/*` (`crossterm` + `gilrs`)   | `src/game/input.rs` — folds the engine's keyboard state into the game's `Input` |
+| `terminal/*` (Kitty graphics)       | **deleted** — `ctx.frame` presents the pixels |
+| `args.rs`                           | replaced by `noctis.toml` |
 
-| Original (Rust)              | Here |
-| ---------------------------- | ---- |
-| `level.rs` (ASCII → grid)     | `tools/build_levels.py` bakes the grid into the scene *and* the script |
-| `render.rs` (tiles → pixels)  | ground runs as quads with the unlit `Ground`/`GroundTop` materials |
-| `player.rs` (tile collision)  | `scripts/levelN.js` — the same `approach`/`resolve_collision` math, ported to JS |
-| `camera.rs` (dead-zone follow)| `scripts/levelN.js` `followCamera` |
-| `screen.rs`/`main.rs`         | one scene per level; the goal calls `load_scene` |
-| `main.rs` HUD line            | a `Text` entity the script repositions and rewrites |
+So the collision math, the 4-colour palette swap, the parallax backgrounds, the
+sprite drop shadows, and the vignette/scanline post-process are all the
+original's own code — the port's job was to get its frames on screen.
 
-Coordinates and constants (tile 16, gravity 800, jump 300, max fall 450, …) are
-the original's; the script keeps the level's y-down tile space and flips to the
-engine's y-up world only when it places the player.
+The real assets are bundled: `assets/tiles/tileset.png`, `assets/backgrounds/*`,
+`assets/songs/*`, `assets/sfx/*`.
 
-**Everything blue here is data or generated code** — run the tools to rebuild it:
+## Not carried over
 
-```sh
-python tools/build_assets.py   # assets/models/palette.gltf (the unlit materials)
-python tools/build_levels.py   # scenes/*.scene.json and scripts/level*.js
-```
-
-The materials are `KHR_materials_unlit`, and the engine renders unlit quads with
-`Material::unlit` (added in the `feat(render): unlit materials and nearest
-sampling` commit) — the flat-shading path a 2D game needs.
-
-## Not ported yet
-
-- **Audio** — the original plays looping music per level and jump/coin/death
-  SFX. Scripts have no audio verb, so music would need an `AudioSource` entity
-  per scene and the SFX have no trigger today.
-- **Post-processing** — the vignette/scanlines are a full-screen CPU filter with
-  no engine equivalent.
-- **Title and end screens** — there are no `title`/`end` scenes yet.
-- **Backgrounds, palette randomise, screenshots, image scaling, gamepad** — the
-  levels currently clear to the palette's darkest colour; the tile art is flat
-  colours rather than the original tileset (no sprite atlas / palette lookup).
+- **Gamepad** — the engine's input model is keyboard/mouse only (winit), so the
+  original's `gilrs` path is dropped. (Would need `gilrs` in `platform`.)
+- **The HUD line** — the original printed `fps | coins | deaths` below the image;
+  a window has no such line, and the frame is only the game image. A HUD would be
+  a follow-up (drawn into the frame, or an overlay).
+- **Image scaling (`-`/`=`)** — the window scales the frame itself.
+- **`--level`, `--fps`, `--volume`, `--no-audio` CLI flags** — the game starts on
+  level 1 at 100 % volume; these would become manifest settings.

@@ -1,24 +1,22 @@
 # Reverie Amidst Ruins — a port of Dave Eddy's terminal platformer
 # (github.com/bahamas10/reverie-amidst-ruins, MIT) to a Noctis window.
 #
-# The original renders every frame to an RGBA image and ships it to the terminal
-# over the Kitty graphics protocol. This version renders the same ASCII levels
-# as unlit, flat-coloured quads on an orthographic camera, and plays in a window.
-#
-# Generated files (do not hand-edit): assets/models/palette.gltf,
-# scenes/*.scene.json, and scripts/level*.js — run the tools in tools/.
+# The project carries Rust: `Cargo.toml` + `src/lib.rs` is a plugin that runs the
+# original game — vendored almost verbatim under `src/game/` — and publishes each
+# frame it renders, which the window presents in place of the scene. The scene
+# below is therefore a placeholder; the plugin draws every pixel.
 
 [project]
 name = "Reverie Amidst Ruins"
-version = "0.1.0"
+version = "0.2.0"
 description = "A 2D platformer, ported from the terminal to a Noctis window."
 
 [project.settings]
-default_scene = "scenes/level1.scene.json"
+# The plugin renders its own frame; the scene is only there to be loaded.
+default_scene = "scenes/main.scene.json"
 mode = "2d"
-# Only the player is script-driven (it integrates its own gravity), so this is
-# informational; the game's own GRAVITY (800 px/s^2) lives in the level scripts.
-gravity = [0.0, -800.0, 0.0]
+# The game integrates its own gravity, so the engine's is zero.
+gravity = [0.0, 0.0, 0.0]
 
 [window]
 title = "Reverie Amidst Ruins"
@@ -26,22 +24,13 @@ width = 720
 height = 540
 
 [render]
-# Flat 2D art: no HDR tonemapping, no MSAA.
 hdr = false
 sample_count = 1
 
 [[scene]]
-path = "scenes/level1.scene.json"
-name = "Level 1"
-
-[[scene]]
-path = "scenes/level2.scene.json"
-name = "Level 2"
-
-[[scene]]
-path = "scenes/level3.scene.json"
-name = "Level 3"
+path = "scenes/main.scene.json"
+name = "Reverie"
 
 [[build]]
 name = "reverie"
-scene = "scenes/level1.scene.json"
+scene = "scenes/main.scene.json"

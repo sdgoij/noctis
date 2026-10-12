@@ -47,7 +47,9 @@ pub mod prelude {
         RigidBody, Script, Text, TextAnchor, Visible,
     };
     pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
-    pub use crate::resources::{ActionMap, Events, InputState, Key, MouseButton, MouseState, Time};
+    pub use crate::resources::{
+        ActionMap, Events, FrameImage, InputState, Key, MouseButton, MouseState, Time,
+    };
     pub use crate::scene::{
         Prefab, Scene, SceneDesc, SceneError, SceneMode, children_of, instantiate_into,
         propagate_transforms, set_parent,

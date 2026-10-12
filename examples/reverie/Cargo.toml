@@ -1,0 +1,28 @@
+# Reverie Amidst Ruins — a Noctis project whose gameplay and rendering are Rust.
+#
+# The project root is the plugin library crate: a `Cargo.toml` here is what makes
+# `noctis` treat the project as carrying Rust, and `src/lib.rs` exports the plugin
+# with `#[noctis::plugin]`. The plugin runs the original game (vendored under
+# `src/game/`, from bahamas10/reverie-amidst-ruins, MIT) and publishes each frame
+# it renders, which the window presents in place of the scene. `noctis` is
+# depended on without the `editor` feature — a shipped game must not carry it.
+
+[package]
+name = "reverie"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+noctis = { path = "../../crates/noctis", default-features = false }
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.9"
+rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis", "wav"] }
+log = "0.4"
+
+# Detach from the engine workspace. The project builds in its own target directory
+# here, and is compiled into the generated `.noctis/` tool and client crates.
+[workspace]

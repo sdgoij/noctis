@@ -1,0 +1,20 @@
+{
+  "name": "Reverie",
+  "format_version": 1,
+  "mode": "2d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Root",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "components": []
+    }
+  ]
+}
