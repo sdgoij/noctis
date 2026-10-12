@@ -1,0 +1,115 @@
+# Continuous integration: run the tests and build on every push, and publish a
+# release with per-platform binaries when a `v*` tag is pushed.
+#
+# The toolchain mirrors `rust-toolchain.toml` (channel 1.98.0, rustfmt + clippy).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Native build dependencies (reachable only transitively, via `cpal`/ALSA
+      # and `winit`).
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+  release:
+    name: Release (${{ matrix.platform }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          # GitHub's arm64 hosted runner (public repositories). If it is not
+          # available to this repository, swap this entry for a cross build.
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      # Builds both binaries: the `noctis` tool and the `noctis-game` client.
+      - name: Build (release)
+        run: cargo build --workspace --release --locked
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/release/noctis target/release/noctis-game dist/
+          tar -C dist -czf noctis-${{ matrix.platform }}.tar.gz noctis noctis-game
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/noctis.exe dist/
+          Copy-Item target/release/noctis-game.exe dist/
+          Compress-Archive -Path dist/noctis.exe, dist/noctis-game.exe -DestinationPath noctis-${{ matrix.platform }}.zip
+
+      - name: Upload to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: noctis-${{ matrix.platform }}.*
