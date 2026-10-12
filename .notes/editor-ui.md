@@ -1,13 +1,14 @@
 # The editor UI: title bar, docks, and a status bar
 
-> **Status:** design proposal; **P1–P4 are implemented** (the layout model, the
-> status bar, the title bar, and extension panels in docks) — see *Status* at the
-> end. P5 is not. It records the *decisions* and an *implementation plan* for
-> reshaping `noctis editor`'s windowed layout into a Zed-style dock system. Before
-> P1 the layout was fixed: `crates/editor/src/window.rs` drew a menu strip, an
-> outliner panel, an inspector panel, a central viewport, and floating
-> `egui::Window`s for the console and the Extensions screen, gated by four booleans
-> (`show_outliner`, `show_inspector`, `show_console`, `show_extensions`).
+> **Status:** design proposal; **P1–P5 are implemented** (the layout model, the
+> status bar, the title bar, extension panels in docks, and the polish) — see
+> *Status* at the end. Tab *drag* between docks remains a follow-up. It records the
+> *decisions* and an *implementation plan* for reshaping `noctis editor`'s windowed
+> layout into a Zed-style dock system. Before P1 the layout was fixed:
+> `crates/editor/src/window.rs` drew a menu strip, an outliner panel, an inspector
+> panel, a central viewport, and floating `egui::Window`s for the console and the
+> Extensions screen, gated by four booleans (`show_outliner`, `show_inspector`,
+> `show_console`, `show_extensions`).
 
 The inspiration is Zed's workspace: a custom title bar, resizable docks around a
 central pane, and a **status bar** whose buttons bring panels into view. We take
@@ -531,4 +532,10 @@ Resolved before implementation:
   opens in the bottom dock the first time it appears and is dropped if its
   extension goes away; `draw_panels` runs once per frame (at the top of `ui`) and
   the docks render the panels it produced. The floating extension windows are gone.
-- **P5 open:** the polish (send-to-dock menu, persistence, tab drag).
+- **P5 shipped.** A dock tab's right-click menu offers "Send to ▸ `<dock>`",
+  moving a view between docks. The layout — each dock's views, the active tab, its
+  size, and the panel ids already seen — persists to `editor-layout.json` beside
+  the extension config (`extensions::config_dir()`), loaded at startup and written
+  when it changes.
+- **Tab drag between docks remains a follow-up** — the "Send to" menu is the
+  first-cut way to move a view.

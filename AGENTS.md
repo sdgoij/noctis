@@ -47,6 +47,12 @@ Running the engine in a browser (WebAssembly) — the generic game client first,
 JS-only scripting — is designed in [`.notes/web.md`](.notes/web.md). **Nothing is
 built yet.**
 
+The editor's windowed UI — a custom title bar, three docks (left, right, bottom)
+around a central viewport, and a status bar that opens and closes dockable views
+(the outliner, inspector, console, Extensions screen, and every extension panel)
+— is designed in [`.notes/editor-ui.md`](.notes/editor-ui.md). It is shipped; tab
+drag between docks is the one follow-up.
+
 ## Commands
 
 ```sh

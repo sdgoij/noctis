@@ -625,17 +625,34 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
         .clone()
         .or_else(|| project_controls_path(project.as_ref()));
 
+    // The dock layout persists next to the extension config (the noctis config
+    // dir), so the window is the same on the next launch.
+    let layout_path = extensions::config_dir().join("editor-layout.json");
+
     match controls {
         Some(path) => {
             let controls = crate::CameraControls::load(&path)
                 .map_err(|e| CliError::Message(format!("failed to load controls {path:?}: {e}")))?;
             crate::window::run_with_controls(
-                editor, config, controls, scene_path, project, attached,
+                editor,
+                config,
+                controls,
+                scene_path,
+                project,
+                attached,
+                Some(layout_path),
             )
             .map_err(|e| CliError::Message(e.to_string()))
         }
-        None => crate::window::run(editor, config, scene_path, project, attached)
-            .map_err(|e| CliError::Message(e.to_string())),
+        None => crate::window::run(
+            editor,
+            config,
+            scene_path,
+            project,
+            attached,
+            Some(layout_path),
+        )
+        .map_err(|e| CliError::Message(e.to_string())),
     }
 }
 

@@ -97,7 +97,7 @@ enum Dock {
 }
 
 /// One dockable UI panel: the unit a dock hosts and the menu toggles.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum View {
     /// The scene hierarchy.
     Outliner,
@@ -200,20 +200,40 @@ impl View {
 }
 
 /// A dock's hosted views and the active tab.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct DockState {
     /// The views shown, in tab order. Empty means the dock is hidden.
     open: Vec<View>,
     /// The index of the active tab.
     active: usize,
+    /// The dock's size in points, remembered so it is restored next run (`0.0`
+    /// means "use the per-dock default").
+    #[serde(default)]
+    size: f32,
+}
+
+impl DockState {
+    /// The dock's remembered size, or `default` when it has none yet.
+    fn size_or(&self, default: f32) -> f32 {
+        if self.size > 0.0 { self.size } else { default }
+    }
 }
 
 /// Which views sit in which dock.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Layout {
     left: DockState,
     right: DockState,
     bottom: DockState,
+}
+
+/// The persisted layout file: the docks plus the panel ids already seen, so a
+/// closed extension panel stays closed across runs.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct SavedLayout {
+    layout: Layout,
+    #[serde(default)]
+    seen: Vec<String>,
 }
 
 impl Layout {
@@ -224,10 +244,12 @@ impl Layout {
             left: DockState {
                 open: vec![View::Outliner],
                 active: 0,
+                ..DockState::default()
             },
             right: DockState {
                 open: vec![View::Inspector],
                 active: 0,
+                ..DockState::default()
             },
             bottom: DockState::default(),
         }
@@ -277,6 +299,22 @@ impl Layout {
         let state = self.dock_mut(view.default_dock());
         if !state.open.contains(&view) {
             state.open.push(view);
+            state.active = state.open.len() - 1;
+        }
+    }
+
+    /// Move `view` to `target`, removing it from wherever it was and selecting it.
+    fn move_to(&mut self, view: &View, target: Dock) {
+        for dock in [Dock::Left, Dock::Right, Dock::Bottom] {
+            let state = self.dock_mut(dock);
+            if let Some(index) = state.open.iter().position(|open| open == view) {
+                state.open.remove(index);
+                state.active = state.active.min(state.open.len().saturating_sub(1));
+            }
+        }
+        let state = self.dock_mut(target);
+        if !state.open.contains(view) {
+            state.open.push(view.clone());
             state.active = state.open.len() - 1;
         }
     }
@@ -332,6 +370,10 @@ pub struct EditorDriver {
     extension_panels: Vec<ExtPanel>,
     /// Panel ids seen so far, so a panel opens in its dock only the first time.
     seen_panels: HashSet<String>,
+    /// Where the dock layout is saved, if persistence is on.
+    layout_path: Option<PathBuf>,
+    /// The layout JSON last written, so an unchanged layout is not rewritten.
+    saved_layout: Option<String>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -383,6 +425,8 @@ impl EditorDriver {
             console_log: Vec::new(),
             extension_panels: Vec::new(),
             seen_panels: HashSet::new(),
+            layout_path: None,
+            saved_layout: None,
         }
     }
 
@@ -397,6 +441,31 @@ impl EditorDriver {
     /// Set the current scene's file (absolute), for Save and the scene picker.
     pub fn with_scene_path(mut self, path: Option<PathBuf>) -> Self {
         self.scene_path = path;
+        self
+    }
+
+    /// Load the saved dock layout from `path` (absent or unreadable: the default)
+    /// and save to it as the layout changes.
+    pub fn with_layout_path(mut self, path: Option<PathBuf>) -> Self {
+        let Some(path) = path else {
+            return self;
+        };
+        // A missing file just means "no layout saved yet".
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            match serde_json::from_str::<SavedLayout>(&text) {
+                Ok(saved) => {
+                    self.layout = saved.layout;
+                    self.seen_panels = saved.seen.into_iter().collect();
+                    // Treat the loaded file as already written.
+                    self.saved_layout = Some(text);
+                }
+                Err(error) => eprintln!(
+                    "noctis editor: ignoring unreadable layout {}: {error}",
+                    path.display()
+                ),
+            }
+        }
+        self.layout_path = Some(path);
         self
     }
 
@@ -1148,6 +1217,36 @@ impl EditorDriver {
         });
     }
 
+    /// Write the dock layout to `layout_path` when it changed since the last write.
+    ///
+    /// Serializing the whole (small) layout and comparing it with the last save is
+    /// simpler than tracking every mutation, and covers a toggle, a move, an
+    /// auto-open, a drop, and a resize alike.
+    fn persist_layout(&mut self) {
+        let Some(path) = self.layout_path.as_ref() else {
+            return;
+        };
+        let mut seen: Vec<String> = self.seen_panels.iter().cloned().collect();
+        seen.sort();
+        let saved = SavedLayout {
+            layout: self.layout.clone(),
+            seen,
+        };
+        let Ok(json) = serde_json::to_string_pretty(&saved) else {
+            return;
+        };
+        if self.saved_layout.as_deref() == Some(json.as_str()) {
+            return;
+        }
+        match std::fs::write(path, &json) {
+            Ok(()) => self.saved_layout = Some(json),
+            Err(error) => eprintln!(
+                "noctis editor: failed to save layout to {}: {error}",
+                path.display()
+            ),
+        }
+    }
+
     /// The status bar: the view toggles on the left, read-only status on the right.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let views = self.views();
@@ -1187,17 +1286,18 @@ impl EditorDriver {
         if self.layout.dock(dock).open.is_empty() {
             return;
         }
+        let default = match dock {
+            Dock::Left | Dock::Right => 240.0,
+            Dock::Bottom => 200.0,
+        };
         let panel = match dock {
             Dock::Left => egui::Panel::left("noctis_dock_left"),
             Dock::Right => egui::Panel::right("noctis_dock_right"),
             Dock::Bottom => egui::Panel::bottom("noctis_dock_bottom"),
         }
         .resizable(true)
-        .default_size(match dock {
-            Dock::Left | Dock::Right => 240.0,
-            Dock::Bottom => 200.0,
-        });
-        panel.show(ui, |ui| {
+        .default_size(self.layout.dock(dock).size_or(default));
+        let response = panel.show(ui, |ui| {
             // Copy the open views out so the `&mut self` borrows inside
             // `dock_tabs` and `show_view` do not overlap `self.layout`.
             let views = self.layout.dock(dock).open.clone();
@@ -1207,21 +1307,48 @@ impl EditorDriver {
                 self.show_view(&view, ui);
             }
         });
+        // Remember the drawn size so it survives a restart.
+        let rect = response.response.rect;
+        let size = match dock {
+            Dock::Left | Dock::Right => rect.width(),
+            Dock::Bottom => rect.height(),
+        };
+        let state = self.layout.dock_mut(dock);
+        if (state.size - size).abs() > 1.0 {
+            state.size = size;
+        }
     }
 
-    /// A dock's tab strip: one selectable label per hosted view.
+    /// A dock's tab strip: one selectable label per hosted view, with a
+    /// "Send to ▸ <dock>" menu to move a view between docks.
     fn dock_tabs(&mut self, ui: &mut egui::Ui, dock: Dock, views: &[View], active: usize) {
-        let mut select = None;
+        let (mut select, mut send) = (None, None);
         ui.horizontal_wrapped(|ui| {
             for (index, view) in views.iter().enumerate() {
-                if ui.selectable_label(index == active, view.title()).clicked() {
+                let tab = ui.selectable_label(index == active, view.title());
+                if tab.clicked() {
                     select = Some(index);
                 }
+                tab.context_menu(|ui| {
+                    ui.label(view.title());
+                    ui.separator();
+                    for target in [Dock::Left, Dock::Right, Dock::Bottom] {
+                        if target != dock && ui.button(format!("Send to {target:?}")).clicked() {
+                            send = Some((index, target));
+                            ui.close();
+                        }
+                    }
+                });
             }
         });
         ui.separator();
         if let Some(index) = select {
             self.layout.dock_mut(dock).active = index;
+        }
+        if let Some((index, target)) = send
+            && let Some(view) = views.get(index).cloned()
+        {
+            self.layout.move_to(&view, target);
         }
     }
 
@@ -1809,6 +1936,10 @@ impl AppDriver for EditorDriver {
         // the frame we are about to present is already up to date.
         self.editor.scene_mut().update_transforms();
 
+        // Persist any dock change (a toggle, a move, a resize) before the frame
+        // ends, so a restart restores the same layout.
+        self.persist_layout();
+
         // The driver owns its input state, and this is the end of its frame: drop
         // the per-frame mouse deltas/buttons and key edges now that `update` and
         // this UI have consumed them. Held keys survive, so flying keeps working.
@@ -1907,10 +2038,12 @@ pub fn run(
     scene_path: Option<PathBuf>,
     project: Option<Project>,
     extensions: Option<AttachedExtensions>,
+    layout_path: Option<PathBuf>,
 ) -> Result<(), PlatformError> {
     let driver = EditorDriver::new(editor)
         .with_project(project)
-        .with_scene_path(scene_path);
+        .with_scene_path(scene_path)
+        .with_layout_path(layout_path);
     platform::run(attach(driver, extensions), config)
 }
 
@@ -1922,10 +2055,12 @@ pub fn run_with_controls(
     scene_path: Option<PathBuf>,
     project: Option<Project>,
     extensions: Option<AttachedExtensions>,
+    layout_path: Option<PathBuf>,
 ) -> Result<(), PlatformError> {
     let mut driver = EditorDriver::new(editor)
         .with_project(project)
-        .with_scene_path(scene_path);
+        .with_scene_path(scene_path)
+        .with_layout_path(layout_path);
     *driver.camera_controls_mut() = controls;
     platform::run(attach(driver, extensions), config)
 }
@@ -2399,5 +2534,37 @@ mod tests {
         ));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_layout_moves_between_docks_and_persists() {
+        // A view moves to another dock, emptying the one it left.
+        let mut layout = Layout::default();
+        layout.open(View::Outliner);
+        layout.move_to(&View::Outliner, Dock::Bottom);
+        assert!(layout.left.open.is_empty());
+        assert_eq!(layout.bottom.open, vec![View::Outliner]);
+
+        // A layout round-trips through the saved file.
+        let dir = std::env::temp_dir().join(format!("noctis-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("editor-layout.json");
+
+        let mut driver = EditorDriver::new(Editor::new()).with_layout_path(Some(path.clone()));
+        driver.layout.open(View::Console);
+        driver.persist_layout();
+        assert!(path.is_file(), "the layout was written");
+
+        // A fresh driver loads the same layout back.
+        let reloaded = EditorDriver::new(Editor::new()).with_layout_path(Some(path.clone()));
+        assert!(reloaded.layout.is_open(&View::Outliner));
+        assert!(reloaded.layout.is_open(&View::Inspector));
+        assert!(
+            reloaded.layout.is_open(&View::Console),
+            "the opened view persisted"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
