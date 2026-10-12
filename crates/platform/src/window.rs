@@ -232,6 +232,17 @@ impl<D: AppDriver> WindowHost<D> {
         let camera = self.driver.camera();
         let egui = self.egui.take();
 
+        // Reconcile the renderer with the window's current size before the frame.
+        // The size can change *mid-frame* — a viewport command (maximise) resizes
+        // the window while `driver.ui` runs — so the render target must match the
+        // size egui measures now, or wgpu rejects egui's scissor as out of bounds.
+        // Measuring once here keeps the descriptor, the paint jobs and the target
+        // in agreement for the whole frame. `resize` is a no-op when unchanged.
+        let size = window.inner_size();
+        if let Err(err) = renderer.resize(size.width, size.height) {
+            log::warn!("resize failed: {err}");
+        }
+
         if let Some(mut egui) = egui {
             let raw_input = egui.state.take_egui_input(&window);
             let mut output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
@@ -258,7 +269,6 @@ impl<D: AppDriver> WindowHost<D> {
 
             let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
 
-            let size = window.inner_size();
             let screen_descriptor = egui_wgpu::ScreenDescriptor {
                 size_in_pixels: [size.width.max(1), size.height.max(1)],
                 pixels_per_point: output.pixels_per_point,
