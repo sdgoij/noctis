@@ -1,0 +1,122 @@
+# Publish the browser demo to GitHub Pages: build it on `main` and deploy `docs/`
+# as a Pages artifact. The tests gate the deploy, so a broken `main` never ships.
+#
+# The toolchain mirrors `rust-toolchain.toml` (channel 1.98.0). The `wasm-bindgen`
+# CLI must match the crate version `Cargo.lock` pins, so it is derived from the
+# lock (a hard-coded version would drift on the next bump) — the same rule the
+# `Justfile` header states.
+#
+# One-time setup: Settings → Pages → Build and deployment → Source → "GitHub
+# Actions". Nothing else; the artifact is what gets served.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# One deploy at a time; a newer push supersedes an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Native build dependencies (reachable only transitively, via `cpal`/ALSA
+      # and `winit`) — the same set `.github/workflows/ci.yml` installs.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # The CLI is a big build; keep the installed binary across runs, keyed on the
+      # lock so a `wasm-bindgen` bump reinstalls it. (Cargo's own "already
+      # installed" check reads `~/.cargo/.crates.toml`, which this cache does not
+      # carry, so the install below checks the binary's version itself.)
+      - name: Cache the wasm-bindgen CLI
+        uses: actions/cache@v4
+        with:
+          path: "~/.cargo/bin/wasm-bindgen"
+          key: wasm-bindgen-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install the pinned wasm-bindgen CLI
+        run: |
+          version="$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/[^0-9.]/, ""); print; exit}' Cargo.lock)"
+          installed="$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)"
+          if [ "$installed" = "$version" ]; then
+            echo "reusing the cached wasm-bindgen $version"
+          else
+            echo "installing wasm-bindgen-cli $version"
+            cargo install wasm-bindgen-cli --version "$version"
+          fi
+
+      # `noctis build --platform wasm` generates a crate per project under
+      # `.noctis/web/`, each with its own target dir (`.noctis/` is gitignored).
+      # Cache them, so the engine and editor are not rebuilt from scratch on every
+      # deploy; `restore-keys` lets a new commit reuse the previous build.
+      - name: Cache the generated web crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            examples/showcase/.noctis/web/target
+            examples/rustball/.noctis/web/target
+          key: noctis-web-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            noctis-web-${{ hashFiles('Cargo.lock') }}-
+
+      # The workspace gates (fmt, clippy, tests). `ci.yml` also runs these on
+      # every push; they are repeated here so a red `main` cannot deploy.
+      - name: Test
+        run: just test
+
+      # Builds both halves of the demo into `docs/`: the client demos (one wasm
+      # module dispatching between the projects) and the browser editor.
+      - name: Publish the demos
+        run: just publish-wasm
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
