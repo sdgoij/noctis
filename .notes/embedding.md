@@ -108,6 +108,13 @@ builds the client on demand today. The generated crate carries an empty `[worksp
 table and path dependencies on the plugin (the project root) and on `crates/noctis`,
 so it compiles the plugin's component types in.
 
+A `run` wants a playable frame rate, so its tool is built **optimized** whenever
+`noctis` itself is a release build (`cargo run -r -- run …`, an installed release
+binary) or `--release` is passed; the plugin is a separate cargo workspace, so
+without this its debug build would run the game at ~25 fps. `--debug` opts back
+into the fast-to-build debug tool. `noctis editor` stays a debug build (fast
+iteration), and `noctis build` follows its `[build] profile` as before.
+
 **How a plugin project builds.** `noctis build --project <game>` (dispatched to the
 plugin-aware tool) resolves the scene, bundles the referenced files — including a
 registered custom component's asset references, from the plugin's registry — and

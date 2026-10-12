@@ -56,11 +56,7 @@ pub fn plugin_project(args: &[String]) -> Option<Project> {
 /// child's exit code. `args` is the tool's whole command line (including the
 /// subcommand), since the generated binary dispatches it the same way.
 pub fn delegate(project: &Project, args: &[String]) -> Result<i32, String> {
-    // `--release` asks for an optimized plugin tool. It only applies to `run`
-    // (an interactive game); the tool itself accepts the flag as a no-op.
-    let release = args.first().map(String::as_str) == Some("run")
-        && args.iter().any(|arg| arg == "--release");
-    let profile = if release {
+    let profile = if wants_release(args) {
         Profile::Release
     } else {
         Profile::Dev
@@ -71,6 +67,23 @@ pub fn delegate(project: &Project, args: &[String]) -> Result<i32, String> {
         .status()
         .map_err(|error| format!("could not run the project's plugin tool: {error}"))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Whether `run` should build its plugin tool optimized.
+///
+/// `run` plays the game, and a game wants an optimized plugin, so it is built in
+/// release when the outer binary is already optimized — `cargo run -r -- run …`
+/// releases `noctis`, and the plugin follows — or when `--release` is passed.
+/// `--debug` opts back into the fast-to-build debug tool. `editor` and `build`
+/// keep their own defaults (debug for iteration, release for shipping).
+fn wants_release(args: &[String]) -> bool {
+    if args.first().map(String::as_str) != Some("run") {
+        return false;
+    }
+    if args.iter().any(|arg| arg == "--debug") {
+        return false;
+    }
+    args.iter().any(|arg| arg == "--release") || !cfg!(debug_assertions)
 }
 
 /// Generate and build the project's plugin-aware tool, returning the binary path.
@@ -1008,5 +1021,22 @@ mod tests {
         assert!(plugin_project(&args(&["run"])).is_none());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_run_prefers_a_release_plugin_tool() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        // An explicit `--release` asks for it, and `--debug` refuses it.
+        assert!(wants_release(&args(&["run", "--release"])));
+        assert!(!wants_release(&args(&["run", "--debug"])));
+        assert!(!wants_release(&args(&["run", "--release", "--debug"])));
+
+        // Other subcommands keep their own defaults.
+        assert!(!wants_release(&args(&["editor", "--release"])));
+        assert!(!wants_release(&args(&["build", "--release"])));
+
+        // With no flag, it follows the profile `noctis` itself was built with.
+        assert_eq!(wants_release(&args(&["run"])), !cfg!(debug_assertions));
     }
 }
