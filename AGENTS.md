@@ -1,8 +1,9 @@
 # AGENTS.md — Noctis engine development guide
 
-Noctis is a production-grade 3D game engine for Windows/macOS/Linux: a Rust core
-(edition 2024, Rust 1.98) with a wgpu renderer, rapier3d physics, rodio audio,
-and JavaScript scripting via the Slag engine. **No hacks, no shortcuts.**
+Noctis is a 3D game engine for Windows and Linux (macOS is untested and
+unsupported): a Rust core (edition 2024, Rust 1.98) with a wgpu renderer,
+rapier3d physics, rodio audio, and JavaScript scripting via the Slag engine.
+**No hacks, no shortcuts.**
 
 ## Workspace layout
 

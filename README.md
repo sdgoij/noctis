@@ -1,72 +1,181 @@
 # Noctis
 
-A production-grade, simple and straight-forward 3D game engine for Windows,
-macOS and Linux. Rust core, [wgpu](https://wgpu.rs) renderer, rapier physics,
-rodio audio, and JavaScript scripting via [Slag](https://github.com/sdgoij/slag).
+A 3D game engine for Windows and Linux. A [Rust](https://www.rust-lang.org)
+core with a [wgpu](https://wgpu.rs) renderer, [rapier](https://rapier.rs) physics,
+[rodio](https://github.com/RustAudio/rodio) audio, and scripting via the
+[Slag](https://github.com/sdgoij/slag) engine (JavaScript and WebAssembly). It
+ships a live editor, a project model, and a build that exports a self-contained
+game — or runs it in the browser.
 
-See [`spec.md`](spec.md) for the design goals, [`.notes/project.md`](.notes/project.md)
-for the project model, [`.notes/core-api.md`](.notes/core-api.md) for the frozen
-`math`/`ecs` interface, and [`AGENTS.md`](AGENTS.md) for how to work in this
-repository.
+> **⚠ Early development — expect breakage.**
+> Noctis is **not ready for production**. The APIs, the scene format and the CLI
+> change between commits without notice, there are rough edges everywhere (see
+> [Status](#status)), and nothing here is a stability promise. It is developed in
+> the open; treat it as a moving target and pin to a commit if you build on it.
 
-## Crates
+**Platforms.** Windows and Linux are supported. macOS is **not supported**: it is
+untested, and a macOS binary needs Apple's SDK to link, so one cannot be built
+from the maintainer's Linux toolchain.
 
-| Crate | Role |
-|---|---|
-| `math` | Vectors/matrices (glm), quaternions, transforms, bounds. |
-| `ecs` | ECS, components, scenes, assets, app loop. |
-| `render` | PBR renderer: glTF, IBL, shadows, SSAO, HDR tonemapping, gizmos, text. |
-| `physics` | rapier3d integration. |
-| `audio` | rodio playback + 3D spatialization + file decoding. |
-| `script` | Script runtime + engine API (JavaScript/WebAssembly via Slag). |
-| `testscene` | The all-features scene used for testing. |
-| `project` | The project model: `noctis.toml`, asset paths, import, build. |
-| `editor` | Editor library + AI-controllable command API (the `noctis editor` command). |
-| `runtime` | Game loop, build/export, and the stripped `noctis-game` binary. |
-| `platform` | Window + winit event loop + egui overlay; presents a live viewport. |
-| `noctis` | The multicall `noctis` tool and the embedding facade (`noctis::prelude`). |
+![The Noctis editor: an outliner and inspector over a live viewport, editing the showcase scene](noctis.png)
 
-## Quick start
+## What is Noctis?
+
+Noctis is a batteries-included engine for making small 3D games and tools, built
+around three ideas:
+
+- **A small, explicit core.** Everything is an ECS entity and a component. The
+  engine's own `math` and `ecs` crates are a frozen contract
+  ([`.notes/core-api.md`](.notes/core-api.md)) the rest is built on.
+- **A real editor, not a toy.** The editor is a live viewport with an outliner,
+  an inspector, click-to-select picking, a transform gizmo, undo/redo, scene
+  save and switching, asset import, and an AI-controllable command API. It can
+  also run **headless** to build scenes from a JSON command batch in CI.
+- **Scripting and Rust, side by side.** Gameplay can be JavaScript, native
+  WebAssembly, or Rust compiled into the game — a project can mix them. The
+  editor itself is extended the same way (JavaScript/WebAssembly extensions).
+
+It is a general engine (rendering, physics, audio, text, animation via glTF,
+image-based lighting, soft shadows, SSAO, HDR tonemapping) with a coherent
+project model, rather than a framework of unconnected parts.
+
+## Features
+
+- **Renderer** — physically-based materials (glTF), image-based lighting from an
+  `.hdr` environment, soft shadows, SSAO, HDR tonemapping, MSAA, billboarded
+  in-world text, and an editor gizmo pass.
+- **Physics** — [rapier3d](https://rapier.rs) bodies, colliders, sensors, and
+  kinematic characters; scripts can drive bodies and query grounding/overlaps.
+- **Audio** — [rodio](https://github.com/RustAudio/rodio) playback with 3D
+  spatialization, and a WebAudio backend on `wasm32`.
+- **Scripting** — JavaScript and native WebAssembly through Slag, with component
+  reflection, scene switching, portals, and a documented import ABI.
+- **Projects** — a `noctis.toml` manifest, canonical asset paths, automatic
+  import (glTF, textures, HDR, audio, fonts, scripts), prefabs, and build targets.
+- **Editor** — outliner, inspector (every component, with asset pickers and an
+  in-place material editor), gizmo, picking, undo/redo, prefab library, scene
+  picker, and extension panels.
+- **Build & export** — a self-contained game folder, or a browser build
+  (one wasm client that can dispatch between several projects).
+- **Headless everywhere** — the whole engine runs without a GPU or a device, so
+  `cargo test --workspace` is CI-friendly.
+
+## Getting started
+
+Noctis is built from source; there is no binary release yet. You need a recent
+Rust toolchain — the repository pins one in [`rust-toolchain.toml`](rust-toolchain.toml)
+(edition 2024, Rust 1.98) and `rustup` will pick it up automatically.
 
 ```sh
-cargo test --workspace                    # run everything
-cargo run -- editor                       # open the editor (a window by default)
-cargo run -- editor --testscene           # open the all-features test scene
-cargo run -- run --demo                   # run the built-in demo in a window
-cargo run -- run --headless --frames 30   # run headlessly and print a summary
-cargo run -- --help                       # every command
+git clone https://github.com/sdgoij/noctis
+cd noctis
+
+# Build everything, including the game client.
+cargo build --workspace
+
+# Open the editor on the all-features test scene.
+cargo run -- editor --testscene
+
+# Open the example project (imports its assets and prefabs).
+cargo run -- editor --project examples/showcase
 ```
 
-[`examples/showcase`](examples/showcase) is a complete example project — scenes,
-prefabs, scripts, and generated assets exercising every engine feature. See its
-[README](examples/showcase/README.md).
-
-[`examples/rustball`](examples/rustball) is a small project whose gameplay is
-**Rust** rather than a script: a Rust plugin (a `Cargo.toml` at the project root,
-marked `#[noctis::plugin]`) with a custom component and systems (see
-[`.notes/embedding.md`](.notes/embedding.md) and its
-[README](examples/rustball/README.md)).
-
-The editor is **extendible**: JavaScript and WebAssembly extensions add verbs,
-panels and automation without a rebuild (see [`.notes/extensions.md`](.notes/extensions.md),
-[`examples/extensions`](examples/extensions), and
-[`examples/rustball`](examples/rustball) for the compiled Rust plugin seam).
-
-Scripting is JavaScript, executed by the Slag engine, which is always built — a
-project's scripts run out of the box. The example project's JavaScript is covered
-directly:
+Play the example project:
 
 ```sh
-cargo test -p script --test showcase_scripts
+cargo run -- run --project examples/showcase      # windowed
+cargo run -- run --project examples/showcase --headless --frames 60
 ```
 
-## Usage
+Run the tests:
 
-### What a project is
+```sh
+cargo test --workspace
+```
+
+The engine also ships a [`Justfile`](Justfile) that keeps the common commands in
+one place:
+
+```sh
+just build          # cargo build --workspace
+just check          # fmt + clippy over the whole workspace
+just test           # check, then test
+just run examples/showcase
+just publish-wasm   # build the browser demos into docs/ for GitHub Pages
+```
+
+See the [command reference](#command-reference) for the full `noctis` CLI, and
+[`AGENTS.md`](AGENTS.md) for how the repository is organised and tested.
+
+## Scripting
+
+Gameplay lives in scripts and Rust. Which you reach for is a project decision —
+the three options interoperate.
+
+### JavaScript (default)
+
+Scripts are JavaScript, run by the embedded [Slag](https://github.com/sdgoij/slag)
+engine, which is always built. Drop a `.js` file in a project's `scripts/` and
+attach it: no build step, and the dev client hot-reloads an edited script.
+
+```js
+function on_start(entity, dt) {}   // once, when the script first runs
+function on_update(entity, dt) {}  // every frame
+function on_destroy(entity, dt) {} // when the entity is removed
+
+function on_update(entity, dt) {
+  const p = get_position(entity);           // arrays, not strings
+  translate(entity, 0, Math.sin(time_elapsed()) * dt, 0);
+  if (key_down("Space")) { add_velocity(entity, 0, 5.0, 0); }
+}
+```
+
+The API covers transforms, spawning and destroying, name lookup, key/pointer
+input, driving dynamic bodies, physics reads, component reflection
+(`get_component`/`set_component` by name — a Rust custom component or a built-in),
+prefabs, and scene switching/portals. See
+[`examples/showcase/README.md`](examples/showcase/README.md).
+
+### Native WebAssembly
+
+A `.wasm` module is a first-class script alongside a `.js` one. It imports the
+engine API from a module named `noctis` (transforms read/write, spawn, reflection
+over linear memory, and so on) and exports `on_start`/`on_update`/`on_destroy`;
+the import ABI is documented in
+[`crates/script/src/wasm_host.rs`](crates/script/src/wasm_host.rs). Register one
+with `noctis run --wasm <name>=<path>`, or reference it by path like any script
+asset.
+
+> Note: compiling a `.wasm` script by hand is possible but not yet pleasant — a
+> first-class toolchain story is on the roadmap.
+
+### Rust (a project plugin)
+
+When gameplay wants Rust's speed or the engine's own types, a project can carry a
+Rust plugin: put a `Cargo.toml` at the project root and mark the plugin **type**
+`#[noctis::plugin]`, which exports the `noctis_plugin` symbol the tool links.
+Implementing `Plugin` for it registers the project's custom components and
+systems. `noctis run` and `noctis editor` generate and link a per-project tool;
+`noctis build` links it into the shipped client. See
+[`examples/rustball`](examples/rustball) for a worked example (a custom component,
+a fly-camera system, and a simulated ball) and
+[`.notes/embedding.md`](.notes/embedding.md) for the design.
+
+### Editor extensions
+
+The editor is extended with **JavaScript or WebAssembly extensions** — no
+rebuild. An extension is a directory with an `extension.json` and an
+`extension.js`/`extension.wasm`, discovered by `noctis editor`; it talks to the
+editor through a versioned `noctis` global with `on` (events), `command` (verbs),
+`edit` (an `EditorCommand` batch, one undo step), `editor`/`ui` (reads and
+panels). See [`examples/extensions`](examples/extensions) and
+[`.notes/extensions.md`](.notes/extensions.md).
+
+## Projects
 
 A **project** is a directory with a `noctis.toml` manifest. It owns one shared
-asset registry, zero or more scenes, prefabs, and scripts, and it defines the
-game's build targets. The full design is [`.notes/project.md`](.notes/project.md).
+asset registry, zero or more scenes, prefabs, and scripts, and defines the
+project's build targets. The full design is [`.notes/project.md`](.notes/project.md).
 
 ```
 mygame/
@@ -124,10 +233,9 @@ cargo run -- build --project mygame
 ```
 
 With `--project <dir>` the editor and the runtime import every asset file into one
-registry,
-make `--scene` project-relative, and use the project's `default_scene` when
-`--scene` is omitted. `--scene` on its own still works for a loose, self-contained
-scene file.
+registry, make `--scene` project-relative, and use the project's `default_scene`
+when `--scene` is omitted. `--scene` on its own still works for a loose,
+self-contained scene file.
 
 **Assets** are imported automatically on open: models (glTF), textures, HDR
 environments (`.hdr`), audio (WAV/Ogg/MP3), fonts, and scripts. A file that fails
@@ -149,12 +257,6 @@ environment = "assets/hdris/sky.hdr"   # equirectangular; omit for a neutral env
 sample_count = 4                       # MSAA samples (1 disables); clamped to the device
 ```
 
-The `.hdr` imports into the `hdr` store as linear floats, and the renderer
-precomputes the diffuse irradiance, the prefiltered specular chain, and the BRDF
-LUT on the CPU when the game (or the editor viewport) starts. Drop the setting and
-surfaces fall back to a neutral, fully-lit white environment — flat, and only
-useful as a placeholder.
-
 **Prefabs** live in the project as `prefabs/<name>.prefab.json`. The editor loads
 them on open (so `instantiate_prefab` resolves them) and `--save-prefabs` writes
 the edited library back.
@@ -168,60 +270,27 @@ scenes, and a scene may override it.
 ```sh
 # Create / open a 2D scene; in a 2D scene the editor adds an orthographic camera.
 cargo run -- editor --headless --scene menu.scene.json --mode 2d --out menu.scene.json
-
-# A project with mode = "2d" makes new scenes 2D automatically.
-cargo run -- editor --project mygame
 ```
 
 An existing scene keeps the mode stored in its file; `--mode` only applies when a
 scene is created from scratch.
 
-### In-world text (`Text`)
-
-A `Text` component draws billboarded glyphs at an entity's position, from a font
-asset. Fonts import automatically from `assets/fonts/*.ttf|*.otf`; the glyph
-atlas is baked on demand and cached in the renderer.
-
-In the editor: select an entity, **Add component → Text**, then edit the string,
-font, size (line height in world units), colour, anchor, and depth-test flag in
-the inspector.
-
-In a scene document it is:
-
-```json
-{
-  "type": "text",
-  "text": "Hello, Noctis",
-  "font": "assets/fonts/body.ttf",
-  "size": 1.0,
-  "color": [1.0, 0.9, 0.4, 1.0],
-  "anchor": "center",
-  "depth_test": true
-}
-```
-
-`anchor` is one of `center` (default), `top_left`/`top_center`/`top_right`,
-`middle_left`/`middle_right`, `bottom_left`/`bottom_center`/`bottom_right`.
-
-### Building and exporting (`noctis build`)
+### Building and exporting
 
 ```sh
-# Export the project's default scene (or --scene) to dist/release/.
+# Export the project's default scene (or --scene) to dist/.
 cargo run -- build --project mygame
 
-# Build a named [[build]] target (its scene and name are used).
+# Build a named [[build]] target, or override the output.
 cargo run -- build --project mygame --target release
-
-# Override the output or name.
 cargo run -- build --project mygame --out dist/demo --name demo
 ```
 
-A build writes a self-contained folder: the `noctis-game` client (built on
-demand when missing), `scene.json`, every asset the scene references (resolved
-transitively through the import index), a generated `noctis.toml` so the exported
-game imports its own assets, and `noctis-game.json`. Running the exported
-executable with no arguments loads its bundled scene. A `[[build]]` target looks
-like:
+A build writes a self-contained folder: the `noctis-game` client (built on demand
+when missing), `scene.json`, every asset the scene references (resolved
+transitively through the import index), a generated `noctis.toml`, and
+`noctis-game.json`. Running the exported executable with no arguments loads its
+bundled scene. A `[[build]]` target looks like:
 
 ```toml
 [[build]]
@@ -232,59 +301,22 @@ platform = "host"                 # "host" | "windows" | "macos" | "linux" | "wa
 profile = "release"               # "dev" | "release"
 ```
 
-The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md))
-and organises the output: `dist/release/` and `dist/dev/`, so the two never
-overwrite each other. A named `[[build]]` target gets its own folder under the
-profile (`dist/release/<target>`).
+The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md)):
+a `release` build bakes the project's `.js`/`.wasm` into the client (self-contained,
+no `scripts/` directory); a `dev` build runs the project in place and hot-reloads
+an edited script. Output is organised as `dist/release/` and `dist/dev/` so the
+two never overwrite each other.
 
 A **wasm** platform builds a browser client instead: a wasm module (with each
-project's Rust plugin linked in and chosen at boot) plus one `<name>.zip` bundle
-per project and a generated `index.html` (a `<select>` plus the wasm-bindgen glue),
-all in the output folder (see [`.notes/web.md`](.notes/web.md)). `--project` may
-repeat, so several projects share one client.
+project's Rust plugin linked in, chosen at boot) plus a `<name>.zip` per project
+and a generated `index.html`. `--project` may repeat, so several projects share
+one client (see [`.notes/web.md`](.notes/web.md)):
 
 ```sh
-cargo run -- build --project mygame --platform wasm --out dist/web
-
-# A demo site: one client that runs either project.
+# The demo site: one client that runs either project.
 cargo run -- build --platform wasm \
     --project examples/showcase --project examples/rustball --out docs
 ```
-
-The **profile** decides how scripts travel (see [`.notes/scripts.md`](.notes/scripts.md)):
-
-```sh
-# release (the default): the project's .js/.wasm scripts are baked into the
-# client, so dist carries no scripts/ directory.
-cargo run -- build --project mygame
-
-# dev: the client runs the project in place, reloading edited scripts.
-cargo run -- build --project mygame --profile dev
-```
-
-A **release** client embeds its scripts (self-contained, no `scripts/`); a **dev**
-client copies nothing and runs the project in place, so its scenes and scripts are
-the live project files and a saved `.js`/`.mjs`/`.wasm` is hot-reloaded. `noctis run`
-always uses the dev shape.
-
-An artifact's name is `--name`, else the target's `name`, else the project
-directory name. A project at `showcase/` builds a `showcase` artifact; a display
-name such as `Noctis Showcase` is used for the window title only and never becomes
-a file name.
-
-### Renaming assets (`noctis rename`)
-
-Renaming or moving an asset is a first-class operation: it moves the file and
-rewrites every reference to it (including `#fragment` sub-asset references) in the
-project's scenes and prefabs, so no scene is left with a broken path.
-
-```sh
-cargo run -- rename --project mygame \
-    assets/models/robot.glb assets/models/mech.glb
-```
-
-The rewrite is textual, so documents keep their exact formatting: a rename that
-touches no reference changes no bytes.
 
 ### Command reference
 
@@ -329,23 +361,74 @@ noctis rename [OPTIONS]     move an asset and rewrite its references
 --print-summary / --quiet
 ```
 
-## Pre-commit hook
+## Examples
 
-The `hooks/pre-commit` script blocks commits whose code fails
-`cargo fmt --check` or `cargo clippy --workspace --all-targets -- -D warnings`.
-Point Git at it once per clone:
+- [`examples/showcase`](examples/showcase) — a complete project: scenes, prefabs,
+  scripts, animation, portals, and a third-person controller. It exercises every
+  engine feature and is the end-to-end test spine.
+- [`examples/rustball`](examples/rustball) — a project whose gameplay is **Rust**
+  (a plugin type marked `#[noctis::plugin]`, with a custom component and systems),
+  not a script.
+- [`examples/extensions`](examples/extensions) — a worked editor extension (a
+  `scatter` verb, a panel, and an `EditorCommand` batch).
 
-```sh
-git config core.hooksPath hooks
-```
+## Contributing
+
+Contributions are welcome — **issues and pull requests are open**. This is an
+early-stage project, so a quick conversation in an issue before a large change is
+the surest way to land it.
+
+Before you open a PR:
+
+1. **Install the pre-commit hook** (once per clone). It blocks commits whose code
+   fails `cargo fmt --check` or `cargo clippy --workspace --all-targets -- -D warnings`:
+
+   ```sh
+   git config core.hooksPath hooks
+   ```
+
+2. **Make it green.** `cargo test --workspace` must pass (or `just test`, which
+   runs the checks first). GPU and audio tests skip gracefully when no device is
+   present, so this works on a headless machine.
+
+3. **Match the house style.** `#![forbid(unsafe_code)]` everywhere; modules carry
+   `//!` docs and public items `///` docs; no panics on runtime paths (prefer
+   `Result`/`Option`); and **tests are the product** — a module with logic has
+   tests, and the `testscene`/`showcase` spines must stay covered.
+
+4. **Write the commit message well.** A subject under ~50 characters, imperative,
+   with a `type:` prefix (`feat:`, `fix:`, `test:`, `docs:`, `perf:`, `build:`),
+   and a body that says *what* and *why* (grouped by crate where it helps). See
+   the git history for the shape.
+
+The full guide — workspace layout, the component checklist, and the testing
+doctrine — is [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
-All crates are implemented and tested. The renderer presents to a real window (a
-window is the default; `--headless` opts out), and the editor draws an
-[egui](https://github.com/emilk/egui)
-interface (outliner, inspector, viewport picking, transform gizmo) over a live
-viewport. The whole engine also runs headlessly for CI, so `cargo test
---workspace` passes without a GPU or an audio device (GPU and font tests skip
-gracefully when unavailable). Known limitations are tracked in
-[`AGENTS.md`](AGENTS.md).
+All crates are implemented and tested (`cargo test --workspace` is green), the
+renderer presents to a real window (a window is the default; `--headless` opts
+out), and the editor draws an [egui](https://github.com/emilk/egui) interface over
+a live viewport. It is nonetheless **early**: formats and APIs move, some systems
+are deliberately partial, and the limitation list lives in
+[`AGENTS.md`](AGENTS.md) ("Known limitations — tracked, not hidden") rather than
+being hidden here. Feedback and bug reports are exactly what this stage needs.
+
+## Further reading
+
+- [`spec.md`](spec.md) — the design goals.
+- [`AGENTS.md`](AGENTS.md) — the contributor guide: workspace layout, the
+  component checklist, the testing doctrine, and the known limitations.
+- [`.notes/`](.notes) — the design contracts (core API, project model, embedding,
+  web, extensions, scripting, portals), treated as part of the code.
+- [`examples/showcase`](examples/showcase) — the end-to-end example and test spine.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE.md) or
+[MIT license](LICENSE.md), at your option — both texts are in
+[`LICENSE.md`](LICENSE.md).
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you shall be dual licensed as above, without any
+additional terms or conditions.
