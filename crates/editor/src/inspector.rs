@@ -6,7 +6,7 @@
 //! `shadow_bias`, a collider's `rotation`, a body's damping) survive editing.
 //! Material assets are edited in place through the asset registry.
 
-use ecs::assets::{AlphaMode, AssetHandle, AssetId, Assets, Material};
+use ecs::assets::{AlphaMode, AssetHandle, AssetId, Assets, Material, TextureFilter};
 use ecs::components::{
     Active, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind, MeshRenderer,
     Projection, RigidBody, Script, Text, TextAnchor, Visible,
@@ -762,6 +762,17 @@ fn material_editor(editor: &mut Editor, handle: AssetHandle<Material>, ui: &mut 
             changed |= ui
                 .checkbox(&mut material.double_sided, "Double sided")
                 .changed();
+            changed |= ui.checkbox(&mut material.unlit, "Unlit").changed();
+            let filter = material.filter;
+            let mut want_filter = filter;
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut want_filter, TextureFilter::Linear, "Linear");
+                ui.selectable_value(&mut want_filter, TextureFilter::Nearest, "Nearest");
+            });
+            if want_filter != filter {
+                material.filter = want_filter;
+                changed = true;
+            }
 
             if let Some(id) = asset_combo(
                 ui,

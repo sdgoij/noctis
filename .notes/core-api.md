@@ -159,8 +159,8 @@ round-trip through a scene like a built-in. `World` already stores any
 - `Vertex { position: [f32;3], normal: [f32;3], uv: [f32;2], tangent: [f32;4] }` (`#[repr(C)]`, `Pod`-friendly).
 - `Mesh { name: String, vertices: Vec<Vertex>, indices: Vec<u32>, bounds: Option<Aabb> }`
   — `compute_bounds()`, `triangle_count()`.
-- `Material { name, base_color: [f32;4], metallic: f32, roughness: f32, emissive: [f32;3], emissive_strength: f32, base_color_texture, normal_texture, metallic_roughness_texture, emissive_texture, occlusion_texture: AssetHandle<Texture>, alpha_mode: AlphaMode, double_sided: bool }`.
-- `AlphaMode::Opaque | Mask | Blend`.
+- `Material { name, base_color: [f32;4], metallic: f32, roughness: f32, emissive: [f32;3], emissive_strength: f32, base_color_texture, normal_texture, metallic_roughness_texture, emissive_texture, occlusion_texture: AssetHandle<Texture>, alpha_mode: AlphaMode, double_sided: bool, unlit: bool, filter: TextureFilter }`.
+- `AlphaMode::Opaque | Mask | Blend`; `TextureFilter::Linear | Nearest` (`unlit` outputs the base color with no lighting; `Nearest` samples textures without smoothing, for pixel art).
 - `Texture { name, width: u32, height: u32, format: TextureFormat, data: Vec<u8> }`
   — `solid(name, [u8;4], format)`; `TextureFormat::Rgba8Srgb | Rgba8Unorm`.
 - `HdrTexture { name, width, height, data: Vec<f32> }` — linear RGB, `width*height*3` floats (equirectangular).

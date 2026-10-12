@@ -18,7 +18,9 @@
 //! for each mesh primitive.
 
 use crate::error::RenderError;
-use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture, TextureFormat, Vertex};
+use ecs::assets::{
+    AssetHandle, AssetRegistry, Material, Mesh, Texture, TextureFilter, TextureFormat, Vertex,
+};
 use ecs::components::{LocalTransform, MeshRenderer, Name};
 use ecs::scene::set_parent;
 use ecs::world::{Entity, World};
@@ -305,6 +307,20 @@ fn build_material(material: gltf::Material<'_>) -> Material {
             gltf::material::AlphaMode::Blend => ecs::assets::AlphaMode::Blend,
         },
         double_sided: material.double_sided(),
+        unlit: material.unlit(),
+        filter: filter_from_mag_filter(
+            pbr.base_color_texture()
+                .and_then(|info| info.texture().sampler().mag_filter()),
+        ),
+    }
+}
+
+/// Map a glTF mag-filter to a material texture filter. `NEAREST` asks for crisp
+/// pixel art; anything else (or unset) is smooth.
+fn filter_from_mag_filter(mag: Option<gltf::texture::MagFilter>) -> TextureFilter {
+    match mag {
+        Some(gltf::texture::MagFilter::Nearest) => TextureFilter::Nearest,
+        _ => TextureFilter::Linear,
     }
 }
 
@@ -659,6 +675,92 @@ mod tests {
         assert!((mat.metallic - 0.1).abs() < 1e-6);
         assert!((mat.roughness - 0.7).abs() < 1e-6);
         assert!(mat.base_color_texture.is_none());
+    }
+
+    /// A triangle whose material carries `KHR_materials_unlit`.
+    fn unlit_triangle_glb() -> Vec<u8> {
+        let positions: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals: [[f32; 3]; 3] = [[0.0, 0.0, 1.0]; 3];
+        let uvs: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let indices: [u16; 3] = [0, 1, 2];
+
+        let mut bin = Vec::new();
+        for p in positions {
+            for c in p {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let normal_offset = bin.len();
+        for n in normals {
+            for c in n {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let uv_offset = bin.len();
+        for uv in uvs {
+            for c in uv {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let index_offset = bin.len();
+        for i in indices {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        let total = bin.len();
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "extensionsUsed": ["KHR_materials_unlit"],
+  "scene": 0,
+  "scenes": [ {{ "name": "Main", "nodes": [0] }} ],
+  "nodes": [ {{ "name": "Tri", "mesh": 0 }} ],
+  "meshes": [ {{ "name": "TriMesh", "primitives": [
+     {{ "attributes": {{ "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }}, "indices": 3, "material": 0 }}
+  ] }} ],
+  "materials": [ {{ "name": "Flat", "pbrMetallicRoughness": {{
+     "baseColorFactor": [0.2, 0.4, 0.8, 1.0]
+  }}, "extensions": {{ "KHR_materials_unlit": {{}} }} }} ],
+  "buffers": [ {{ "byteLength": {total} }} ],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {normal_offset}, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {uv_offset}, "byteLength": 24 }},
+    {{ "buffer": 0, "byteOffset": {index_offset}, "byteLength": 6 }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" }},
+    {{ "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ]
+}}"#
+        );
+        make_glb(&json, &bin)
+    }
+
+    #[test]
+    fn unlit_materials_import() {
+        let loaded = load_gltf_bytes(&unlit_triangle_glb()).expect("import");
+        assert!(loaded.materials[0].unlit, "KHR_materials_unlit sets unlit");
+
+        // A material without the extension stays lit.
+        let lit = load_gltf_bytes(&triangle_glb()).expect("import");
+        assert!(!lit.materials[0].unlit);
+    }
+
+    #[test]
+    fn mag_filter_maps_to_texture_filter() {
+        use gltf::texture::MagFilter;
+        assert_eq!(
+            filter_from_mag_filter(Some(MagFilter::Nearest)),
+            TextureFilter::Nearest
+        );
+        assert_eq!(
+            filter_from_mag_filter(Some(MagFilter::Linear)),
+            TextureFilter::Linear
+        );
+        assert_eq!(filter_from_mag_filter(None), TextureFilter::Linear);
     }
 
     #[test]

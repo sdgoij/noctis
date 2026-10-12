@@ -202,6 +202,7 @@ pub struct Renderer {
     objects: ObjectBindings,
     cache: ResourceCache,
     material_sampler: wgpu::Sampler,
+    material_sampler_nearest: wgpu::Sampler,
     camera_view_buffer: wgpu::Buffer,
     camera_view_bind_group: wgpu::BindGroup,
     light_view_buffer: wgpu::Buffer,
@@ -338,6 +339,20 @@ impl Renderer {
             ..Default::default()
         });
 
+        // Nearest sampling for pixel art: crisp texels, clamped so a sprite does
+        // not bleed a neighbouring tile at the atlas edge. A material selects
+        // this one through `Material::filter`.
+        let material_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material.sampler.nearest"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
         let camera_view_buffer = uniform_buffer(
             &device,
             "view.camera",
@@ -426,6 +441,7 @@ impl Renderer {
             objects,
             cache,
             material_sampler,
+            material_sampler_nearest,
             camera_view_buffer,
             camera_view_bind_group,
             light_view_buffer,
@@ -1562,6 +1578,10 @@ impl Renderer {
         } else {
             item.material.id()
         };
+        let sampler = match material.filter {
+            ecs::assets::TextureFilter::Linear => &self.material_sampler,
+            ecs::assets::TextureFilter::Nearest => &self.material_sampler_nearest,
+        };
         let material_bind_group = self
             .cache
             .material(
@@ -1571,7 +1591,7 @@ impl Renderer {
                 material,
                 assets,
                 &self.layouts.material,
-                &self.material_sampler,
+                sampler,
             )
             .bind_group
             .clone();
@@ -1667,7 +1687,7 @@ fn object_uniform(item: &DrawItem, material: &Material) -> ObjectUniform {
         flags2: [
             has(material.occlusion_texture),
             if material.double_sided { 1.0 } else { 0.0 },
-            0.0,
+            if material.unlit { 1.0 } else { 0.0 },
             0.0,
         ],
     }
@@ -1856,6 +1876,107 @@ mod tests {
         renderer
             .render_frame(&world, &assets, camera)
             .expect("render frame without gizmo");
+    }
+
+    /// An unlit material ignores lighting: its frame is identical with and
+    /// without a light, while a lit material's is not. Skips without an adapter.
+    #[test]
+    fn unlit_materials_ignore_lighting_or_reports_no_adapter() {
+        use ecs::assets::{AssetHandle, Material, Mesh, Vertex};
+        use ecs::components::{Camera, Light, MeshRenderer};
+        use math::vec3;
+
+        let config = RendererConfig {
+            width: 64,
+            height: 64,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let mesh = assets.meshes.insert(Mesh {
+            name: "tri".into(),
+            vertices: vec![
+                Vertex {
+                    position: [0.0, 0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.5, 0.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                },
+                Vertex {
+                    position: [-0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                },
+                Vertex {
+                    position: [0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [1.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                },
+            ],
+            indices: vec![0, 1, 2],
+            bounds: None,
+        });
+        let grey = [0.5, 0.5, 0.5, 1.0];
+        let unlit = assets.materials.insert_named(
+            "unlit",
+            Material {
+                name: "unlit".into(),
+                base_color: grey,
+                unlit: true,
+                ..Material::default()
+            },
+        );
+        let lit = assets.materials.insert_named(
+            "lit",
+            Material {
+                name: "lit".into(),
+                base_color: grey,
+                ..Material::default()
+            },
+        );
+
+        let render = |renderer: &mut Renderer, material: AssetHandle<Material>, light: bool| {
+            let mut world = World::new();
+            let camera = world.spawn_with(Camera::default());
+            if light {
+                let mut l = Light::directional(vec3(0.0, 0.0, -1.0));
+                l.intensity = 4.0;
+                world.spawn_with(l);
+            }
+            let e = world.spawn_with(MeshRenderer {
+                mesh,
+                material,
+                ..MeshRenderer::default()
+            });
+            world.insert(e, math::Transform::from_translation(vec3(0.0, 0.0, -3.0)));
+            renderer
+                .render_frame(&world, &assets, camera)
+                .expect("render frame")
+        };
+
+        let unlit_with_light = render(&mut renderer, unlit, true);
+        let unlit_without_light = render(&mut renderer, unlit, false);
+        assert_eq!(
+            unlit_with_light.rgba, unlit_without_light.rgba,
+            "an unlit material must ignore lighting"
+        );
+
+        let lit_with_light = render(&mut renderer, lit, true);
+        let lit_without_light = render(&mut renderer, lit, false);
+        assert_ne!(
+            lit_with_light.rgba, lit_without_light.rgba,
+            "the control: a lit material responds to lighting"
+        );
     }
 
     /// A real font to draw with, if the host has one; `None` skips the test.

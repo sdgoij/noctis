@@ -305,6 +305,18 @@ pub enum AlphaMode {
     Blend,
 }
 
+/// How a material's textures are sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextureFilter {
+    /// Smooth (bilinear) filtering — the right choice for photographic and 3D
+    /// surfaces.
+    #[default]
+    Linear,
+    /// Nearest-neighbour filtering — crisp texels, the right choice for pixel
+    /// art and retro sprites.
+    Nearest,
+}
+
 /// A physically-based material (metallic/roughness workflow).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
@@ -334,6 +346,14 @@ pub struct Material {
     pub alpha_mode: AlphaMode,
     /// Whether back faces are rendered.
     pub double_sided: bool,
+    /// Render unlit: output the base color (times [`base_color_texture`]) directly,
+    /// with no direct light, image-based lighting, or screen-space occlusion. The
+    /// flat-shaded choice for 2D sprites and UI.
+    ///
+    /// [`base_color_texture`]: Material::base_color_texture
+    pub unlit: bool,
+    /// Sampler filtering for this material's texture lookups.
+    pub filter: TextureFilter,
 }
 
 impl Default for Material {
@@ -352,6 +372,8 @@ impl Default for Material {
             occlusion_texture: AssetHandle::NONE,
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
+            unlit: false,
+            filter: TextureFilter::Linear,
         }
     }
 }
@@ -641,6 +663,15 @@ mod tests {
             indices: vec![0, 1, 2],
             bounds: None,
         }
+    }
+
+    #[test]
+    fn materials_default_to_lit_linear_shading() {
+        let material = Material::default();
+        assert!(!material.unlit, "a fresh material is lit");
+        assert_eq!(material.filter, TextureFilter::Linear);
+        assert_eq!(TextureFilter::default(), TextureFilter::Linear);
+        assert_ne!(TextureFilter::Nearest, TextureFilter::Linear);
     }
 
     #[test]

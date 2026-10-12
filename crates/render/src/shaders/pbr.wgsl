@@ -155,6 +155,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
 
+    // Unlit materials output their base color (times the base-color texture)
+    // directly: no direct light, image-based lighting, or screen-space occlusion.
+    // This is the flat-shaded path for 2D sprites and UI.
+    if (object.flags2.z > 0.5) {
+        return vec4<f32>(base_sample.rgb, base_sample.a);
+    }
+
     let albedo = base_sample.rgb;
     var metallic = object.params.x;
     var roughness = object.params.y;

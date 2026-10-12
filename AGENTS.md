@@ -124,7 +124,14 @@ needed.
   white) one; one shadow-casting directional/spot light at a time. In-world text
   (`ecs::components::Text`) is drawn billboarded by a dedicated pass, rasterized
   from a font atlas baked on demand (`ab_glyph`); the atlas is cached per
-  process, not yet persisted under `.noctis/`.
+  process, not yet persisted under `.noctis/`. A material may be **unlit** — its
+  base color, times its base-color texture, is output directly with no direct
+  light, IBL, or SSAO, the flat-shaded path for 2D sprites and UI — and may
+  sample its textures with **nearest** filtering for crisp pixel art; both are
+  imported from glTF (`KHR_materials_unlit`, a `NEAREST` mag-filter) and
+  authorable in the inspector. There is still no dedicated 2D/sprite renderer or
+  screen-space texture blit: a sprite is a textured quad on an orthographic
+  camera.
 - `script`: scripting is the `github.com/sdgoij/slag` engine, pinned to a
   revision in the workspace `Cargo.toml` (`[workspace.dependencies] slag`) — a
   plain dependency, with no feature to enable. A Slag bump is a one-line `rev`

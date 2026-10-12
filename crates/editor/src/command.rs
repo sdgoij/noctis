@@ -8,7 +8,9 @@
 //! The command set mirrors the imperative [`crate::Editor`] methods one-to-one,
 //! so the two entry points stay in lockstep.
 
-use ecs::assets::{AlphaMode, AssetId, Material, Mesh, Texture, TextureFormat, Vertex};
+use ecs::assets::{
+    AlphaMode, AssetId, Material, Mesh, Texture, TextureFilter, TextureFormat, Vertex,
+};
 use ecs::components::{BodyType, ColliderShape, LightKind, Projection, TextAnchor};
 use math::{Quat, Vec3, radians, vec3, zero3};
 use serde::{Deserialize, Serialize};
@@ -793,6 +795,26 @@ impl From<AlphaModeSpec> for AlphaMode {
     }
 }
 
+/// How a material samples its textures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextureFilterSpec {
+    /// Smooth (bilinear) filtering.
+    #[default]
+    Linear,
+    /// Nearest-neighbour filtering for pixel art.
+    Nearest,
+}
+
+impl From<TextureFilterSpec> for TextureFilter {
+    fn from(spec: TextureFilterSpec) -> Self {
+        match spec {
+            TextureFilterSpec::Linear => TextureFilter::Linear,
+            TextureFilterSpec::Nearest => TextureFilter::Nearest,
+        }
+    }
+}
+
 /// Parameters for [`EditorCommand::RegisterMaterial`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaterialParams {
@@ -817,6 +839,12 @@ pub struct MaterialParams {
     /// Whether back faces render.
     #[serde(default)]
     pub double_sided: bool,
+    /// Render unlit: flat base color with no lighting (2D sprites, UI).
+    #[serde(default)]
+    pub unlit: bool,
+    /// Texture sampling filter.
+    #[serde(default)]
+    pub filter: TextureFilterSpec,
 }
 
 impl Default for MaterialParams {
@@ -829,6 +857,8 @@ impl Default for MaterialParams {
             emissive_strength: 1.0,
             alpha_mode: AlphaModeSpec::Opaque,
             double_sided: false,
+            unlit: false,
+            filter: TextureFilterSpec::Linear,
         }
     }
 }
@@ -1281,6 +1311,8 @@ pub(crate) fn material_from_params(name: &str, params: &MaterialParams) -> Mater
         emissive_strength: params.emissive_strength,
         alpha_mode: params.alpha_mode.into(),
         double_sided: params.double_sided,
+        unlit: params.unlit,
+        filter: params.filter.into(),
         ..Material::default()
     }
 }
