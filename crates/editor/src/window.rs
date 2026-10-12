@@ -909,8 +909,7 @@ impl EditorDriver {
         let relative = self
             .scene_path
             .as_ref()
-            .and_then(|path| path.strip_prefix(project.root()).ok())
-            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .and_then(|path| store_key(project, path))
             .unwrap_or_else(|| {
                 format!(
                     "scenes/{}.scene.json",
@@ -1019,7 +1018,24 @@ impl EditorDriver {
         };
         let path = choice.path.clone();
         let name = choice.name.clone();
-        match self.editor.open_or_new(&path) {
+        // A project scene is read through the project's **store** — a native
+        // directory, a bundle, or browser storage — so the switch works on the web
+        // too, where there is no filesystem. A loose scene (no project) reads its
+        // own file.
+        let opened: Result<(), String> = match self.project.as_ref() {
+            Some(project) => match store_key(project, &path) {
+                Some(key) => self
+                    .editor
+                    .open_in(project.store(), &key)
+                    .map_err(|error| error.to_string()),
+                None => Err(format!("{} is outside the project", path.display())),
+            },
+            None => self
+                .editor
+                .open_or_new(&path)
+                .map_err(|error| error.to_string()),
+        };
+        match opened {
             Ok(()) => {
                 self.scene_path = Some(path);
                 self.selected = None;
@@ -2180,6 +2196,15 @@ impl EditorDriver {
     }
 }
 
+/// The store key for `path` inside `project`: its path relative to the project
+/// root, `/`-joined (so it addresses the same file through the store on any
+/// platform). `None` when `path` is not under the root.
+fn store_key(project: &Project, path: &Path) -> Option<String> {
+    path.strip_prefix(project.root())
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+}
+
 /// The project's scenes as picker choices (name + absolute file).
 fn scene_choices(project: &Project) -> Vec<SceneChoice> {
     project
@@ -2616,6 +2641,47 @@ mod tests {
         driver.switch_scene(a);
         assert!(driver.editor().find_by_name("FromB").is_none());
         assert_eq!(driver.editor().list_entities().len(), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn switching_scenes_reads_through_the_project_store() {
+        // The web has no filesystem: a project lives in a store, so a scene switch
+        // must read through it — a `DirStore` path silently finds nothing there and
+        // replaces the scene with an empty one (which then has no camera, so the
+        // host stops painting).
+        use std::collections::BTreeMap;
+        use vfs::MemoryStore;
+
+        let dir = project_dir("switch-store");
+        std::fs::create_dir_all(dir.join("scenes")).unwrap();
+        let mut author = Editor::new();
+        author.spawn("FromMemory", None);
+        author.save(dir.join("scenes/a.scene.json")).unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            "noctis.toml".to_string(),
+            std::fs::read(dir.join("noctis.toml")).unwrap(),
+        );
+        files.insert(
+            "scenes/a.scene.json".to_string(),
+            std::fs::read(dir.join("scenes/a.scene.json")).unwrap(),
+        );
+        let project = Project::open_in(Box::new(MemoryStore::from_files(files)), "noctis-project")
+            .expect("project");
+
+        let mut driver = EditorDriver::new(Editor::new()).with_project(Some(project));
+        assert_eq!(driver.scenes.len(), 1, "{:?}", driver.scenes);
+
+        driver.switch_scene(0);
+
+        assert!(
+            driver.editor().find_by_name("FromMemory").is_some(),
+            "the scene loaded from the project's store: {:?}",
+            driver.status
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
