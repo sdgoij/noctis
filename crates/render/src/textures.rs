@@ -129,11 +129,28 @@ fn file_stem(path: &Path, fallback: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A fresh, empty temp directory unique to a single test invocation.
+    ///
+    /// Tests run in parallel and each removes its own directory when done, so
+    /// sharing one pid-based directory would let one test delete another's
+    /// files mid-read.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::AtomicUsize;
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "noctis-texture-{}-{}-{}",
+            std::process::id(),
+            tag,
+            n
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
     /// A tiny RGBA PNG written to a unique temp path.
     fn write_png(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("noctis-texture-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join(name);
+        let path = temp_dir("png").join(name);
         let mut image = image::RgbaImage::new(3, 2);
         image.put_pixel(0, 0, image::Rgba([10, 20, 30, 255]));
         image.save(&path).expect("save png");
@@ -210,9 +227,7 @@ mod tests {
     }
 
     fn write_hdr(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("noctis-hdr-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join(name);
+        let path = temp_dir("hdr").join(name);
         std::fs::write(&path, bytes).expect("write hdr");
         path
     }
