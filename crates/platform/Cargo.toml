@@ -29,6 +29,9 @@ egui-winit.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
+# The egui overlay (`src/web_egui.rs`): `egui-wgpu` without its `winit` feature,
+# because `egui-winit` cannot build for `wasm32-unknown-unknown`.
+egui-wgpu = { version = "0.36", default-features = false }
 web-sys = { workspace = true, features = [
     "Document",
     "Element",

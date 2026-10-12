@@ -19,6 +19,9 @@ default = ["entry"]
 # carries Rust generates its own entry and depends on this crate with
 # `default-features = false`, so only one `start` export exists in a module.
 entry = []
+# The browser **editor** entry (`start_editor`), which pulls in `crates/editor`. Off
+# by default: the client does not pay for the editor.
+editor = ["dep:editor"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 runtime.workspace = true
@@ -27,6 +30,7 @@ vfs.workspace = true
 platform.workspace = true
 ecs.workspace = true
 script.workspace = true
+editor = { workspace = true, optional = true }
 log.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true

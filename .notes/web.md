@@ -33,7 +33,10 @@
 > `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the
 > same `AudioEngine`, resumed on the first user gesture. The **editor** crate now
 > builds for `wasm32-unknown-unknown` (its Slag `jit`, `notify` and the CLI are
-> native-gated), and `vfs::OpfsStore` gives a browser project a durable home.
+> native-gated), and `vfs::OpfsStore` gives a browser project a durable home. The
+> web host draws an **egui overlay** (`platform/src/web_egui.rs`), and `crates/web`'s
+> `editor` feature adds a `start_editor` entry + `web/editor.html`, so the editor
+> runs on the canvas.
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document
@@ -139,9 +142,11 @@ New crates (names provisional; they never leak into the native-only build):
   `platform` stays untouched. **Shipped (client first):** `platform/src/web.rs`
   (behind `cfg(target_arch = "wasm32")`) acquires/creates a `#noctis-canvas`,
   awaits `Renderer::for_surface_async`, and drives the loop with `request_animation_frame`,
-  feeding key/mouse/wheel into `InputState`. It draws **no** egui overlay yet (the
-  browser client needs none); the native winit host moved behind
-  `cfg(not(target_arch = "wasm32"))`, with `WindowConfig` shared in `platform::config`.
+  feeding key/mouse/wheel into `InputState`. It also draws an **egui overlay**
+  (`platform/src/web_egui.rs`: DOM events → `egui::RawInput`, painted with
+  `egui-wgpu` over the scene — `egui-winit` cannot build for wasm); the native
+  winit host moved behind `cfg(not(target_arch = "wasm32"))`, with `WindowConfig`
+  shared in `platform::config`.
   Note: egui-winit 0.36.2 cannot build for wasm at all (its `DroppedFile` impl uses
   `bytes`, which the wasm trait replaces with `bytes_async`), which is why the web
   host uses `web-sys` directly rather than winit.
@@ -439,13 +444,14 @@ tool/client, rebuilt only when a plugin or the engine changes.
    flows are still to come.
 6. **Audio web backend** and the user-gesture resume. **Shipped:**
    `crates/audio/src/web.rs`.
-7. **The browser editor.** *(In progress.)* `crates/editor` now builds for
-   `wasm32-unknown-unknown` — its native-only bits (Slag's `jit`, `notify`, the
-   CLI) are gated, and wasm Slag runs the interpreter. What remains is the **egui
-   overlay on the web host** (the client host draws none; egui-winit cannot build
-   for wasm, so the host must feed `egui::RawInput` from DOM events) and a web
-   editor entry that opens a project through `OpfsStore` and runs `EditorDriver`
-   on that host.
+7. **The browser editor.** *(Shipped, first cut.)* `crates/editor` builds for
+   `wasm32-unknown-unknown` — its native-only bits (Slag's `jit`, `notify`, the CLI)
+   are gated, and wasm Slag runs the interpreter. The web host draws an **egui
+   overlay** (`platform/src/web_egui.rs`), and `crates/web`'s `editor` feature adds
+   a `start_editor` entry and `web/editor.html`, which fetches a bundle and runs
+   `EditorDriver` on that host. Still to come: **saving** (Ctrl+S goes through
+   `std::fs` today — it must write through the `Store`/OPFS), drag-drop import, and
+   the (optional) DOM bridge for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
 9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
    links into the browser client (`run_bundle_with`, feature-gated stock entry), and

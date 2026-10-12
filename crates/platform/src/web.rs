@@ -1,10 +1,11 @@
 //! The web host (`wasm32`): a `<canvas>`, a wgpu surface, and a
 //! `requestAnimationFrame` loop driving any [`AppDriver`].
 //!
-//! The browser **client** is the first target (see `.notes/web.md`), so this host
-//! renders the scene and feeds input but draws no egui overlay — the editor's UI
-//! is a later step. GPU startup is asynchronous, so it is awaited on the browser's
-//! event loop ([`Renderer::for_surface_async`]) rather than blocked on.
+//! The browser **client** is the first target (see `.notes/web.md`); the host
+//! renders the scene, feeds input, and paints an **egui overlay** over it
+//! (`web_egui.rs`), so the editor's UI works in a browser too. GPU startup is
+//! asynchronous, so it is awaited on the browser's event loop
+//! ([`Renderer::for_surface_async`]) rather than blocked on.
 //!
 //! Input follows the same [`AppDriver`] contract as the native host: keys, mouse
 //! buttons and motion reach [`AppDriver::input_mut`], `Esc` reaches
@@ -22,6 +23,7 @@ use wasm_bindgen::closure::Closure;
 use crate::config::WindowConfig;
 use crate::driver::AppDriver;
 use crate::error::PlatformError;
+use crate::web_egui::WebEgui;
 
 /// A DOM event captured between frames, applied to the driver's input at the next
 /// frame.
@@ -55,6 +57,8 @@ struct Loop<D: AppDriver> {
     driver: D,
     renderer: Renderer,
     canvas: web_sys::HtmlCanvasElement,
+    /// The egui overlay: its context, its wgpu renderer, and the queued DOM events.
+    egui: WebEgui,
     events: Rc<RefCell<Vec<RawEvent>>>,
     last: f64,
     size: (u32, u32),
@@ -103,6 +107,13 @@ async fn start<D: AppDriver + 'static>(
     driver.configure_renderer(&mut renderer);
     driver.prepare();
 
+    // The egui overlay is created against the surface's present format, so its
+    // pipeline matches the swapchain colour space.
+    let format = renderer
+        .present_format()
+        .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+    let egui = WebEgui::new(renderer.device(), format, &window, &canvas);
+
     let events = Rc::new(RefCell::new(Vec::new()));
     install_listeners(&window, &canvas, &events);
 
@@ -110,6 +121,7 @@ async fn start<D: AppDriver + 'static>(
         driver,
         renderer,
         canvas,
+        egui,
         events,
         last: now(&window),
         size,
@@ -292,18 +304,90 @@ fn tick<D: AppDriver + 'static>(state: &Rc<RefCell<Loop<D>>>) {
         // Mouse-look: request or release the pointer lock as the driver wishes.
         sync_pointer_lock(&mut state);
 
-        // Split the borrow so `renderer` and `driver` are disjoint.
-        let Loop {
-            driver, renderer, ..
-        } = &mut *state;
-        if let Some(camera) = driver.camera()
-            && let Err(error) = renderer.present(driver.world(), driver.assets(), camera)
-        {
+        let seconds = now / 1000.0;
+        present(&mut state, seconds);
+    }
+
+    request_frame(&window, handle);
+}
+
+/// Draw the driver's UI over the scene and present the frame.
+///
+/// The scene is rendered and the egui overlay painted into it in one pass
+/// (`present_with_overlay`), mirroring the native host — egui's overlay pass
+/// loads the rendered colour and draws on top.
+fn present<D: AppDriver>(state: &mut Loop<D>, seconds: f64) {
+    let Loop {
+        driver,
+        egui,
+        renderer,
+        canvas,
+        size,
+        ..
+    } = state;
+
+    let raw_input = egui.begin_frame(canvas, seconds);
+    let mut output = egui.ctx.run_ui(raw_input, |ui| driver.ui(ui));
+    let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
+    let screen = egui_wgpu::ScreenDescriptor {
+        size_in_pixels: [size.0.max(1), size.1.max(1)],
+        pixels_per_point: output.pixels_per_point,
+    };
+
+    for (id, deltas) in &output.textures_delta.set {
+        for delta in deltas {
+            egui.renderer
+                .update_texture(renderer.device(), renderer.queue(), *id, delta);
+        }
+    }
+    {
+        let device = renderer.device();
+        let queue = renderer.queue();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("egui.upload"),
+        });
+        let extra = egui
+            .renderer
+            .update_buffers(device, queue, &mut encoder, &paint_jobs, &screen);
+        queue.submit(std::iter::once(encoder.finish()).chain(extra));
+    }
+
+    if let Some(camera) = driver.camera() {
+        let result = renderer.present_with_overlay(
+            driver.world(),
+            driver.assets(),
+            camera,
+            &mut |encoder, view| {
+                let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("egui.pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                let mut pass = pass.forget_lifetime();
+                egui.renderer.render(&mut pass, &paint_jobs, &screen);
+            },
+        );
+        if let Err(error) = result {
             log::warn!("present failed: {error}");
         }
     }
 
-    request_frame(&window, handle);
+    for id in &output.textures_delta.free {
+        egui.renderer.free_texture(id);
+    }
+    // Tell epaint the deltas have been applied, or its `Drop` check panics.
+    output.textures_delta.clear();
 }
 
 /// Apply the pending DOM events to the driver's input, then clear the queue.

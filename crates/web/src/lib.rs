@@ -63,6 +63,11 @@ pub fn start(canvas_id: &str, bundle_url: &str) {
     run_bundle(canvas_id, bundle_url);
 }
 
+#[cfg(feature = "editor")]
+mod editor;
+#[cfg(feature = "editor")]
+pub use editor::run_editor_bundle;
+
 /// Run the bundle in `canvas_id` with no plugin — the stock (no-Rust) client.
 ///
 /// A generated client dispatches by project name and calls this for a project
@@ -177,7 +182,7 @@ fn load_scene(
 }
 
 /// Fetch `url` and return the body bytes.
-async fn fetch(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
     let response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url))
         .await

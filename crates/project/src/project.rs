@@ -126,12 +126,12 @@ impl Project {
 
     /// The store every project file is read and written through (see
     /// `.notes/web.md`).
-    pub(crate) fn store(&self) -> &dyn Store {
+    pub fn store(&self) -> &dyn Store {
         self.store.as_ref()
     }
 
     /// The store, mutably, for this project's writes.
-    pub(crate) fn store_mut(&mut self) -> &mut dyn Store {
+    pub fn store_mut(&mut self) -> &mut dyn Store {
         self.store.as_mut()
     }
 
