@@ -54,7 +54,7 @@ pub use driver::AppDriver;
 pub use error::PlatformError;
 
 #[cfg(target_arch = "wasm32")]
-pub use web::run;
+pub use web::{browser_download, run};
 #[cfg(not(target_arch = "wasm32"))]
 pub use window::{WindowHost, map_key, run};
 

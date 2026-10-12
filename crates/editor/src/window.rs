@@ -325,6 +325,11 @@ impl Layout {
 /// The browser entry uses it to persist the store to OPFS.
 type SaveHook = Box<dyn FnMut(&dyn Store)>;
 
+/// A hook the driver calls to hand a generated file to its host, as
+/// `(file name, bytes)`. The browser entry uses it to trigger a download; a host
+/// without one writes the file into the project instead.
+type DownloadHook = Box<dyn FnMut(&str, &[u8])>;
+
 /// A windowed editor: owns an [`Editor`] and renders it with egui panels.
 pub struct EditorDriver {
     editor: Editor,
@@ -382,6 +387,10 @@ pub struct EditorDriver {
     /// Called after a project-backed Save, with the project's store. A host
     /// without a filesystem (the browser) persists the store this way.
     on_save: Option<SaveHook>,
+    /// Called with a generated file (name, bytes) — for example an exported
+    /// bundle. The browser entry downloads it; a native host has none and writes
+    /// into the project instead.
+    on_download: Option<DownloadHook>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -436,6 +445,7 @@ impl EditorDriver {
             layout_path: None,
             saved_layout: None,
             on_save: None,
+            on_download: None,
         }
     }
 
@@ -461,6 +471,17 @@ impl EditorDriver {
     /// editor writes files directly and needs no hook.
     pub fn with_save_hook(mut self, hook: impl FnMut(&dyn Store) + 'static) -> Self {
         self.on_save = Some(Box::new(hook));
+        self
+    }
+
+    /// Set a hook the driver calls with a generated file — the project's `.zip`
+    /// bundle, when the user exports one.
+    ///
+    /// The browser entry uses it to trigger a download (see `.notes/web.md`); a
+    /// native host leaves it unset, and [`EditorDriver::download_bundle`] writes
+    /// into the project instead.
+    pub fn with_download_hook(mut self, hook: impl FnMut(&str, &[u8]) + 'static) -> Self {
+        self.on_download = Some(Box::new(hook));
         self
     }
 
@@ -931,6 +952,49 @@ impl EditorDriver {
         }
     }
 
+    /// Export the project as a `.zip` bundle.
+    ///
+    /// The current scene is saved into the store first, so the bundle holds the
+    /// latest edits. The bytes go to the download hook when there is one (the
+    /// browser downloads them); a native host has none, so it writes them into
+    /// the project's `dist/` — where `noctis pack` writes too.
+    fn download_bundle(&mut self) {
+        if self.project.is_none() {
+            self.status = Some("Nothing to export: open a project first".to_string());
+            return;
+        }
+        self.save();
+
+        let (name, bytes) = {
+            let Some(project) = self.project.as_ref() else {
+                return;
+            };
+            let name = format!("{}.zip", project.name());
+            match project.bundle() {
+                Ok(bytes) => (name, bytes),
+                Err(error) => {
+                    self.status = Some(format!("Export failed: {error}"));
+                    return;
+                }
+            }
+        };
+
+        if let Some(hook) = self.on_download.as_mut() {
+            hook(&name, &bytes);
+            self.status = Some(format!("Exported {name}"));
+            return;
+        }
+
+        // No hook: a native host, so the bundle lands in the project's `dist/`.
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        match project.store_mut().write(&format!("dist/{name}"), &bytes) {
+            Ok(()) => self.status = Some(format!("Exported dist/{name}")),
+            Err(error) => self.status = Some(format!("Export failed: {error}")),
+        }
+    }
+
     /// Destroy the selected entity (and its descendants), undoably.
     fn delete_selected(&mut self) {
         let Some(entity) = self.selected else {
@@ -1222,6 +1286,13 @@ impl EditorDriver {
                     .clicked()
                 {
                     self.save();
+                }
+                if ui
+                    .add_enabled(self.project.is_some(), egui::Button::new("Export .zip"))
+                    .on_hover_text("Save the project as a .zip bundle")
+                    .clicked()
+                {
+                    self.download_bundle();
                 }
 
                 // The window buttons, right-aligned. Only drawn with the custom
@@ -2217,8 +2288,11 @@ fn attach(driver: EditorDriver, extensions: Option<AttachedExtensions>) -> Edito
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    /// What an export test's download hook captures: the file name and bytes.
+    type Captured = Rc<RefCell<Option<(String, Vec<u8>)>>>;
 
     /// Run one editor frame against a headless egui context and report whether
     /// the root UI's labels were left selectable.
@@ -2423,6 +2497,73 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&source).ok();
+    }
+
+    #[test]
+    fn export_hands_the_bundle_to_the_download_hook() {
+        let dir = project_dir("export-hook");
+        let project = Project::open(&dir).expect("project");
+        let captured: Captured = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&captured);
+        let mut driver = EditorDriver::new(Editor::new())
+            .with_project(Some(project))
+            .with_download_hook(move |name, bytes| {
+                *sink.borrow_mut() = Some((name.to_string(), bytes.to_vec()));
+            });
+
+        driver.download_bundle();
+
+        let (name, bytes) = captured.borrow().clone().expect("the hook ran");
+        assert_eq!(name, "T.zip", "named after the project");
+        let store = vfs::ZipStore::new(&bytes).expect("the export is a readable zip");
+        assert!(store.exists("noctis.toml"), "the manifest is bundled");
+        assert!(
+            store.exists("scenes/untitled.scene.json"),
+            "the current scene is saved into the bundle"
+        );
+        // A hook means the bytes are handed over, not written into the project.
+        assert!(!dir.join("dist/T.zip").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_writes_into_dist_without_a_hook() {
+        let dir = project_dir("export-native");
+        let project = Project::open(&dir).expect("project");
+        let mut driver = EditorDriver::new(Editor::new()).with_project(Some(project));
+
+        driver.download_bundle();
+
+        let bundle = dir.join("dist/T.zip");
+        assert!(bundle.is_file(), "the bundle was written to {bundle:?}");
+        assert!(
+            driver
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("Exported")),
+            "{:?}",
+            driver.status
+        );
+        let bytes = std::fs::read(&bundle).unwrap();
+        let store = vfs::ZipStore::new(&bytes).expect("a readable zip");
+        assert!(store.exists("noctis.toml"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_without_a_project_reports_it() {
+        let mut driver = EditorDriver::new(Editor::new());
+        driver.download_bundle();
+        assert!(
+            driver
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("Nothing to export")),
+            "{:?}",
+            driver.status
+        );
     }
 
     #[test]

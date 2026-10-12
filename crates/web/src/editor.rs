@@ -100,6 +100,7 @@ async fn open(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
     let scene_path = asset.map(|asset| project.root().join(asset.file_path()));
 
     // Save writes the store back to OPFS: snapshot it, then persist asynchronously.
+    // Exporting hands the bundled `.zip` to a browser download.
     let driver = ::editor::window::EditorDriver::new(editor)
         .with_project(Some(project))
         .with_scene_path(scene_path)
@@ -110,6 +111,11 @@ async fn open(canvas_id: &str, bundle_url: &str) -> Result<(), String> {
                     log::error!("noctis editor: failed to save to OPFS: {error}");
                 }
             });
+        })
+        .with_download_hook(|name, bytes| {
+            if let Err(error) = platform::browser_download(name, bytes) {
+                log::error!("noctis editor: download failed: {error}");
+            }
         });
 
     let config = WindowConfig {

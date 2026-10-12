@@ -529,3 +529,41 @@ fn now(window: &web_sys::Window) -> f64 {
 fn host_err(message: impl Into<String>) -> PlatformError {
     PlatformError::EventLoop(message.into())
 }
+
+/// Trigger a browser download of `bytes`, as a file named `name`.
+///
+/// Wraps the bytes in a `Blob`, points a temporary object URL at it, and clicks a
+/// synthetic `<a download>` — how a page saves bytes it generated rather than
+/// fetched. The link is attached before the click (some browsers ignore a
+/// detached one) and removed after; the object URL is revoked once the click has
+/// started the download.
+pub fn browser_download(name: &str, bytes: &[u8]) -> Result<(), PlatformError> {
+    let parts = js_sys::Array::new();
+    parts.push(&js_sys::Uint8Array::from(bytes));
+    let blob = web_sys::Blob::new_with_u8_array_sequence(parts.as_ref())
+        .map_err(|_| host_err("failed to build a download blob"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| host_err("failed to create a download URL"))?;
+
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| host_err("no document"))?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|_| host_err("failed to create a download link"))?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| host_err("the download link is not an <a>"))?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+
+    let body = document.body();
+    if let Some(body) = &body {
+        let _ = body.append_child(&anchor);
+    }
+    anchor.click();
+    if let Some(body) = &body {
+        let _ = body.remove_child(&anchor);
+    }
+    let _ = web_sys::Url::revoke_object_url(&url);
+    Ok(())
+}

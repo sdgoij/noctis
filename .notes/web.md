@@ -243,8 +243,10 @@ Open and save flows:
   `drop_file`. `Project::import_bytes` writes them into the store, under the
   kind's conventional directory, and a dropped model instantiates through
   `Editor::import_gltf_bytes`.
-- **Save:** serialize the `Store` back to a `.zip` → a `Blob` download, or persist
-  to OPFS/IndexedDB.
+- **Save / export:** *(Shipped.)* Save persists the store — in the browser, the
+  editor's save hook snapshots it to OPFS. **Export .zip** bundles it
+  (`Project::bundle`) and downloads the bytes (`platform::browser_download`, a
+  `Blob` → object-URL → `<a download>` click); an `IdbStore` remains open.
 
 The asset **import pipeline** (`project::import_assets`) changes from "walk the
 filesystem and decode" to "walk the `Store` and decode the bytes" — `image` and
@@ -446,8 +448,9 @@ tool/client, rebuilt only when a plugin or the engine changes.
 5. **Storage backends.** *(Shipped.)* `vfs::OpfsStore`, plus the whole-tree helpers
    `vfs::snapshot`/`opfs::load_tree`/`save_tree`; the editor's Save writes through
    the project's store, and the browser entry persists it to OPFS. Drag-drop
-   import is shipped (`AppDriver::drop_bytes` → `Project::import_bytes`); the
-   download-a-`.zip` flow is still to come.
+   import is shipped (`AppDriver::drop_bytes` → `Project::import_bytes`), as is the
+   `.zip` export (the **Export .zip** button → `EditorDriver::download_bundle` →
+   `platform::browser_download`).
 6. **Audio web backend** and the user-gesture resume. **Shipped:**
    `crates/audio/src/web.rs`.
 7. **The browser editor.** *(Shipped, first cut.)* `crates/editor` builds for
@@ -459,8 +462,9 @@ tool/client, rebuilt only when a plugin or the engine changes.
    the bundle into it, and Save writes through the project's **store**
    (`EditorDriver`'s save hook snapshots it back to OPFS). Drag-drop import is
    shipped: the host reads a dropped `File`'s bytes and routes them through
-   `AppDriver::drop_bytes` → `Project::import_bytes`. Still to come: the (optional)
-   DOM bridge for extensions.
+   `AppDriver::drop_bytes` → `Project::import_bytes`, and the **Export .zip**
+   button hands the bundle to a download. Still to come: the (optional) DOM bridge
+   for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
 9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
    links into the browser client (`run_bundle_with`, feature-gated stock entry), and
