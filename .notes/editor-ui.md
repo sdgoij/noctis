@@ -1,13 +1,13 @@
 # The editor UI: title bar, docks, and a status bar
 
-> **Status:** design proposal; **P1 (the layout model) is implemented** — see
-> *Status* at the end. P2–P5 are not. It records the *decisions* and an
-> *implementation plan* for reshaping `noctis editor`'s windowed layout into a
-> Zed-style dock system. Before P1 the layout was fixed: `crates/editor/src/window.rs`
-> drew a menu strip, an outliner panel, an inspector panel, a central viewport, and
-> floating `egui::Window`s for the console and the Extensions screen, gated by four
-> booleans (`show_outliner`, `show_inspector`, `show_console`,
-> `show_extensions`).
+> **Status:** design proposal; **P1–P2 are implemented** (the layout model and the
+> status bar) — see *Status* at the end. P3–P5 are not. It records the *decisions*
+> and an *implementation plan* for reshaping `noctis editor`'s windowed layout into
+> a Zed-style dock system. Before P1 the layout was fixed:
+> `crates/editor/src/window.rs` drew a menu strip, an outliner panel, an inspector
+> panel, a central viewport, and floating `egui::Window`s for the console and the
+> Extensions screen, gated by four booleans (`show_outliner`, `show_inspector`,
+> `show_console`, `show_extensions`).
 
 The inspiration is Zed's workspace: a custom title bar, resizable docks around a
 central pane, and a **status bar** whose buttons bring panels into view. We take
@@ -509,8 +509,12 @@ Resolved before implementation:
   docks draw around the central viewport — left, right, then bottom (claimed
   after the sides, so it sits between them) — each with a tab strip and its active
   view. The outliner, inspector, console and Extensions screen are all views; the
-  console and the Extensions screen are no longer floating windows. The menu strip
-  still carries the toggles (P2 moves them to the status bar). Covered by two pure
-  layout tests plus the updated headless console/Extensions test.
-- **P2–P5 open:** the status bar, the title bar (+`platform`), extension panels as
-  views, and the polish (send-to-dock menu, persistence).
+  console and the Extensions screen are no longer floating windows.
+- **P2 shipped.** The status bar is a bottom strip claimed *before* the docks, so
+  it spans the full width under the bottom dock. It carries one icon toggle per
+  view on the left (the icon is always drawn; the title shows only on hover) and
+  the entity count plus the last save/scene note on the right. The toggles have
+  left the menu strip. `Icon` is implemented as a monochrome-glyph placeholder
+  with a default (`⛶`) for a view that names none.
+- **P3–P5 open:** the title bar (+`platform`), extension panels as views, and the
+  polish (send-to-dock menu, persistence).

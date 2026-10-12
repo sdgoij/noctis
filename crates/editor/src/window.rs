@@ -108,8 +108,30 @@ enum View {
     Extensions,
 }
 
+/// A small monochrome icon drawn in a tab or a status-bar button.
+///
+/// Placeholder representation: the glyph is drawn as text through egui's bundled
+/// icon fonts (all monochrome). A future icon set can swap the glyph for an image
+/// without changing the call sites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Icon(&'static str);
+
+impl Icon {
+    /// The glyph this icon draws.
+    const fn glyph(self) -> &'static str {
+        self.0
+    }
+}
+
+impl Default for Icon {
+    /// The fallback a control draws when a view names no icon.
+    fn default() -> Self {
+        Icon("\u{26f6}")
+    }
+}
+
 impl View {
-    /// Every view, in the order the menu toggles appear.
+    /// Every view, in the order the toggles appear.
     const ALL: [View; 4] = [
         View::Outliner,
         View::Inspector,
@@ -117,13 +139,41 @@ impl View {
         View::Extensions,
     ];
 
-    /// The view's name: its tab label and toggle label.
+    /// The view's name: its identity and its hover tooltip. Never drawn inline.
     fn title(&self) -> &'static str {
         match self {
             View::Outliner => "Outliner",
             View::Inspector => "Inspector",
             View::Console => "Console",
             View::Extensions => "Extensions",
+        }
+    }
+
+    /// The icon the tab and status-bar button draw.
+    fn icon(&self) -> Option<Icon> {
+        Some(match self {
+            View::Outliner => Icon("\u{1f5c0}"),
+            View::Inspector => Icon("\u{2699}"),
+            View::Console => Icon("\u{1f5cb}"),
+            View::Extensions => Icon("\u{1f517}"),
+        })
+    }
+
+    /// An optional one-line description, shown under the title on hover.
+    fn hint(&self) -> Option<&'static str> {
+        Some(match self {
+            View::Outliner => "The scene hierarchy",
+            View::Inspector => "The selected entity's components",
+            View::Console => "Dispatch verb lines and read the log",
+            View::Extensions => "Enable or disable extensions",
+        })
+    }
+
+    /// The hover tooltip: the title, with `hint` appended when present.
+    fn tooltip(&self) -> String {
+        match self.hint() {
+            Some(hint) => format!("{}\n{hint}", self.title()),
+            None => self.title().to_owned(),
         }
     }
 
@@ -910,6 +960,39 @@ impl EditorDriver {
         self.select(entity);
     }
 
+    /// The status bar: the view toggles on the left, read-only status on the right.
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("noctis_status").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // The left cluster: one icon toggle per view. The icon is always
+                // drawn (a default when the view names none); the title is hover-only.
+                let mut toggle = None;
+                for view in View::ALL {
+                    let on = self.layout.is_open(&view);
+                    let icon = view.icon().unwrap_or_default();
+                    if ui
+                        .selectable_label(on, icon.glyph())
+                        .on_hover_text(view.tooltip())
+                        .clicked()
+                    {
+                        toggle = Some(view);
+                    }
+                }
+                if let Some(view) = toggle {
+                    self.layout.toggle(view);
+                }
+                // The right cluster: the last save / scene note and the entity count.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!("{} entities", self.editor.list_entities().len()));
+                    if let Some(status) = &self.status {
+                        ui.separator();
+                        ui.label(status);
+                    }
+                });
+            });
+        });
+    }
+
     /// Draw a dock's tab strip and its active view, if the dock holds any views.
     fn dock(&mut self, ui: &mut egui::Ui, dock: Dock) {
         if self.layout.dock(dock).open.is_empty() {
@@ -1473,13 +1556,6 @@ impl AppDriver for EditorDriver {
                         });
                     ui.separator();
                 }
-                for view in View::ALL {
-                    let mut open = self.layout.is_open(&view);
-                    if ui.toggle_value(&mut open, view.title()).clicked() {
-                        self.layout.toggle(view);
-                    }
-                }
-                ui.separator();
                 ui.label("Tool:");
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "Rotate (2)");
@@ -1518,12 +1594,6 @@ impl AppDriver for EditorDriver {
                     .clicked()
                 {
                     self.save();
-                }
-                ui.separator();
-                ui.label(format!("{} entities", self.editor.list_entities().len()));
-                if let Some(status) = &self.status {
-                    ui.separator();
-                    ui.label(status);
                 }
             });
             if let Some(index) = switch {
@@ -1576,6 +1646,10 @@ impl AppDriver for EditorDriver {
                 self.save();
             }
         }
+
+        // The status bar is the bottom-most strip: claim it before the docks so it
+        // spans the full width.
+        self.status_bar(ui);
 
         // The docks claim space around the central viewport. Order matters: the
         // bottom dock is claimed after the sides, so it sits between them.
@@ -2130,5 +2204,28 @@ mod tests {
         assert!(layout.is_open(&View::Outliner));
         assert!(layout.is_open(&View::Inspector));
         assert!(!layout.is_open(&View::Console));
+    }
+
+    #[test]
+    fn the_status_bar_toggles_a_dock_view() {
+        let mut editor = Editor::new();
+        editor.spawn("StatusSentinel", None);
+        let mut driver = EditorDriver::new(editor);
+        let ctx = egui::Context::default();
+
+        // The outliner is open by default, so its entities are painted.
+        let texts = one_frame(&mut driver, &ctx);
+        assert!(
+            texts.iter().any(|text| text.contains("StatusSentinel")),
+            "the outliner drew its entities: {texts:?}"
+        );
+
+        // Toggling the view off — what the status-bar button does — hides the dock.
+        driver.layout.toggle(View::Outliner);
+        let texts = one_frame(&mut driver, &ctx);
+        assert!(
+            !texts.iter().any(|text| text.contains("StatusSentinel")),
+            "the outliner is gone once toggled off: {texts:?}"
+        );
     }
 }
