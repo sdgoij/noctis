@@ -560,6 +560,10 @@ fn window_config(project: Option<&Project>) -> WindowConfig {
         title: "Noctis Editor".to_string(),
         width: 1280,
         height: 720,
+        // The editor draws its own title bar (see `editor-ui.md`). macOS keeps
+        // the native one: the custom frame is Windows/Linux only, and macOS is
+        // unsupported.
+        decorations: cfg!(target_os = "macos"),
         ..WindowConfig::default()
     };
     if let Some(project) = project {

@@ -960,6 +960,120 @@ impl EditorDriver {
         self.select(entity);
     }
 
+    /// The title bar: the app name, the menus, and (on a custom-frame platform)
+    /// the window controls. The bar's background drags the window.
+    ///
+    /// The drag and the window buttons send `ViewportCommand`s that reach winit
+    /// only when the OS chrome is hidden (`WindowConfig::decorations`); the host
+    /// applies them (see `crates/platform`).
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("noctis_titlebar").show(ui, |ui| {
+            // The bar's background is a drag handle. It is added before the
+            // widgets, so the widgets (later in the same layer) win the pointer
+            // where they are; the empty space drags the window.
+            let bar = ui.interact(
+                ui.max_rect(),
+                ui.id().with("noctis_titlebar_drag"),
+                egui::Sense::click_and_drag(),
+            );
+            if bar.drag_started_by(egui::PointerButton::Primary) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if bar.double_clicked() {
+                let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+
+            let mut switch = None;
+            ui.horizontal(|ui| {
+                ui.strong("Noctis Editor");
+                ui.separator();
+                if !self.scenes.is_empty() {
+                    ui.label("Scene:");
+                    let current = self.current_scene_index();
+                    let label = current
+                        .map(|index| self.scenes[index].name.clone())
+                        .unwrap_or_else(|| self.editor.scene_name().to_string());
+                    egui::ComboBox::from_id_salt("noctis_scene")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            for (index, choice) in self.scenes.iter().enumerate() {
+                                if ui
+                                    .selectable_label(current == Some(index), &choice.name)
+                                    .clicked()
+                                {
+                                    switch = Some(index);
+                                }
+                            }
+                        });
+                    ui.separator();
+                }
+                ui.label("Tool:");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "Rotate (2)");
+                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Scale, "Scale (3)");
+                ui.separator();
+                ui.label("Frame:");
+                ui.selectable_value(
+                    &mut self.gizmo_orientation,
+                    gizmo::GizmoOrientation::World,
+                    "World",
+                );
+                ui.selectable_value(
+                    &mut self.gizmo_orientation,
+                    gizmo::GizmoOrientation::Local,
+                    "Local",
+                );
+                ui.separator();
+                if ui
+                    .add_enabled(self.editor.can_undo(), egui::Button::new("Undo"))
+                    .clicked()
+                    && self.editor.undo()
+                {
+                    self.sync_selection();
+                }
+                if ui
+                    .add_enabled(self.editor.can_redo(), egui::Button::new("Redo"))
+                    .clicked()
+                    && self.editor.redo()
+                {
+                    self.sync_selection();
+                }
+                ui.separator();
+                let can_save = self.scene_path.is_some() || self.project.is_some();
+                if ui
+                    .add_enabled(can_save, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    self.save();
+                }
+
+                // The window buttons, right-aligned. Only drawn with the custom
+                // frame (Windows/Linux); macOS keeps the native ones.
+                #[cfg(not(target_os = "macos"))]
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("\u{1f5d9}").on_hover_text("Close").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+                    let hint = if maximized { "Restore" } else { "Maximize" };
+                    if ui.button("\u{26f6}").on_hover_text(hint).clicked() {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+                    if ui.button("\u{2212}").on_hover_text("Minimize").clicked() {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                });
+            });
+            if let Some(index) = switch {
+                self.switch_scene(index);
+            }
+        });
+    }
+
     /// The status bar: the view toggles on the left, read-only status on the right.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("noctis_status").show(ui, |ui| {
@@ -1531,75 +1645,7 @@ impl AppDriver for EditorDriver {
         // drag-select the labels. Panels created from this `ui` inherit the style.
         ui.style_mut().interaction.selectable_labels = false;
 
-        egui::Panel::top("noctis_menu").show(ui, |ui| {
-            let mut switch = None;
-            ui.horizontal(|ui| {
-                ui.strong("Noctis Editor");
-                ui.separator();
-                if !self.scenes.is_empty() {
-                    ui.label("Scene:");
-                    let current = self.current_scene_index();
-                    let label = current
-                        .map(|index| self.scenes[index].name.clone())
-                        .unwrap_or_else(|| self.editor.scene_name().to_string());
-                    egui::ComboBox::from_id_salt("noctis_scene")
-                        .selected_text(label)
-                        .show_ui(ui, |ui| {
-                            for (index, choice) in self.scenes.iter().enumerate() {
-                                if ui
-                                    .selectable_label(current == Some(index), &choice.name)
-                                    .clicked()
-                                {
-                                    switch = Some(index);
-                                }
-                            }
-                        });
-                    ui.separator();
-                }
-                ui.label("Tool:");
-                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
-                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "Rotate (2)");
-                ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Scale, "Scale (3)");
-                ui.separator();
-                ui.label("Frame:");
-                ui.selectable_value(
-                    &mut self.gizmo_orientation,
-                    gizmo::GizmoOrientation::World,
-                    "World",
-                );
-                ui.selectable_value(
-                    &mut self.gizmo_orientation,
-                    gizmo::GizmoOrientation::Local,
-                    "Local",
-                );
-                ui.separator();
-                if ui
-                    .add_enabled(self.editor.can_undo(), egui::Button::new("Undo"))
-                    .clicked()
-                    && self.editor.undo()
-                {
-                    self.sync_selection();
-                }
-                if ui
-                    .add_enabled(self.editor.can_redo(), egui::Button::new("Redo"))
-                    .clicked()
-                    && self.editor.redo()
-                {
-                    self.sync_selection();
-                }
-                ui.separator();
-                let can_save = self.scene_path.is_some() || self.project.is_some();
-                if ui
-                    .add_enabled(can_save, egui::Button::new("Save"))
-                    .clicked()
-                {
-                    self.save();
-                }
-            });
-            if let Some(index) = switch {
-                self.switch_scene(index);
-            }
-        });
+        self.title_bar(ui);
 
         // Tool and edit shortcuts. These go through egui's input (not the engine's
         // key state) so they are properly edge-triggered, and are ignored while a

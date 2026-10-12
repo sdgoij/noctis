@@ -1,13 +1,13 @@
 # The editor UI: title bar, docks, and a status bar
 
-> **Status:** design proposal; **P1–P2 are implemented** (the layout model and the
-> status bar) — see *Status* at the end. P3–P5 are not. It records the *decisions*
-> and an *implementation plan* for reshaping `noctis editor`'s windowed layout into
-> a Zed-style dock system. Before P1 the layout was fixed:
-> `crates/editor/src/window.rs` drew a menu strip, an outliner panel, an inspector
-> panel, a central viewport, and floating `egui::Window`s for the console and the
-> Extensions screen, gated by four booleans (`show_outliner`, `show_inspector`,
-> `show_console`, `show_extensions`).
+> **Status:** design proposal; **P1–P3 are implemented** (the layout model, the
+> status bar, and the title bar) — see *Status* at the end. P4–P5 are not. It
+> records the *decisions* and an *implementation plan* for reshaping
+> `noctis editor`'s windowed layout into a Zed-style dock system. Before P1 the
+> layout was fixed: `crates/editor/src/window.rs` drew a menu strip, an outliner
+> panel, an inspector panel, a central viewport, and floating `egui::Window`s for
+> the console and the Extensions screen, gated by four booleans (`show_outliner`,
+> `show_inspector`, `show_console`, `show_extensions`).
 
 The inspiration is Zed's workspace: a custom title bar, resizable docks around a
 central pane, and a **status bar** whose buttons bring panels into view. We take
@@ -516,5 +516,14 @@ Resolved before implementation:
   the entity count plus the last save/scene note on the right. The toggles have
   left the menu strip. `Icon` is implemented as a monochrome-glyph placeholder
   with a default (`⛶`) for a view that names none.
-- **P3–P5 open:** the title bar (+`platform`), extension panels as views, and the
-  polish (send-to-dock menu, persistence).
+- **P3 shipped.** The title bar is a top panel (`noctis_titlebar`) hosting the app
+  name and the menus (moved off the old `noctis_menu` strip) plus — on a
+  custom-frame platform — the window buttons (`🗙`/`⛶`/`−`). Its background drags
+  the window and a double-click toggles maximize. `WindowConfig` gained
+  `decorations` (default `true`): the editor sets it `false` on Windows/Linux and
+  keeps the native chrome on macOS. `crates/platform` now applies the frame's
+  `ViewportCommand`s with `egui_winit::process_viewport_commands` (egui-winit's own
+  `handle_platform_output` does not — eframe normally does), and presets the
+  window's `viewport_info`.
+- **P4–P5 open:** extension panels as views, and the polish (send-to-dock menu,
+  persistence).

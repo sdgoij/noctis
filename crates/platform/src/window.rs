@@ -57,6 +57,9 @@ struct EguiLayer {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    /// The viewport metadata handed to `process_viewport_commands`, refreshed
+    /// each frame from the winit window.
+    viewport_info: egui::ViewportInfo,
 }
 
 /// A window running an [`AppDriver`] with an egui overlay.
@@ -89,7 +92,8 @@ impl<D: AppDriver> WindowHost<D> {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
             .with_title(self.config.title.clone())
-            .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
+            .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
+            .with_decorations(self.config.decorations);
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(err) => {
@@ -141,10 +145,18 @@ impl<D: AppDriver> WindowHost<D> {
                     format,
                     egui_wgpu::RendererOptions::default(),
                 );
+                let mut viewport_info = egui::ViewportInfo::default();
+                egui_winit::update_viewport_info(
+                    &mut viewport_info,
+                    &egui_ctx,
+                    window.as_ref(),
+                    true,
+                );
                 self.egui = Some(EguiLayer {
                     ctx: egui_ctx,
                     state: egui_state,
                     renderer: egui_renderer,
+                    viewport_info,
                 });
                 self.renderer = Some(renderer);
             }
@@ -225,6 +237,25 @@ impl<D: AppDriver> WindowHost<D> {
             let mut output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
             egui.state
                 .handle_platform_output(&window, output.platform_output);
+
+            // Apply the frame's viewport commands (a custom title bar's Close /
+            // Maximize / StartDrag): egui-winit's `handle_platform_output` does
+            // not do this for us, so the integration must. eframe normally does.
+            let commands = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map(|viewport| viewport.commands.clone())
+                .unwrap_or_default();
+            egui_winit::update_viewport_info(&mut egui.viewport_info, &egui.ctx, &window, false);
+            let mut actions = Vec::new();
+            egui_winit::process_viewport_commands(
+                &egui.ctx,
+                &mut egui.viewport_info,
+                commands,
+                &window,
+                &mut actions,
+            );
+
             let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
 
             let size = window.inner_size();
@@ -432,6 +463,7 @@ mod tests {
         assert_eq!(config.width, 1280);
         assert_eq!(config.height, 720);
         assert!(!config.title.is_empty());
+        assert!(config.decorations, "a game keeps the OS window chrome");
     }
 
     #[test]
