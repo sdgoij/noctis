@@ -1,6 +1,7 @@
 //! The windowed editor: an [`AppDriver`] that draws egui panels over the
 //! scene's live viewport.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ecs::assets::AssetRegistry;
@@ -15,7 +16,7 @@ use render::{GizmoAxis, GizmoGeometry, GizmoMode};
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
-use crate::extension::{ExtensionHost, ExtensionReload, Interactions, Widget};
+use crate::extension::{ExtensionHost, ExtensionReload, Interactions, Panel as ExtPanel, Widget};
 use crate::gizmo;
 use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
@@ -106,6 +107,13 @@ enum View {
     Console,
     /// The Extensions enable/disable screen.
     Extensions,
+    /// One extension panel: its stable id and its display title.
+    Extension {
+        /// The panel's stable id (`"{extension_id}:{title}"`).
+        id: String,
+        /// The panel's title (its hover tooltip).
+        title: String,
+    },
 }
 
 /// A small monochrome icon drawn in a tab or a status-bar button.
@@ -140,33 +148,37 @@ impl View {
     ];
 
     /// The view's name: its identity and its hover tooltip. Never drawn inline.
-    fn title(&self) -> &'static str {
+    fn title(&self) -> &str {
         match self {
             View::Outliner => "Outliner",
             View::Inspector => "Inspector",
             View::Console => "Console",
             View::Extensions => "Extensions",
+            View::Extension { title, .. } => title.as_str(),
         }
     }
 
-    /// The icon the tab and status-bar button draw.
+    /// The icon the tab and status-bar button draw. An extension panel names none
+    /// and so takes the default.
     fn icon(&self) -> Option<Icon> {
-        Some(match self {
-            View::Outliner => Icon("\u{1f5c0}"),
-            View::Inspector => Icon("\u{2699}"),
-            View::Console => Icon("\u{1f5cb}"),
-            View::Extensions => Icon("\u{1f517}"),
-        })
+        match self {
+            View::Outliner => Some(Icon("\u{1f5c0}")),
+            View::Inspector => Some(Icon("\u{2699}")),
+            View::Console => Some(Icon("\u{1f5cb}")),
+            View::Extensions => Some(Icon("\u{1f517}")),
+            View::Extension { .. } => None,
+        }
     }
 
     /// An optional one-line description, shown under the title on hover.
-    fn hint(&self) -> Option<&'static str> {
-        Some(match self {
-            View::Outliner => "The scene hierarchy",
-            View::Inspector => "The selected entity's components",
-            View::Console => "Dispatch verb lines and read the log",
-            View::Extensions => "Enable or disable extensions",
-        })
+    fn hint(&self) -> Option<&str> {
+        match self {
+            View::Outliner => Some("The scene hierarchy"),
+            View::Inspector => Some("The selected entity's components"),
+            View::Console => Some("Dispatch verb lines and read the log"),
+            View::Extensions => Some("Enable or disable extensions"),
+            View::Extension { .. } => None,
+        }
     }
 
     /// The hover tooltip: the title, with `hint` appended when present.
@@ -182,7 +194,7 @@ impl View {
         match self {
             View::Outliner => Dock::Left,
             View::Inspector => Dock::Right,
-            View::Console | View::Extensions => Dock::Bottom,
+            View::Console | View::Extensions | View::Extension { .. } => Dock::Bottom,
         }
     }
 }
@@ -259,6 +271,15 @@ impl Layout {
             }
         }
     }
+
+    /// Show `view` in its dock and select it, if it is not already shown.
+    fn open(&mut self, view: View) {
+        let state = self.dock_mut(view.default_dock());
+        if !state.open.contains(&view) {
+            state.open.push(view);
+            state.active = state.open.len() - 1;
+        }
+    }
 }
 
 /// A windowed editor: owns an [`Editor`] and renders it with egui panels.
@@ -307,6 +328,10 @@ pub struct EditorDriver {
     /// The console's input line and scrollback.
     console_line: String,
     console_log: Vec<String>,
+    /// The extension panels drawn this frame (each is a dock view).
+    extension_panels: Vec<ExtPanel>,
+    /// Panel ids seen so far, so a panel opens in its dock only the first time.
+    seen_panels: HashSet<String>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -356,6 +381,8 @@ impl EditorDriver {
             pending_interactions: Interactions::default(),
             console_line: String::new(),
             console_log: Vec::new(),
+            extension_panels: Vec::new(),
+            seen_panels: HashSet::new(),
         }
     }
 
@@ -463,18 +490,21 @@ impl EditorDriver {
         self.console_log.push("extensions reloaded".into());
     }
 
-    /// Draw each loaded extension's own panel (needs a live host).
-    fn extension_panels(&mut self, ui: &mut egui::Ui) {
-        if self.extensions.is_none() {
-            return;
-        }
-
+    /// Draw the extensions' panels once for this frame and reconcile the dock
+    /// views with them.
+    ///
+    /// `draw_panels` has side effects — it runs the extensions and reads the
+    /// interactions they recorded last frame — so it runs exactly once per frame,
+    /// here, before the docks render the panels it produced. A panel seen for the
+    /// first time opens in its dock; a panel that is gone (its extension was
+    /// disabled or reloaded away) drops out of whichever dock held it.
+    fn refresh_extension_panels(&mut self) {
         let interactions = std::mem::take(&mut self.pending_interactions);
-        let panels = {
-            let host = self.extensions.as_mut().expect("checked above");
-            host.draw_panels(&self.editor, &interactions)
+        let panels = match self.extensions.as_mut() {
+            Some(host) => host.draw_panels(&self.editor, &interactions),
+            None => Vec::new(),
         };
-        // A panel button may have run a verb, queueing edits.
+        // A panel button (or the draw itself) may have queued edits; apply them now.
         if let Some(host) = self.extensions.as_mut() {
             let applied = host.apply_pending(&mut self.editor);
             self.console_log.extend(applied);
@@ -483,61 +513,105 @@ impl EditorDriver {
                 .extend(logs.into_iter().map(|log| format!("log: {log}")));
         }
 
-        for (panel_index, panel) in panels.iter().enumerate() {
-            let mut clicks: Vec<(usize, usize)> = Vec::new();
-            let mut values: Vec<((usize, usize), f64)> = Vec::new();
-            egui::Window::new(&panel.title)
-                .id(egui::Id::new(("noctis_ext_panel", panel_index)))
-                .default_width(220.0)
-                .show(ui.ctx(), |ui| {
-                    for widget in &panel.widgets {
-                        match widget {
-                            Widget::Heading(text) => {
-                                ui.heading(text);
-                            }
-                            Widget::Label(text) => {
-                                ui.label(text);
-                            }
-                            Widget::Separator => {
-                                ui.separator();
-                            }
-                            Widget::Button { index, label } => {
-                                if ui.button(label).clicked() {
-                                    clicks.push((panel_index, *index));
-                                }
-                            }
-                            Widget::Checkbox {
-                                index,
-                                label,
-                                checked,
-                            } => {
-                                let mut state = *checked;
-                                if ui.checkbox(&mut state, label).changed() {
-                                    values.push((
-                                        (panel_index, *index),
-                                        if state { 1.0 } else { 0.0 },
-                                    ));
-                                }
-                            }
-                            Widget::Slider {
-                                index,
-                                label,
-                                value,
-                                min,
-                                max,
-                            } => {
-                                let mut state = *value;
-                                let slider = egui::Slider::new(&mut state, *min..=*max).text(label);
-                                if ui.add(slider).changed() {
-                                    values.push(((panel_index, *index), state));
-                                }
-                            }
-                        }
-                    }
-                });
-            self.pending_interactions.activations.extend(clicks);
-            self.pending_interactions.values.extend(values);
+        // Drop views whose extension panel is no longer drawn.
+        let live: HashSet<String> = panels.iter().map(|panel| panel.id.clone()).collect();
+        for dock in [Dock::Left, Dock::Right, Dock::Bottom] {
+            let state = self.layout.dock_mut(dock);
+            state.open.retain(|view| match view {
+                View::Extension { id, .. } => live.contains(id),
+                _ => true,
+            });
+            state.active = state.active.min(state.open.len().saturating_sub(1));
         }
+        // Open a panel in its dock the first time it appears.
+        let first_seen: Vec<View> = panels
+            .iter()
+            .filter(|panel| !self.seen_panels.contains(&panel.id))
+            .map(|panel| View::Extension {
+                id: panel.id.clone(),
+                title: panel.title.clone(),
+            })
+            .collect();
+        for view in first_seen {
+            self.layout.open(view);
+        }
+        self.seen_panels
+            .extend(panels.iter().map(|panel| panel.id.clone()));
+        self.extension_panels = panels;
+    }
+
+    /// Every view the status bar offers: the built-ins, then one per extension
+    /// panel drawn this frame.
+    fn views(&self) -> Vec<View> {
+        let mut views = View::ALL.to_vec();
+        views.extend(self.extension_panels.iter().map(|panel| View::Extension {
+            id: panel.id.clone(),
+            title: panel.title.clone(),
+        }));
+        views
+    }
+
+    /// Draw one extension panel (by its stable id) as a dock view.
+    ///
+    /// The interaction indices are the panel's position in the frame's panel list
+    /// — the same global index the host computes (`panel_base` + local id).
+    fn extension_panel(&mut self, id: &str, ui: &mut egui::Ui) {
+        let Some(panel_index) = self
+            .extension_panels
+            .iter()
+            .position(|panel| panel.id.as_str() == id)
+        else {
+            ui.label("This panel is no longer available.");
+            return;
+        };
+        // Clone the widgets out: writing `pending_interactions` below must not
+        // overlap a borrow of `self.extension_panels`.
+        let widgets = self.extension_panels[panel_index].widgets.clone();
+        let mut clicks: Vec<(usize, usize)> = Vec::new();
+        let mut values: Vec<((usize, usize), f64)> = Vec::new();
+        for widget in &widgets {
+            match widget {
+                Widget::Heading(text) => {
+                    ui.heading(text);
+                }
+                Widget::Label(text) => {
+                    ui.label(text);
+                }
+                Widget::Separator => {
+                    ui.separator();
+                }
+                Widget::Button { index, label } => {
+                    if ui.button(label).clicked() {
+                        clicks.push((panel_index, *index));
+                    }
+                }
+                Widget::Checkbox {
+                    index,
+                    label,
+                    checked,
+                } => {
+                    let mut state = *checked;
+                    if ui.checkbox(&mut state, label).changed() {
+                        values.push(((panel_index, *index), if state { 1.0 } else { 0.0 }));
+                    }
+                }
+                Widget::Slider {
+                    index,
+                    label,
+                    value,
+                    min,
+                    max,
+                } => {
+                    let mut state = *value;
+                    let slider = egui::Slider::new(&mut state, *min..=*max).text(label);
+                    if ui.add(slider).changed() {
+                        values.push(((panel_index, *index), state));
+                    }
+                }
+            }
+        }
+        self.pending_interactions.activations.extend(clicks);
+        self.pending_interactions.values.extend(values);
     }
 
     /// The console: a scrollback and a line that dispatches the verb vocabulary.
@@ -1076,20 +1150,21 @@ impl EditorDriver {
 
     /// The status bar: the view toggles on the left, read-only status on the right.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let views = self.views();
         egui::Panel::bottom("noctis_status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // The left cluster: one icon toggle per view. The icon is always
                 // drawn (a default when the view names none); the title is hover-only.
                 let mut toggle = None;
-                for view in View::ALL {
-                    let on = self.layout.is_open(&view);
+                for view in &views {
+                    let on = self.layout.is_open(view);
                     let icon = view.icon().unwrap_or_default();
                     if ui
                         .selectable_label(on, icon.glyph())
                         .on_hover_text(view.tooltip())
                         .clicked()
                     {
-                        toggle = Some(view);
+                        toggle = Some(view.clone());
                     }
                 }
                 if let Some(view) = toggle {
@@ -1157,6 +1232,7 @@ impl EditorDriver {
             View::Inspector => self.inspector(ui),
             View::Console => self.console(ui),
             View::Extensions => self.extensions_screen(ui),
+            View::Extension { id, .. } => self.extension_panel(id, ui),
         }
     }
 
@@ -1645,6 +1721,10 @@ impl AppDriver for EditorDriver {
         // drag-select the labels. Panels created from this `ui` inherit the style.
         ui.style_mut().interaction.selectable_labels = false;
 
+        // Draw the extensions' panels first: the docks below render them, and the
+        // draws must happen once, before the panels they produced are shown.
+        self.refresh_extension_panels();
+
         self.title_bar(ui);
 
         // Tool and edit shortcuts. These go through egui's input (not the engine's
@@ -1723,8 +1803,6 @@ impl AppDriver for EditorDriver {
                 );
                 self.viewport_interaction(ui, rect, &response);
             });
-
-        self.extension_panels(ui);
 
         // Flush any transform edit made this frame (a gizmo drag, an inspector
         // field) into the derived world transforms the renderer draws from, so
@@ -2273,5 +2351,53 @@ mod tests {
             !texts.iter().any(|text| text.contains("StatusSentinel")),
             "the outliner is gone once toggled off: {texts:?}"
         );
+    }
+
+    #[test]
+    fn an_extension_panel_opens_in_a_dock() {
+        // An extension that draws a panel becomes a bottom-dock view (P4).
+        let root = extension_root("panel");
+        let dir = root.join("panelly");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            r#"{ "id": "com.example.panelly", "name": "Panelly", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extension.js"),
+            r#"noctis.ui.panel("PanelTools", function (ui) { ui.label("panel-body-sentinel"); });"#,
+        )
+        .unwrap();
+
+        let dirs = vec![root.clone()];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        let mut driver = EditorDriver::new(Editor::new()).with_extensions(
+            host,
+            ExtensionConfig::default(),
+            root.join("extensions.toml"),
+            dirs,
+            Vec::new(),
+            None,
+        );
+
+        let ctx = egui::Context::default();
+        let texts = one_frame(&mut driver, &ctx);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("panel-body-sentinel")),
+            "the extension panel drew in its dock: {texts:?}"
+        );
+        // It opened in the bottom dock as an `Extension` view.
+        assert_eq!(driver.layout.bottom.open.len(), 1);
+        assert!(matches!(
+            driver.layout.bottom.open[0],
+            View::Extension { .. }
+        ));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

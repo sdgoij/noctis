@@ -243,14 +243,18 @@ noctis.ui.panel("Scatter", (ui) => {
 noctis.ui.menu("Tools", "Scatter", () => noctis.run("scatter 5"));
 ```
 
-`noctis.ui.panel(title, draw)` registers an egui window; `draw` receives a
-recording `ui` handle — `text`/`label`, `heading`, `separator`, `button`,
-`checkbox` and `slider`. `ui.button(label)` is live: it returns true the frame
-after the click. `ui.checkbox(label, value)` and `ui.slider(label, value, min,
-max)` are stateful: the host renders them and the next frame returns the value
-the user set, falling back to the passed default. `noctis.ui.menu(menu, label,
-run)` is a one-button panel. Panels are windowed-only; a headless run never
-calls `draw`. The WASM equivalent is the `ui_panel` import (§ WASM panels).
+`noctis.ui.panel(title, draw)` registers a **dockable panel** — a view the user
+places in a dock, through a status-bar button; it opens in the bottom dock when it
+first appears. Its stable view id is `"{extension_id}:{title}"`, so two extensions
+may share a title, and a title change is a new panel. `draw` receives a recording
+`ui` handle — `text`/`label`, `heading`, `separator`, `button`, `checkbox` and
+`slider`. `ui.button(label)` is live: it returns true the frame after the click.
+`ui.checkbox(label, value)` and `ui.slider(label, value, min, max)` are stateful:
+the host renders them and the next frame returns the value the user set, falling
+back to the passed default. `noctis.ui.menu(menu, label, run)` is a one-button
+panel. Panels are windowed-only; a headless run never calls `draw`. The WASM
+equivalent is the `ui_panel` import (§ WASM panels). The dock layout is designed in
+[`.notes/editor-ui.md`](editor-ui.md).
 
 ## WASM extensions
 
@@ -272,7 +276,7 @@ once per frame, and reads the results out of the same memory.
 | `editor_json` | `(out_ptr, out_cap) -> i32` | Write the entity list JSON; a length, or `-2` if the buffer is too small. |
 | `edit` | `(ptr, len) -> i32` | Apply an `EditorCommand` batch (JSON) from memory; `0` ok, non-zero is the error count. |
 | `run` | `(ptr, len)` | Dispatch a verb line. |
-| `ui_panel` | `(ptr, len) -> i32` | Register a panel titled by those bytes; returns its module-local id (idempotent by title). |
+| `ui_panel` | `(ptr, len) -> i32` | Register a dockable panel titled by those bytes; returns its module-local id (idempotent by title). Its view id is `"{extension_id}:{title}"`. |
 | `ui_activated` | `(panel, widget) -> i32` | Whether that button was clicked this frame. |
 | `ui_value` | `(panel, widget) -> f64` | The value a checkbox/slider was set to, or NaN when none. |
 

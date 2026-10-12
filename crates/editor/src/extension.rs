@@ -243,7 +243,10 @@ pub enum Widget {
 /// A panel an extension drew this frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Panel {
-    /// The panel title (and its egui window id).
+    /// A stable id: `"{extension_id}:{title}"`. It survives a reload and keys the
+    /// panel's dock view.
+    pub id: String,
+    /// The panel title — its display name and hover tooltip.
     pub title: String,
     /// The widgets, in draw order.
     pub widgets: Vec<Widget>,
@@ -296,6 +299,9 @@ struct Bridge {
     reply: Option<String>,
     /// The panels drawn this frame.
     panels: Vec<Panel>,
+    /// The id of the extension currently drawing; a panel's stable id is
+    /// `"{owner}:{title}"`.
+    owner: String,
     /// The (panel, widget) activations and value changes from the previous frame.
     interactions: Interactions,
     /// The global index of the context currently drawing; a context's panel-local
@@ -399,7 +405,7 @@ impl ExtensionHost {
                 self.errors.push(format!("{}: {error}", manifest.id));
             }
             if let Some(module) = &manifest.wasm
-                && let Err(error) = self.wasm.load(&module.bytes)
+                && let Err(error) = self.wasm.load(&manifest.id, &module.bytes)
             {
                 self.errors.push(format!("{}: {error}", manifest.id));
             }
@@ -534,8 +540,13 @@ impl ExtensionHost {
         // Each context draws its own panels; the host offsets their panel-local
         // ids into the frame's global array so a click maps back to its source.
         for index in 0..self.extensions.len() {
+            let owner = self.extensions[index].id.clone();
             let base = self.bridge.borrow().panels.len();
-            self.bridge.borrow_mut().panel_base = base;
+            {
+                let mut bridge = self.bridge.borrow_mut();
+                bridge.panel_base = base;
+                bridge.owner = owner;
+            }
             if let Err(error) = self.extensions[index]
                 .context
                 .eval("__noctis_draw_panels();")
@@ -677,7 +688,10 @@ fn install(context: &mut slag::Context, bridge: Rc<RefCell<Bridge>>) -> Result<(
         Box::new(move |call| {
             let title = arg_string(call, 0).unwrap_or_default();
             let ops = arg_string(call, 1).unwrap_or_default();
-            b.borrow_mut().panels.push(Panel {
+            let mut bridge = b.borrow_mut();
+            let id = format!("{}:{title}", bridge.owner);
+            bridge.panels.push(Panel {
+                id,
                 title,
                 widgets: parse_ops(&ops),
             });

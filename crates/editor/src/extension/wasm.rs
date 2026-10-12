@@ -110,6 +110,8 @@ struct RegisteredPanel {
 /// One instantiated module.
 struct Instance {
     id: usize,
+    /// The owning extension's id (for a stable panel id).
+    extension_id: String,
     update: Option<usize>,
 }
 
@@ -151,8 +153,8 @@ impl WasmHost {
         }
     }
 
-    /// Compile, link, instantiate and initialise a module.
-    pub(crate) fn load(&mut self, bytes: &[u8]) -> Result<(), String> {
+    /// Compile, link, instantiate and initialise a module owned by `extension_id`.
+    pub(crate) fn load(&mut self, extension_id: &str, bytes: &[u8]) -> Result<(), String> {
         let module = decode(bytes).map_err(|error| format!("decode: {error}"))?;
         validate(&module).map_err(|error| format!("validate: {error}"))?;
 
@@ -207,7 +209,11 @@ impl WasmHost {
         self.call(id, "noctis_init", &[])?;
 
         let update = self.store.exported_func(id, "noctis_update");
-        self.instances.push(Instance { id, update });
+        self.instances.push(Instance {
+            id,
+            extension_id: extension_id.to_string(),
+            update,
+        });
         Ok(())
     }
 
@@ -244,6 +250,12 @@ impl WasmHost {
             }
         }
         for instance in order {
+            let extension_id = self
+                .instances
+                .iter()
+                .find(|entry| entry.id == instance)
+                .map(|entry| entry.extension_id.clone())
+                .unwrap_or_default();
             let titles: Vec<String> = self
                 .panels
                 .iter()
@@ -253,12 +265,13 @@ impl WasmHost {
             let base = self.bridge.borrow().panels.len();
             self.bridge.borrow_mut().panel_base = base;
             for (local, title) in titles.iter().enumerate() {
-                let panel = match self.draw_panel(instance, local, title) {
+                let panel = match self.draw_panel(instance, local, title, &extension_id) {
                     Ok(panel) => panel,
                     Err(error) => {
                         self.errors.push(format!("panel {title:?}: {error}"));
                         // Keep an empty panel so later panels' indices stay put.
                         Panel {
+                            id: format!("{extension_id}:{title}"),
                             title: title.clone(),
                             widgets: Vec::new(),
                         }
@@ -275,7 +288,13 @@ impl WasmHost {
     }
 
     /// Ask the module to draw panel `local` and parse the ops it writes.
-    fn draw_panel(&mut self, instance: usize, local: usize, title: &str) -> Result<Panel, String> {
+    fn draw_panel(
+        &mut self,
+        instance: usize,
+        local: usize,
+        title: &str,
+        extension_id: &str,
+    ) -> Result<Panel, String> {
         if self.store.exported_func(instance, "noctis_ui").is_none() {
             return Err("a panel is registered but the module does not export noctis_ui".into());
         }
@@ -305,6 +324,7 @@ impl WasmHost {
             };
             let json = String::from_utf8_lossy(&bytes);
             return Ok(Panel {
+                id: format!("{extension_id}:{title}"),
                 title: title.to_string(),
                 widgets: parse_ops(&json),
             });

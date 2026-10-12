@@ -1,13 +1,13 @@
 # The editor UI: title bar, docks, and a status bar
 
-> **Status:** design proposal; **P1–P3 are implemented** (the layout model, the
-> status bar, and the title bar) — see *Status* at the end. P4–P5 are not. It
-> records the *decisions* and an *implementation plan* for reshaping
-> `noctis editor`'s windowed layout into a Zed-style dock system. Before P1 the
-> layout was fixed: `crates/editor/src/window.rs` drew a menu strip, an outliner
-> panel, an inspector panel, a central viewport, and floating `egui::Window`s for
-> the console and the Extensions screen, gated by four booleans (`show_outliner`,
-> `show_inspector`, `show_console`, `show_extensions`).
+> **Status:** design proposal; **P1–P4 are implemented** (the layout model, the
+> status bar, the title bar, and extension panels in docks) — see *Status* at the
+> end. P5 is not. It records the *decisions* and an *implementation plan* for
+> reshaping `noctis editor`'s windowed layout into a Zed-style dock system. Before
+> P1 the layout was fixed: `crates/editor/src/window.rs` drew a menu strip, an
+> outliner panel, an inspector panel, a central viewport, and floating
+> `egui::Window`s for the console and the Extensions screen, gated by four booleans
+> (`show_outliner`, `show_inspector`, `show_console`, `show_extensions`).
 
 The inspiration is Zed's workspace: a custom title bar, resizable docks around a
 central pane, and a **status bar** whose buttons bring panels into view. We take
@@ -525,5 +525,10 @@ Resolved before implementation:
   `ViewportCommand`s with `egui_winit::process_viewport_commands` (egui-winit's own
   `handle_platform_output` does not — eframe normally does), and presets the
   window's `viewport_info`.
-- **P4–P5 open:** extension panels as views, and the polish (send-to-dock menu,
-  persistence).
+- **P4 shipped.** `extension::Panel` carries a stable `id`
+  (`"{extension_id}:{title}"`); the JS and WASM hosts stamp it, and wasm `load`
+  takes the owning extension id. A panel is a `View::Extension { id, title }` that
+  opens in the bottom dock the first time it appears and is dropped if its
+  extension goes away; `draw_panels` runs once per frame (at the top of `ui`) and
+  the docks render the panels it produced. The floating extension windows are gone.
+- **P5 open:** the polish (send-to-dock menu, persistence, tab drag).
