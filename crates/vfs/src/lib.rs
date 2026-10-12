@@ -164,10 +164,19 @@ pub trait Store: fmt::Debug {
 /// Validate and normalize a relative path to a `/`-joined key.
 ///
 /// Every component must be a plain name; an absolute path or a `..` is refused.
-/// `.` components and repeated separators are folded away, and `""` (the root) is
-/// allowed.
+/// `.` components and repeated separators are folded away, `\` is folded to `/`
+/// (on every platform, not only Windows), and `""` (the root) is allowed.
 pub fn validate_relative(path: &str) -> Result<String, StoreError> {
-    let candidate = Path::new(path);
+    // Keys are `/`-separated, so a `\` is always a separator — normalization
+    // must not depend on the host platform (`Path::components` only folds `\`
+    // on Windows). This also makes a `\`-rooted path absolute on Unix, so the
+    // escape check below catches it there too.
+    let text: std::borrow::Cow<'_, str> = if path.contains('\\') {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    };
+    let candidate = Path::new(text.as_ref());
     if candidate.is_absolute() {
         return Err(StoreError::Invalid(format!(
             "{path:?} must be a relative path"
