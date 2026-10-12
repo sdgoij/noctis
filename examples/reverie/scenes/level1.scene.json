@@ -1,0 +1,1682 @@
+{
+  "name": "Level 1",
+  "format_version": 1,
+  "mode": "2d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Root",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": []
+    },
+    {
+      "id": 1,
+      "name": "Camera",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          48.0,
+          104.0,
+          10.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": [
+        {
+          "type": "camera",
+          "projection": {
+            "kind": "orthographic",
+            "height": 270.0,
+            "near": 0.1,
+            "far": 100.0
+          },
+          "is_active": true,
+          "priority": 0,
+          "clear_color": [
+            0.0021246888848418626,
+            0.010329823029626936,
+            0.012286488356915872,
+            1.0
+          ],
+          "hdr": false
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1120.0,
+          184.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          64.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          664.0,
+          152.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          80.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          312.0,
+          136.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          80.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          992.0,
+          136.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          96.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          504.0,
+          104.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          160.0,
+          88.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          96.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          832.0,
+          88.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          96.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          272.0,
+          72.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          32.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          520.0,
+          56.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          56.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          248.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          144.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          416.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          96.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          520.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          600.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          48.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          712.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          80.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1056.0,
+          40.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          192.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          56.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          248.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          144.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          496.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          256.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          712.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          80.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          776.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          48.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          944.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          32.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1056.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          192.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          56.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          248.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          144.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          496.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          256.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          736.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          128.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          824.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          48.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          912.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          32.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1040.0,
+          8.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          224.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "name": "Coin_69_2",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1112.0,
+          232.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "name": "Coin_40_6",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          648.0,
+          168.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "name": "Coin_19_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          312.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "name": "Coin_31_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          504.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "name": "Coin_61_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          984.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "name": "Coin_62_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1000.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Coin_63_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1016.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "name": "Coin_64_7",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1032.0,
+          152.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "name": "Coin_34_9",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          552.0,
+          120.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "name": "Coin_9_10",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          152.0,
+          104.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "name": "Coin_12_10",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          200.0,
+          104.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "name": "Coin_48_14",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          776.0,
+          40.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "name": "Coin_51_15",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          824.0,
+          24.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          12.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Coin",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "name": "Goal",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1112.0,
+          88.0,
+          -1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          16.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Goal",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 46,
+      "name": "Player",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          38.0,
+          104.5,
+          1.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          12.0,
+          1.0,
+          15.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Player",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 47,
+      "name": "HUD",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          5.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": [
+        {
+          "type": "text",
+          "text": "COINS 0",
+          "font": "assets/fonts/NoctisSans.ttf",
+          "size": 12.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "anchor": "bottom_left",
+          "depth_test": false
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "name": "Game",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": [
+        {
+          "type": "script",
+          "source": null,
+          "path": "scripts/level1.js",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}
