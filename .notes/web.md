@@ -236,9 +236,13 @@ future `IdbStore` would take.
 Open and save flows:
 
 - **Open from URL:** fetch → `ZipStore` (read-only) or unpack into OPFS.
-- **Import a folder:** the user drags files onto the canvas; the JS glue reads
-  them as bytes and writes them through the `Store` (the editor's existing
-  drag-and-drop shapes onto this).
+- **Import a file:** *(Shipped.)* the user drops a file onto the page; the host's
+  `drop`/`dragover` listeners (`platform/src/web.rs`) read each `File`'s bytes
+  asynchronously and hand them to `AppDriver::drop_bytes(name, bytes)` at the next
+  frame — the browser's bytes-and-name counterpart to the native, path-based
+  `drop_file`. `Project::import_bytes` writes them into the store, under the
+  kind's conventional directory, and a dropped model instantiates through
+  `Editor::import_gltf_bytes`.
 - **Save:** serialize the `Store` back to a `.zip` → a `Blob` download, or persist
   to OPFS/IndexedDB.
 
@@ -441,8 +445,9 @@ tool/client, rebuilt only when a plugin or the engine changes.
    scene/assets through the `Store`, run the loop, run Slag-interpreted scripts.
 5. **Storage backends.** *(Shipped.)* `vfs::OpfsStore`, plus the whole-tree helpers
    `vfs::snapshot`/`opfs::load_tree`/`save_tree`; the editor's Save writes through
-   the project's store, and the browser entry persists it to OPFS. The drag-drop
-   import and download-a-`.zip` flows are still to come.
+   the project's store, and the browser entry persists it to OPFS. Drag-drop
+   import is shipped (`AppDriver::drop_bytes` → `Project::import_bytes`); the
+   download-a-`.zip` flow is still to come.
 6. **Audio web backend** and the user-gesture resume. **Shipped:**
    `crates/audio/src/web.rs`.
 7. **The browser editor.** *(Shipped, first cut.)* `crates/editor` builds for
@@ -452,8 +457,10 @@ tool/client, rebuilt only when a plugin or the engine changes.
    a `start_editor` entry and `web/editor.html`, which fetches a bundle and runs
    `EditorDriver` on that host. The project lives in **OPFS**: the first run unpacks
    the bundle into it, and Save writes through the project's **store**
-   (`EditorDriver`'s save hook snapshots it back to OPFS). Still to come: drag-drop
-   import and the (optional) DOM bridge for extensions.
+   (`EditorDriver`'s save hook snapshots it back to OPFS). Drag-drop import is
+   shipped: the host reads a dropped `File`'s bytes and routes them through
+   `AppDriver::drop_bytes` → `Project::import_bytes`. Still to come: the (optional)
+   DOM bridge for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
 9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
    links into the browser client (`run_bundle_with`, feature-gated stock entry), and

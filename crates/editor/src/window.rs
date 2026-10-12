@@ -2060,26 +2060,48 @@ impl AppDriver for EditorDriver {
     }
 
     fn drop_file(&mut self, path: &Path) {
-        // With an open project, a dropped file is imported into it (and a model is
-        // instantiated); without one, a model is imported directly.
+        // The native host's drop gives a path; read it and share the import path
+        // with the browser's bytes-based drop.
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            eprintln!(
+                "noctis editor: drop import failed: {} has no file name",
+                path.display()
+            );
+            return;
+        };
+        match std::fs::read(path) {
+            Ok(bytes) => self.import_dropped(name, &bytes),
+            Err(error) => eprintln!("noctis editor: drop import failed: {error}"),
+        }
+    }
+
+    fn drop_bytes(&mut self, name: &str, bytes: &[u8]) {
+        self.import_dropped(name, bytes);
+    }
+}
+
+impl EditorDriver {
+    /// Import a dropped file's bytes into the open project (writing it to the
+    /// store and instantiating it when it is a model), or — with no project —
+    /// instantiate a model. Both drop seams route here.
+    fn import_dropped(&mut self, name: &str, bytes: &[u8]) {
         match self.project.clone() {
-            Some(mut project) => match project.import_file(path) {
+            Some(mut project) => match project.import_bytes(name, bytes) {
                 Ok(asset) => {
                     eprintln!("noctis editor: imported {}", asset.as_str());
-                    if matches!(detect(asset.as_str()), AssetKind::Model) {
-                        let file = project.file_for(&asset);
-                        if let Err(error) = self.editor.import_gltf(&file) {
-                            eprintln!(
-                                "noctis editor: failed to instantiate {}: {error}",
-                                asset.as_str()
-                            );
-                        }
+                    if matches!(detect(asset.as_str()), AssetKind::Model)
+                        && let Err(error) = self.editor.import_gltf_bytes(bytes)
+                    {
+                        eprintln!(
+                            "noctis editor: failed to instantiate {}: {error}",
+                            asset.as_str()
+                        );
                     }
                 }
                 Err(error) => eprintln!("noctis editor: drop import failed: {error}"),
             },
             None => {
-                if let Err(error) = self.editor.import_gltf(path) {
+                if let Err(error) = self.editor.import_gltf_bytes(bytes) {
                     eprintln!("noctis editor: drop import failed: {error}");
                 }
             }
@@ -2361,6 +2383,46 @@ mod tests {
             "{:?}",
             driver.status
         );
+    }
+
+    #[test]
+    fn drop_bytes_imports_into_the_project() {
+        // The browser drop path: bytes and a name, no path.
+        let dir = project_dir("drop-bytes");
+        let project = Project::open(&dir).expect("project");
+        let mut driver = EditorDriver::new(Editor::new()).with_project(Some(project));
+
+        driver.drop_bytes("wood.png", b"PNG");
+
+        let written = dir.join("assets/textures/wood.png");
+        assert!(written.is_file(), "the dropped file landed at {written:?}");
+        assert_eq!(std::fs::read(&written).unwrap(), b"PNG");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn drop_file_reads_the_path_and_imports_it() {
+        // The native path: read the file and share the import path with the bytes
+        // drop.
+        let dir = project_dir("drop-file");
+        let project = Project::open(&dir).expect("project");
+        let mut driver = EditorDriver::new(Editor::new()).with_project(Some(project));
+
+        let source = std::env::temp_dir().join(format!("noctis-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let file = source.join("hit.wav");
+        std::fs::write(&file, b"RIFF").unwrap();
+
+        driver.drop_file(&file);
+
+        let written = dir.join("assets/audio/hit.wav");
+        assert!(written.is_file(), "the dropped file landed at {written:?}");
+        assert_eq!(std::fs::read(&written).unwrap(), b"RIFF");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&source).ok();
     }
 
     #[test]

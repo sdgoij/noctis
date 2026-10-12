@@ -1,10 +1,12 @@
 //! Importing a loose file into a project (the drag & drop operation).
 //!
-//! [`Project::import_file`] detects a file's kind by extension, copies it into the
-//! kind's conventional directory, and returns the new asset path. It never
-//! clobbers an existing file: a name collision gets a `-1`, `-2`, … suffix. An
-//! unrecognised file is an error (the caller should ask the user what it is),
-//! mirroring the drag & drop table in `.notes/project.md`.
+//! [`Project::import_file`] (a path) and [`Project::import_bytes`] (a name and
+//! bytes) detect a file's kind by extension, copy it into the kind's conventional
+//! directory, and return the new asset path. Neither ever clobbers an existing
+//! file: a name collision gets a `-1`, `-2`, … suffix. An unrecognised file is an
+//! error (the caller should ask the user what it is), mirroring the drag & drop
+//! table in `.notes/project.md`. The bytes form is the browser's drop path — a
+//! `File` has a name and bytes but no path (see `.notes/web.md`).
 
 use std::path::Path;
 
@@ -25,6 +27,24 @@ impl Project {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| ProjectError::Path(format!("{} has no file name", source.display())))?;
+        // The source is an arbitrary path outside the project, so it is read
+        // directly; the copy into the project goes through the store.
+        let bytes = std::fs::read(source).map_err(|e| ProjectError::Io(e.to_string()))?;
+        self.import_bytes(name, &bytes)
+    }
+
+    /// Import an in-memory file into the project, under the conventional
+    /// directory for its kind, and return the new asset path.
+    ///
+    /// This is the browser's drag & drop path: a dropped `File` carries a name and
+    /// bytes but no path. Any directory components in `name` are dropped, so a
+    /// path-like name collapses to its final segment; a collision gets a `-N`
+    /// suffix rather than overwriting the existing file.
+    pub fn import_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<AssetPath, ProjectError> {
+        let name = base_name(name);
+        if name.is_empty() {
+            return Err(ProjectError::Path("a dropped file has no name".to_string()));
+        }
         let kind = detect(name);
         let Some(dir) = kind.default_dir() else {
             return Err(ProjectError::Path(format!(
@@ -32,18 +52,20 @@ impl Project {
                  audio, font, script, scene, or prefab)"
             )));
         };
-
-        // The source is an arbitrary path outside the project, so it is read
-        // directly; the copy into the project goes through the store.
-        let bytes = std::fs::read(source).map_err(|e| ProjectError::Io(e.to_string()))?;
         let store = self.store_mut();
         let file_name = unique_name(store, dir, name);
         let relative = format!("{dir}/{file_name}");
         store
-            .write(&relative, &bytes)
+            .write(&relative, bytes)
             .map_err(|e| ProjectError::Io(e.to_string()))?;
         AssetPath::parse(relative)
     }
+}
+
+/// The final path segment of `name`, so a path-like drop name collapses to a
+/// bare file name.
+fn base_name(name: &str) -> &str {
+    name.rsplit(['/', '\\']).next().unwrap_or(name)
 }
 
 /// The name inside `dir` for `name`, with a `-N` suffix when the name is already

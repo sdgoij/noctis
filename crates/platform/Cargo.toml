@@ -33,10 +33,15 @@ js-sys.workspace = true
 # because `egui-winit` cannot build for `wasm32-unknown-unknown`.
 egui-wgpu = { version = "0.36", default-features = false }
 web-sys = { workspace = true, features = [
+    "Blob",
+    "DataTransfer",
     "Document",
+    "DragEvent",
     "Element",
     "Event",
     "EventTarget",
+    "File",
+    "FileList",
     "HtmlCanvasElement",
     "HtmlElement",
     "KeyboardEvent",

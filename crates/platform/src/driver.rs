@@ -86,4 +86,14 @@ pub trait AppDriver {
     fn drop_file(&mut self, path: &std::path::Path) {
         let _ = path;
     }
+
+    /// A file was dropped onto the window with no path: its file name and its
+    /// bytes. The default does nothing.
+    ///
+    /// A browser drop (see `.notes/web.md`) gives a `File` — bytes and a name,
+    /// but no path — so the bytes-based seam sits beside the path-based
+    /// [`AppDriver::drop_file`] the native host uses.
+    fn drop_bytes(&mut self, name: &str, bytes: &[u8]) {
+        let _ = (name, bytes);
+    }
 }

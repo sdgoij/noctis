@@ -99,3 +99,62 @@ fn import_rejects_an_unknown_type() {
     std::fs::remove_dir_all(&dir).ok();
     std::fs::remove_dir_all(&source).ok();
 }
+
+#[test]
+fn import_bytes_places_by_kind_and_never_clobbers() {
+    let dir = temp_dir("bytes");
+    write(&dir.join("noctis.toml"), MANIFEST.as_bytes());
+    let mut project = Project::open(&dir).expect("open");
+
+    let first = project.import_bytes("wood.png", b"PNG").expect("import");
+    assert_eq!(first, AssetPath::parse("assets/textures/wood.png").unwrap());
+    assert_eq!(
+        std::fs::read(dir.join("assets/textures/wood.png")).unwrap(),
+        b"PNG"
+    );
+
+    // A second import of the same name does not overwrite.
+    let second = project
+        .import_bytes("wood.png", b"OTHER")
+        .expect("import again");
+    assert_eq!(
+        second,
+        AssetPath::parse("assets/textures/wood-1.png").unwrap()
+    );
+    assert_eq!(
+        std::fs::read(dir.join("assets/textures/wood.png")).unwrap(),
+        b"PNG"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn import_bytes_drops_directory_components() {
+    let dir = temp_dir("bytes-path");
+    write(&dir.join("noctis.toml"), MANIFEST.as_bytes());
+    let mut project = Project::open(&dir).expect("open");
+
+    // A path-like name must land as a plain file name, not escape the kind's
+    // conventional directory.
+    let asset = project
+        .import_bytes("some/dir/hero.glb", b"glTF")
+        .expect("import");
+    assert_eq!(asset, AssetPath::parse("assets/models/hero.glb").unwrap());
+
+    let asset = project
+        .import_bytes("C:\\some\\dir\\hit.wav", b"RIFF")
+        .expect("import");
+    assert_eq!(asset, AssetPath::parse("assets/audio/hit.wav").unwrap());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn import_bytes_rejects_an_unknown_type() {
+    let dir = temp_dir("bytes-unknown");
+    write(&dir.join("noctis.toml"), MANIFEST.as_bytes());
+    let mut project = Project::open(&dir).expect("open");
+    assert!(project.import_bytes("mystery.xyz", b"?").is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}

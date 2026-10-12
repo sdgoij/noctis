@@ -11,7 +11,10 @@
 //! buttons and motion reach [`AppDriver::input_mut`], `Esc` reaches
 //! [`AppDriver::on_escape`], and [`AppDriver::cursor_captured`] drives the
 //! browser's **pointer lock** (with `movementX`/`Y` supplying the delta while
-//! locked), so mouse-look works the same as it does in a window.
+//! locked), so mouse-look works the same as it does in a window. A dropped file
+//! reaches [`AppDriver::drop_bytes`] (a browser `File` has bytes and a name, not
+//! a path): the DOM handler reads each file's bytes asynchronously and queues the
+//! result for the next frame.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -49,6 +52,12 @@ enum RawEvent {
     },
     Wheel {
         points: f32,
+    },
+    /// A file dropped onto the window: its name and bytes, read asynchronously by
+    /// the DOM handler and applied at the next frame.
+    Drop {
+        name: String,
+        bytes: Vec<u8>,
     },
 }
 
@@ -259,6 +268,56 @@ fn install_listeners(
         let _ = canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref());
         closure.forget();
     }
+
+    // A drop has two halves: `dragover` must cancel the default (the browser only
+    // fires `drop` for a target that did); `drop` reads each `File`'s bytes —
+    // asynchronously, since a `File` is a lazy blob — and queues a [`RawEvent::Drop`]
+    // for the next frame. The listeners go on the whole window, so a drop anywhere
+    // on the page counts, not just exactly on the canvas.
+    {
+        let closure =
+            Closure::<dyn FnMut(web_sys::DragEvent)>::new(move |event: web_sys::DragEvent| {
+                event.prevent_default()
+            });
+        let _ =
+            window.add_event_listener_with_callback("dragover", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+    {
+        let events = Rc::clone(events);
+        let closure =
+            Closure::<dyn FnMut(web_sys::DragEvent)>::new(move |event: web_sys::DragEvent| {
+                event.prevent_default();
+                let Some(files) = event.data_transfer().and_then(|transfer| transfer.files())
+                else {
+                    return;
+                };
+                for index in 0..files.length() {
+                    let Some(file) = files.get(index) else {
+                        continue;
+                    };
+                    let name = file.name();
+                    let events = Rc::clone(&events);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match read_dropped_file(&file).await {
+                            Ok(bytes) => events.borrow_mut().push(RawEvent::Drop { name, bytes }),
+                            Err(error) => log::warn!("failed to read dropped file: {error}"),
+                        }
+                    });
+                }
+            });
+        let _ = window.add_event_listener_with_callback("drop", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
+}
+
+/// Read a dropped `File`'s bytes. A `File` is a lazy blob, so this awaits its
+/// `arrayBuffer()`.
+async fn read_dropped_file(file: &web_sys::File) -> Result<Vec<u8>, String> {
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
 /// Schedule the next frame with `requestAnimationFrame`.
@@ -394,12 +453,14 @@ fn present<D: AppDriver>(state: &mut Loop<D>, seconds: f64) {
 fn apply_events<D: AppDriver>(state: &mut Loop<D>) {
     let pending: Vec<RawEvent> = std::mem::take(&mut *state.events.borrow_mut());
 
-    // `Esc` asks the driver to pause; it is not an input-state event.
-    if pending
-        .iter()
-        .any(|event| matches!(event, RawEvent::Escape))
-    {
-        state.driver.on_escape();
+    // `Esc` and a dropped file are driver actions, not input state, so they reach
+    // the driver even when it takes no input.
+    for event in &pending {
+        match event {
+            RawEvent::Escape => state.driver.on_escape(),
+            RawEvent::Drop { name, bytes } => state.driver.drop_bytes(name, bytes),
+            _ => {}
+        }
     }
 
     let Some(input) = state.driver.input_mut() else {
@@ -407,7 +468,7 @@ fn apply_events<D: AppDriver>(state: &mut Loop<D>) {
     };
     for event in pending {
         match event {
-            RawEvent::Escape => {}
+            RawEvent::Escape | RawEvent::Drop { .. } => {}
             RawEvent::Key { name, down } => {
                 if let Some(key) = ecs::resources::Key::from_name(&name) {
                     if down {
