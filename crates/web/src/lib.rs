@@ -83,6 +83,7 @@ pub fn run_bundle(canvas_id: &str, bundle_url: &str) {
 /// Returns immediately; the game runs until the page unloads. A failure is logged
 /// to the browser console — there is no caller left to return to.
 pub fn run_bundle_with<P: Plugin + 'static>(canvas_id: &str, bundle_url: &str, plugin: P) {
+    platform::init_logging();
     let canvas_id = if canvas_id.is_empty() {
         DEFAULT_CANVAS_ID.to_string()
     } else {

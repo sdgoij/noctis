@@ -29,6 +29,9 @@ pub fn start_editor(canvas_id: &str, bundle_url: &str) {
 /// Run the editor on the project in OPFS (seeding it from `bundle_url` on the
 /// first run). Returns immediately; the editor runs until the page unloads.
 pub fn run_editor_bundle(canvas_id: &str, bundle_url: &str) {
+    // Install the console logger first: opening the project's assets is where a
+    // failure is most likely, and it runs before the host is built.
+    platform::init_logging();
     let canvas_id = if canvas_id.is_empty() {
         DEFAULT_CANVAS_ID.to_string()
     } else {

@@ -530,6 +530,41 @@ fn host_err(message: impl Into<String>) -> PlatformError {
     PlatformError::EventLoop(message.into())
 }
 
+/// A `log` sink that forwards to the browser console, so the engine's `log`
+/// output — wgpu's startup notes, a driver's failures — is visible in a browser
+/// (the native host's `StderrLogger` is its counterpart).
+struct ConsoleLogger;
+
+impl log::Log for ConsoleLogger {
+    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        let message: wasm_bindgen::JsValue =
+            format!("[{}] {}", record.level(), record.args()).into();
+        match record.level() {
+            log::Level::Error => web_sys::console::error_1(&message),
+            log::Level::Warn => web_sys::console::warn_1(&message),
+            log::Level::Info => web_sys::console::info_1(&message),
+            _ => web_sys::console::log_1(&message),
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Install the browser-console `log` sink.
+///
+/// Idempotent (a second call is a no-op, like the native `init_logging`), so an
+/// entry point can call it first — before the work whose failures it wants to
+/// see. Without it the `log` macros are silent on the web.
+pub fn init_logging() {
+    static LOGGER: ConsoleLogger = ConsoleLogger;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 /// Trigger a browser download of `bytes`, as a file named `name`.
 ///
 /// Wraps the bytes in a `Blob`, points a temporary object URL at it, and clicks a
