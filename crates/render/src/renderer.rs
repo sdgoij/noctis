@@ -59,6 +59,7 @@ use crate::lights::{LightsUniform, MAX_LIGHTS, extract_lights, primary_shadow_li
 use crate::tonemap::Tonemap;
 use ecs::assets::{AssetId, AssetRegistry, HdrTexture, Material};
 use ecs::components::{GlobalTransform, LightKind, Text};
+use ecs::resources::FrameImage;
 use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
 use std::collections::HashMap;
@@ -233,6 +234,13 @@ pub struct Renderer {
     present_pipeline: Option<wgpu::RenderPipeline>,
     present_bind_group: Option<wgpu::BindGroup>,
     present_format: Option<wgpu::TextureFormat>,
+    /// Fullscreen blit of a driver-provided [`FrameImage`], into the LDR target
+    /// (headless) or the surface.
+    image_pipeline: wgpu::RenderPipeline,
+    /// Nearest sampler for the frame image, so pixel art stays crisp.
+    frame_sampler: wgpu::Sampler,
+    /// The cached frame texture: `(width, height, texture, view)`.
+    frame_target: Option<(u32, u32, wgpu::Texture, wgpu::TextureView)>,
 }
 
 impl std::fmt::Debug for Renderer {
@@ -344,6 +352,25 @@ impl Renderer {
         // this one through `Material::filter`.
         let material_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("material.sampler.nearest"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Blit a driver-provided frame into the LDR target (headless) — the same
+        // fullscreen triangle and sRGB convention as the present pass.
+        let image_pipeline = create_present_pipeline(
+            &device,
+            &layouts,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "fs_passthrough",
+        );
+        let frame_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("frame.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -468,6 +495,9 @@ impl Renderer {
             present_pipeline: None,
             present_bind_group: None,
             present_format: None,
+            image_pipeline,
+            frame_sampler,
+            frame_target: None,
         }
     }
 
@@ -1276,6 +1306,217 @@ impl Renderer {
         })
     }
 
+    /// Upload `image` to the reusable frame texture and return its view, or
+    /// `None` if the pixel buffer is too short for its dimensions.
+    fn upload_frame(&mut self, image: &FrameImage) -> Option<wgpu::TextureView> {
+        let width = image.width.max(1);
+        let height = image.height.max(1);
+        let expected = (width as usize) * (height as usize) * 4;
+        if image.rgba.len() < expected {
+            return None;
+        }
+
+        let recreate = match &self.frame_target {
+            Some((w, h, _, _)) => *w != width || *h != height,
+            None => true,
+        };
+        if recreate {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frame.texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // Holds sRGB-encoded bytes in a linear format, exactly like the
+                // LDR target the present shader is written for.
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.frame_target = Some((width, height, texture, view));
+        }
+
+        let (_, _, texture, view) = self.frame_target.as_ref()?;
+        let copy = wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        };
+        let extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let row_bytes = (width * 4) as usize;
+        // `write_texture` wants each row 256-byte aligned; a frame is often much
+        // narrower than that, so pad when needed.
+        let padded = row_bytes.div_ceil(256) * 256;
+        let layout = wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(padded as u32),
+            rows_per_image: Some(height),
+        };
+        if padded == row_bytes {
+            self.queue
+                .write_texture(copy, &image.rgba[..expected], layout, extent);
+        } else {
+            let mut buffer = vec![0u8; padded * height as usize];
+            for row in 0..height as usize {
+                let src = row * row_bytes;
+                buffer[row * padded..row * padded + row_bytes]
+                    .copy_from_slice(&image.rgba[src..src + row_bytes]);
+            }
+            self.queue.write_texture(copy, &buffer, layout, extent);
+        }
+        Some(view.clone())
+    }
+
+    fn frame_bind_group(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("frame.bind_group"),
+            layout: &self.layouts.present,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.frame_sampler),
+                },
+            ],
+        })
+    }
+
+    /// Present a driver-provided frame across the whole window, drawing `overlay`
+    /// on top (an egui UI) before presenting. The scene is not rendered.
+    ///
+    /// This is how a software renderer ships its own pixels: the frame's bytes
+    /// are sRGB-encoded, matching the present shader's LDR convention. A window-less
+    /// renderer reports [`RenderError::Unsupported`].
+    pub fn present_image(
+        &mut self,
+        image: &FrameImage,
+        overlay: &mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView),
+    ) -> Result<(), RenderError> {
+        let Some(view) = self.upload_frame(image) else {
+            return Err(RenderError::Unsupported(
+                "frame image is shorter than width * height * 4 bytes".into(),
+            ));
+        };
+        let Some((surface_frame, suboptimal)) = self.acquire_frame()? else {
+            return Ok(());
+        };
+        let bind_group = self.frame_bind_group(&view);
+        let surface_view = surface_frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("image.encoder"),
+            });
+        {
+            let pipeline = self.present_pipeline.as_ref().ok_or_else(|| {
+                RenderError::Unsupported("renderer has no present pipeline".into())
+            })?;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("image.present.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        overlay(&mut encoder, &surface_view);
+        self.queue.submit(Some(encoder.finish()));
+        self.queue.present(surface_frame);
+        if suboptimal {
+            self.reconfigure_surface();
+        }
+        Ok(())
+    }
+
+    /// Draw `image` full-window into the offscreen LDR target and read the pixels
+    /// back — the headless twin of [`Renderer::present_image`], for tests.
+    pub fn render_image(&mut self, image: &FrameImage) -> Result<Frame, RenderError> {
+        let Some(view) = self.upload_frame(image) else {
+            return Err(RenderError::Unsupported(
+                "frame image is shorter than width * height * 4 bytes".into(),
+            ));
+        };
+        let bind_group = self.frame_bind_group(&view);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("image.readback.encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("image.readback.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.targets.ldr.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.image_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        // The readback step `render_scene` normally records: copy the LDR target
+        // into the mappable buffer [`Renderer::read_back`] maps.
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.targets.ldr.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.targets.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.targets.padded_bytes_per_row),
+                    rows_per_image: Some(self.targets.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.targets.width,
+                height: self.targets.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        self.read_back()
+    }
+
     /// `true` if this renderer presents to a window surface.
     pub fn has_surface(&self) -> bool {
         self.surface.is_some()
@@ -1793,6 +2034,71 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0],
             &mut |_: &mut wgpu::CommandEncoder, _: &wgpu::TextureView| {},
         );
+        assert!(
+            matches!(result, Err(RenderError::Unsupported(_))),
+            "{result:?}"
+        );
+    }
+
+    /// A driver-provided frame is blitted across the whole window; the headless
+    /// [`Renderer::render_image`] is its twin, so a frame reads back pixel-for-pixel.
+    #[test]
+    fn a_frame_image_is_blitted_or_reports_no_adapter() {
+        use ecs::resources::FrameImage;
+
+        let mut renderer = match Renderer::headless(RendererConfig {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        }) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let image = FrameImage {
+            width: 2,
+            height: 2,
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, // top: red, green
+                0, 0, 255, 255, 255, 255, 255, 255, // bottom: blue, white
+            ],
+        };
+        let frame = renderer.render_image(&image).expect("blit the frame image");
+        assert_eq!((frame.width, frame.height), (2, 2));
+        assert_eq!(
+            frame.rgba, image.rgba,
+            "the frame must be blitted unchanged"
+        );
+    }
+
+    /// With no surface there is nothing to present to, so the driver-frame present
+    /// reports it rather than panicking.
+    #[test]
+    fn present_image_without_a_surface_reports_it() {
+        use ecs::resources::FrameImage;
+
+        let mut renderer = match Renderer::headless(RendererConfig {
+            width: 2,
+            height: 2,
+            ..Default::default()
+        }) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+        let image = FrameImage {
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+        };
+        let result = renderer.present_image(&image, &mut |_, _| {});
         assert!(
             matches!(result, Err(RenderError::Unsupported(_))),
             "{result:?}"

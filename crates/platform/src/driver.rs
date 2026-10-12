@@ -1,7 +1,7 @@
 //! The trait a windowed application implements.
 
 use ecs::assets::AssetRegistry;
-use ecs::resources::InputState;
+use ecs::resources::{FrameImage, InputState};
 use ecs::world::{Entity, World};
 use render::GizmoGeometry;
 
@@ -36,6 +36,16 @@ pub trait AppDriver {
 
     /// The camera entity to render from, if the driver has one.
     fn camera(&self) -> Option<Entity>;
+
+    /// A full-window frame to present instead of the scene, when the driver draws
+    /// its own pixels (a software or 2D renderer). Defaults to `None`.
+    ///
+    /// When this is `Some`, the host blits it across the whole window and does not
+    /// render [`AppDriver::world`]. An [`AppDriver::ui`] overlay, if any, still
+    /// draws on top.
+    fn frame(&self) -> Option<&FrameImage> {
+        None
+    }
 
     /// Input state to feed events into, if the driver accepts them.
     ///

@@ -102,6 +102,23 @@ impl Time {
     }
 }
 
+/// A complete, ready-to-present frame: RGBA8 pixels a driver publishes for the
+/// window host to show in place of the scene.
+///
+/// A system sets [`crate::app::EngineContext::frame`] to one of these and the
+/// host blits it across the whole window (scaled, nearest-filtered). This is the
+/// seam a *software* or 2D renderer — one that draws its own pixels rather than
+/// composing engine entities — uses to get on screen.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct FrameImage {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// `width * height * 4` sRGB-encoded RGBA bytes, row-major, top row first.
+    pub rgba: Vec<u8>,
+}
+
 /// A keyboard key. A pragmatic subset covering typical game controls; unknown
 /// keys can be represented by the scripting layer's numeric codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

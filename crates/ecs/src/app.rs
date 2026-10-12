@@ -12,7 +12,7 @@
 //! Systems are plain closures, which keeps the engine testable headlessly.
 
 use crate::assets::AssetRegistry;
-use crate::resources::{ActionMap, Events, InputState, Time};
+use crate::resources::{ActionMap, Events, FrameImage, InputState, Time};
 use crate::scene::{Scene, propagate_transforms};
 use crate::world::Entity;
 
@@ -52,6 +52,9 @@ pub struct EngineContext {
     pub events: Events<EngineEvent>,
     /// Set to request that the loop stop after this frame.
     pub exit_requested: bool,
+    /// A full-window frame to present instead of the scene, when a driver draws
+    /// its own pixels (see [`FrameImage`]). `None` renders the scene as usual.
+    pub frame: Option<FrameImage>,
 }
 
 impl EngineContext {
@@ -65,6 +68,7 @@ impl EngineContext {
             actions: ActionMap::new(),
             events: Events::new(),
             exit_requested: false,
+            frame: None,
         }
     }
 

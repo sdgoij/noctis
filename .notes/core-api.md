@@ -176,10 +176,13 @@ round-trip through a scene like a built-in. `World` already stores any
   `fixed_delta`, `scale`, `set_scale`, `interpolation_alpha`),
   `InputState` (`press_key`, `release_key`, `key_down/pressed/released`, `begin_frame`,
   `press_mouse`, `release_mouse`, `set_mouse_position`, `add_scroll`, `axis`, `mouse`),
-  `Key`, `MouseButton`, `MouseState`, `ActionMap`, `Events<E>`.
+  `Key`, `MouseButton`, `MouseState`, `ActionMap`, `Events<E>`,
+  and `FrameImage { width, height, rgba }` — a complete sRGB RGBA8 frame a
+  driver publishes for the host to present in place of the scene.
 - `ecs::app`: `App` (`new`, `on_startup/on_fixed/on_update/on_late`, `tick(dt)`,
   `run_headless(max_frames, dt)`, `context`, `fixed_steps_taken`),
-  `EngineContext { scene, assets, time, input, actions, events, exit_requested }`,
+  `EngineContext { scene, assets, time, input, actions, events, exit_requested, frame }`
+  (`frame: Option<FrameImage>`),
   `EngineEvent`.
   Systems run on the thread that owns the `App`, in registration order, so they
   are **not** required to be `Send`/`Sync` — a system may own single-threaded

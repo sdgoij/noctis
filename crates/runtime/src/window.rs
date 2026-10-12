@@ -50,6 +50,12 @@ impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
         render::first_active_camera(&self.app().context.scene.world)
     }
 
+    /// A full-window frame the app published this tick (a plugin's software
+    /// renderer), presented in place of the scene.
+    fn frame(&self) -> Option<&ecs::resources::FrameImage> {
+        self.app().context.frame.as_ref()
+    }
+
     fn input_mut(&mut self) -> Option<&mut InputState> {
         Some(&mut self.app_mut().context.input)
     }

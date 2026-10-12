@@ -345,17 +345,21 @@ impl<D: AppDriver> WindowHost<D> {
                 };
                 // Paint the UI whether or not the scene has a camera: an empty
                 // scene has none, and skipping the present would freeze the window.
-                let result = match camera {
-                    Some(camera) => {
-                        self.apply_gizmo(&mut renderer);
-                        renderer.present_with_overlay(
-                            self.driver.world(),
-                            self.driver.assets(),
-                            camera,
-                            &mut overlay,
-                        )
+                let result = if let Some(image) = self.driver.frame() {
+                    renderer.present_image(image, &mut overlay)
+                } else {
+                    match camera {
+                        Some(camera) => {
+                            self.apply_gizmo(&mut renderer);
+                            renderer.present_with_overlay(
+                                self.driver.world(),
+                                self.driver.assets(),
+                                camera,
+                                &mut overlay,
+                            )
+                        }
+                        None => renderer.present_overlay(OVERLAY_CLEAR, &mut overlay),
                     }
-                    None => renderer.present_overlay(OVERLAY_CLEAR, &mut overlay),
                 };
                 if let Err(err) = result {
                     log::warn!("present failed: {err}");
@@ -369,6 +373,11 @@ impl<D: AppDriver> WindowHost<D> {
             // check panics about unapplied deltas.
             output.textures_delta.clear();
             self.egui = Some(egui);
+        } else if let Some(image) = self.driver.frame() {
+            let mut noop = |_: &mut wgpu::CommandEncoder, _: &wgpu::TextureView| {};
+            if let Err(err) = renderer.present_image(image, &mut noop) {
+                log::warn!("present failed: {err}");
+            }
         } else if let Some(camera) = camera {
             self.apply_gizmo(&mut renderer);
             if let Err(err) = renderer.present(self.driver.world(), self.driver.assets(), camera) {
