@@ -19,9 +19,12 @@ path = "src/lib.rs"
 noctis = { path = "../../crates/noctis", default-features = false }
 anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
-rand = "0.9"
-rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis", "wav"] }
 log = "0.4"
+
+# A real audio device only exists natively. On the web (`wasm32`) `Audio` is a
+# silent stand-in, so `rodio` (and its `cpal` backend) is not built there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis", "wav"] }
 
 # Detach from the engine workspace. The project builds in its own target directory
 # here, and is compiled into the generated `.noctis/` tool and client crates.

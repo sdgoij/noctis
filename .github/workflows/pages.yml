@@ -100,6 +100,7 @@ jobs:
           path: |
             examples/showcase/.noctis/web/target
             examples/rustball/.noctis/web/target
+            examples/reverie/.noctis/web/target
           key: noctis-web-${{ hashFiles('Cargo.lock') }}-${{ github.event.workflow_run.head_sha || github.sha }}
           restore-keys: |
             noctis-web-${{ hashFiles('Cargo.lock') }}-

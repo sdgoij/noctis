@@ -438,11 +438,20 @@ fn present<D: AppDriver>(state: &mut Loop<D>, seconds: f64) {
         };
         // Paint the UI whether or not the scene has a camera: an empty scene has
         // none, and skipping the present would freeze the canvas on its last frame.
-        let result = match driver.camera() {
-            Some(camera) => {
-                renderer.present_with_overlay(driver.world(), driver.assets(), camera, &mut overlay)
+        // A driver that publishes its own frame (a software renderer) has it
+        // blitted across the canvas instead of the scene.
+        let result = if let Some(image) = driver.frame() {
+            renderer.present_image(image, &mut overlay)
+        } else {
+            match driver.camera() {
+                Some(camera) => renderer.present_with_overlay(
+                    driver.world(),
+                    driver.assets(),
+                    camera,
+                    &mut overlay,
+                ),
+                None => renderer.present_overlay(OVERLAY_CLEAR, &mut overlay),
             }
-            None => renderer.present_overlay(OVERLAY_CLEAR, &mut overlay),
         };
         if let Err(error) = result {
             log::warn!("present failed: {error}");

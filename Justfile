@@ -13,6 +13,7 @@
 
 showcase := "examples/showcase"
 rustball := "examples/rustball"
+reverie := "examples/reverie"
 publish := "docs"
 
 # List the available recipes.
@@ -41,11 +42,11 @@ serve-docs port="8000":
     python serve.py {{ publish }} {{ port }}
 
 # Build the browser demos and stage them in `docs/` for GitHub Pages. Several
-# `--project`s build one client that dispatches by project name (the Rust project
+# `--project`s build one client that dispatches by project name (each Rust project
 # links its plugin); the generated `index.html` selects between them. The browser
 # editor is staged beside it, under `editor/`.
 publish-wasm: publish-editor
-    cargo run -- build --platform wasm --project {{ showcase }} --project {{ rustball }} --out {{ publish }}
+    cargo run -- build --platform wasm --project {{ showcase }} --project {{ rustball }} --project {{ reverie }} --out {{ publish }}
     touch {{ publish }}/.nojekyll
 
 # Build the browser **editor** (the `editor` feature of `crates/web`) into

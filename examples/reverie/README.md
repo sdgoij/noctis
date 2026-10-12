@@ -27,6 +27,16 @@ Controls (as the original): `A`/`D` or `←`/`→` move, `Space`/`W`/`↑` jump,
 `Enter` confirm, `R` restart, `1`/`3`/`4` effects/palette/debug, `2` screenshot,
 `m` mute, `8`/`9` volume, `Esc`/`Q` quit.
 
+## Browser demo
+
+`just publish-wasm` builds this project into the browser client staged in
+`docs/` for GitHub Pages, alongside the showcase and Rust Ball; pick
+"Reverie Amidst Ruins" in the page's project menu. The plugin builds for
+`wasm32-unknown-unknown`: `rodio` is a native-only dependency (the web runs
+silent, see `src/game/audio.rs`), palette randomization uses a built-in PRNG
+rather than `rand`/`getrandom`, and screenshots are native-only (the game reads
+the frame delta, not a wall clock, so `Instant`/`SystemTime` are never needed).
+
 ## Performance
 
 The original was ~25 fps unoptimized and 144 fps in release; the same holds here,

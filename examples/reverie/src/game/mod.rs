@@ -20,7 +20,10 @@ mod stats;
 
 pub use input::Input;
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use image::RgbaImage;
@@ -43,8 +46,8 @@ const HEIGHT: usize = 270;
 /// Pixels below the level floor at which a fall counts as a death.
 const DEATH_PLANE: f32 = 70.0;
 
-/// How long a transient HUD message stays up.
-const MESSAGE_DURATION: Duration = Duration::from_secs(3);
+/// How long a transient HUD message stays up, in seconds.
+const MESSAGE_DURATION: f32 = 3.0;
 
 /// The running game.
 pub struct Game {
@@ -56,8 +59,8 @@ pub struct Game {
     screenshot_requested: bool,
     fps: f32,
     fps_frames: u32,
-    fps_timer: Instant,
-    message: Option<(String, Instant)>,
+    fps_window: f32,
+    message: Option<(String, f32)>,
 }
 
 impl Game {
@@ -81,7 +84,7 @@ impl Game {
             screenshot_requested: false,
             fps: 0.0,
             fps_frames: 0,
-            fps_timer: Instant::now(),
+            fps_window: 0.0,
             message: None,
         })
     }
@@ -91,13 +94,15 @@ impl Game {
         let mut screen = self.screen.take().expect("the game always holds a screen");
         let delta = dt;
 
-        // A one-second FPS window, as the original's HUD did.
+        // A one-second FPS window, as the original's HUD did. Measured from the
+        // frame delta, not a wall clock, so it works on every target.
+        let seconds = delta.as_secs_f32();
         self.fps_frames += 1;
-        let window = self.fps_timer.elapsed();
-        if window >= Duration::from_secs(1) {
-            self.fps = self.fps_frames as f32 / window.as_secs_f32();
+        self.fps_window += seconds;
+        if self.fps_window >= 1.0 {
+            self.fps = self.fps_frames as f32 / self.fps_window;
             self.fps_frames = 0;
-            self.fps_timer = Instant::now();
+            self.fps_window = 0.0;
         }
 
         if input.effects_toggle_pressed {
@@ -266,9 +271,10 @@ impl Game {
             }
         }
 
-        if let Some((_, until)) = &self.message
-            && Instant::now() >= *until
-        {
+        if let Some((_, remaining)) = &mut self.message {
+            *remaining -= seconds;
+        }
+        if self.message.as_ref().is_some_and(|(_, left)| *left <= 0.0) {
             self.message = None;
         }
 
@@ -278,7 +284,7 @@ impl Game {
 
     /// Set a transient HUD message.
     fn say(&mut self, text: impl Into<String>) {
-        self.message = Some((text.into(), Instant::now() + MESSAGE_DURATION));
+        self.message = Some((text.into(), MESSAGE_DURATION));
     }
 
     /// The screen-space HUD lines for the current state: the live level line, the
@@ -375,15 +381,19 @@ impl Game {
 
         if self.screenshot_requested {
             self.screenshot_requested = false;
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .context("system clock is bad")?
-                .as_millis();
-            let filename = format!("rar-screenshot-{timestamp}.png");
-            frame
-                .save(&filename)
-                .with_context(|| format!("could not save {filename}"))?;
-            self.say(format!("saved {filename}"));
+            // No filesystem on the web; screenshots are a native nicety.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .context("system clock is bad")?
+                    .as_millis();
+                let filename = format!("rar-screenshot-{timestamp}.png");
+                frame
+                    .save(&filename)
+                    .with_context(|| format!("could not save {filename}"))?;
+                self.say(format!("saved {filename}"));
+            }
         }
 
         Ok(frame)
