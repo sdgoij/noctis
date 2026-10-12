@@ -244,7 +244,16 @@ impl<D: AppDriver> WindowHost<D> {
         }
 
         if let Some(mut egui) = egui {
-            let raw_input = egui.state.take_egui_input(&window);
+            // Refresh the viewport info from the window *before* egui reads its
+            // input, so `ui.input(|i| i.viewport().maximized)` (the title bar's
+            // restore glyph and its double-click toggle) is current. egui-winit's
+            // `take_egui_input` fills only the pixels-per-point; the rest is ours.
+            egui_winit::update_viewport_info(&mut egui.viewport_info, &egui.ctx, &window, false);
+            let mut raw_input = egui.state.take_egui_input(&window);
+            raw_input
+                .viewports
+                .insert(egui::ViewportId::ROOT, egui.viewport_info.clone());
+
             let mut output = egui.ctx.run_ui(raw_input, |ui| self.driver.ui(ui));
             egui.state
                 .handle_platform_output(&window, output.platform_output);
@@ -257,7 +266,6 @@ impl<D: AppDriver> WindowHost<D> {
                 .get(&egui::ViewportId::ROOT)
                 .map(|viewport| viewport.commands.clone())
                 .unwrap_or_default();
-            egui_winit::update_viewport_info(&mut egui.viewport_info, &egui.ctx, &window, false);
             let mut actions = Vec::new();
             egui_winit::process_viewport_commands(
                 &egui.ctx,
