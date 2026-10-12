@@ -12,6 +12,8 @@ const GRAVITY: f32 = 800.0;
 const JUMP_SPEED: f32 = 300.0;
 const JUMP_RELEASE_SPEED: f32 = 100.0;
 const MAX_FALL_SPEED: f32 = 450.0;
+/// How long a jump press is remembered while the player is airborne, in seconds.
+const JUMP_BUFFER: f32 = 0.1;
 const TILE_SIZE_F32: f32 = TILE_SIZE as f32;
 pub const HITBOX_WIDTH: f32 = 12.0;
 pub const HITBOX_HEIGHT: f32 = 15.0;
@@ -44,6 +46,7 @@ pub struct Player {
     pub facing: PlayerFacing,
     pub spawn_x: f32,
     pub spawn_y: f32,
+    jump_buffer: f32,
 }
 
 impl Player {
@@ -57,6 +60,7 @@ impl Player {
             facing: PlayerFacing::Right,
             spawn_x: x,
             spawn_y: y,
+            jump_buffer: 0.0,
         }
     }
 
@@ -66,6 +70,7 @@ impl Player {
         self.vx = 0.0;
         self.vy = 0.0;
         self.grounded = false;
+        self.jump_buffer = 0.0;
     }
 
     pub fn overlaps(&self, x: f32, y: f32, width: f32, height: f32) -> bool {
@@ -104,12 +109,21 @@ impl Player {
         self.vx = approach(self.vx, target_speed, acceleration * delta);
         self.move_x(self.vx * delta, blocks, max_x);
 
-        // handle jump
-        let jumped = input.jump_pressed && self.grounded;
+        // Handle jump. A press is remembered for a short window: the collision
+        // skin means that above ~200 fps the floor is only re-detected every
+        // *other* frame, so a one-frame press often lands on a frame where
+        // `grounded` is momentarily false. Buffering the press makes it fire on
+        // the next grounded frame instead of being silently dropped.
+        if input.jump_pressed {
+            self.jump_buffer = JUMP_BUFFER;
+        }
+        let jumped = self.grounded && self.jump_buffer > 0.0;
         if jumped {
             self.vy = -JUMP_SPEED;
             self.grounded = false;
+            self.jump_buffer = 0.0;
         }
+        self.jump_buffer = (self.jump_buffer - delta).max(0.0);
 
         // releasing jump early cuts the remaining upward speed
         if !input.jump && self.vy < -JUMP_RELEASE_SPEED {

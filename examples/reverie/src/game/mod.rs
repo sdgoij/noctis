@@ -429,6 +429,18 @@ mod tests {
 
     const STEP: Duration = Duration::from_millis(16);
 
+    /// The player's y (down is positive) while a level screen is up.
+    fn player_y(game: &Game) -> f32 {
+        match game
+            .screen
+            .as_ref()
+            .expect("the game always holds a screen")
+        {
+            Screen::Level(screen) => screen.player.y,
+            _ => panic!("not in a level"),
+        }
+    }
+
     #[test]
     fn every_embedded_level_parses() {
         for (index, source) in LEVELS.iter().enumerate() {
@@ -489,5 +501,54 @@ mod tests {
             "the level rendered only {} colour(s)",
             colours.len()
         );
+    }
+
+    #[test]
+    fn a_jump_press_always_jumps_at_high_frame_rates() {
+        // Above ~200 fps the collision skin (`player.rs`) means the floor is
+        // only re-detected every *other* frame, so a one-frame jump press lands
+        // on a non-grounded frame half the time. The press must still jump.
+        let fast = Duration::from_secs_f32(1.0 / 240.0);
+        let idle = Input::default();
+        let confirm = Input {
+            confirm_pressed: true,
+            ..idle
+        };
+
+        // Jump is held for ~0.1 s, as a real press is, so the early-release cut
+        // does not truncate the arc.
+        let held_jump = Input {
+            jump: true,
+            jump_pressed: true,
+            ..idle
+        };
+        let holding = Input { jump: true, ..idle };
+
+        // Try both parities of the frame the press lands on: the bug depends on
+        // it, since the floor is re-detected on alternating frames.
+        for phase in 0..2 {
+            let mut game = Game::new(0, false, 0).expect("the game starts");
+            game.update(&confirm, fast).expect("confirm the title");
+            for _ in 0..(240 + phase) {
+                game.update(&idle, fast).expect("fall and land");
+            }
+
+            let rest = player_y(&game);
+            game.update(&held_jump, fast).expect("press jump");
+            for _ in 0..24 {
+                game.update(&holding, fast).expect("hold jump");
+            }
+
+            let mut peak = rest;
+            for _ in 0..24 {
+                game.update(&idle, fast).expect("follow the arc");
+                peak = peak.min(player_y(&game));
+            }
+
+            assert!(
+                peak < rest - 4.0,
+                "phase {phase}: the press was dropped (rest {rest}, peak {peak})"
+            );
+        }
     }
 }
