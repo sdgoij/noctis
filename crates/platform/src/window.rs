@@ -16,6 +16,11 @@ use crate::config::WindowConfig;
 use crate::driver::AppDriver;
 use crate::error::PlatformError;
 
+/// The colour a **camera-less** frame is cleared to before the overlay is painted:
+/// an empty scene has no camera to supply a clear colour, but the UI must still
+/// be drawn (see `Renderer::present_overlay`).
+const OVERLAY_CLEAR: [f32; 4] = [0.02, 0.02, 0.03, 1.0];
+
 /// Map a winit [`KeyCode`] to an engine [`ecs::resources::Key`].
 ///
 /// `KeyCode`'s `Debug` representation (`"KeyW"`, `"Digit3"`, `"ArrowUp"`, ...)
@@ -316,34 +321,42 @@ impl<D: AppDriver> WindowHost<D> {
                 queue.submit(std::iter::once(encoder.finish()).chain(extra));
             }
 
-            if let Some(camera) = camera {
-                self.apply_gizmo(&mut renderer);
-                let result = renderer.present_with_overlay(
-                    self.driver.world(),
-                    self.driver.assets(),
-                    camera,
-                    &mut |encoder, view| {
-                        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("egui.pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
-                        let mut pass = pass.forget_lifetime();
-                        egui.renderer
-                            .render(&mut pass, &paint_jobs, &screen_descriptor);
-                    },
-                );
+            {
+                let mut overlay = |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView| {
+                    let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("egui.pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    let mut pass = pass.forget_lifetime();
+                    egui.renderer
+                        .render(&mut pass, &paint_jobs, &screen_descriptor);
+                };
+                // Paint the UI whether or not the scene has a camera: an empty
+                // scene has none, and skipping the present would freeze the window.
+                let result = match camera {
+                    Some(camera) => {
+                        self.apply_gizmo(&mut renderer);
+                        renderer.present_with_overlay(
+                            self.driver.world(),
+                            self.driver.assets(),
+                            camera,
+                            &mut overlay,
+                        )
+                    }
+                    None => renderer.present_overlay(OVERLAY_CLEAR, &mut overlay),
+                };
                 if let Err(err) = result {
                     log::warn!("present failed: {err}");
                 }

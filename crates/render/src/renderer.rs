@@ -1350,43 +1350,8 @@ impl Renderer {
         assets: &AssetRegistry,
         camera: Entity,
     ) -> Result<(), RenderError> {
-        let acquired = {
-            let surface = self
-                .surface
-                .as_ref()
-                .ok_or_else(|| RenderError::Unsupported("renderer has no surface".into()))?;
-            surface.get_current_texture()
-        };
-        let (frame, suboptimal) = match acquired {
-            wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                // Skip this frame; try again next tick.
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.reconfigure_surface();
-                match self
-                    .surface
-                    .as_ref()
-                    .expect("surface present")
-                    .get_current_texture()
-                {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, false),
-                    other => {
-                        return Err(RenderError::Surface(format!(
-                            "surface reacquire failed: {other:?}"
-                        )));
-                    }
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                return Err(RenderError::Surface("surface lost".into()));
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                return Err(RenderError::Surface("surface validation error".into()));
-            }
+        let Some((frame, suboptimal)) = self.acquire_frame()? else {
+            return Ok(());
         };
         let view = frame
             .texture
@@ -1408,42 +1373,8 @@ impl Renderer {
         camera: Entity,
         overlay: &mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView),
     ) -> Result<(), RenderError> {
-        let acquired = {
-            let surface = self
-                .surface
-                .as_ref()
-                .ok_or_else(|| RenderError::Unsupported("renderer has no surface".into()))?;
-            surface.get_current_texture()
-        };
-        let (frame, suboptimal) = match acquired {
-            wgpu::CurrentSurfaceTexture::Success(frame) => (frame, false),
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, true),
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.reconfigure_surface();
-                match self
-                    .surface
-                    .as_ref()
-                    .expect("surface present")
-                    .get_current_texture()
-                {
-                    wgpu::CurrentSurfaceTexture::Success(frame)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (frame, false),
-                    other => {
-                        return Err(RenderError::Surface(format!(
-                            "surface reacquire failed: {other:?}"
-                        )));
-                    }
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                return Err(RenderError::Surface("surface lost".into()));
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                return Err(RenderError::Surface("surface validation error".into()));
-            }
+        let Some((frame, suboptimal)) = self.acquire_frame()? else {
+            return Ok(());
         };
         let view = frame
             .texture
@@ -1454,6 +1385,99 @@ impl Renderer {
             self.reconfigure_surface();
         }
         Ok(())
+    }
+
+    /// Present a frame with only `overlay` drawn — no scene — cleared to `clear`.
+    ///
+    /// A driver with no camera (an empty scene) still needs the host to paint its
+    /// UI every frame; without this the surface would never be touched and the
+    /// window would freeze on the last frame. `overlay` draws over the clear, so
+    /// it sets `LoadOp::Load` as [`Renderer::present_with_overlay`]'s does.
+    pub fn present_overlay(
+        &mut self,
+        clear: [f32; 4],
+        overlay: &mut dyn FnMut(&mut wgpu::CommandEncoder, &wgpu::TextureView),
+    ) -> Result<(), RenderError> {
+        let Some((frame, suboptimal)) = self.acquire_frame()? else {
+            return Ok(());
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("overlay.encoder"),
+            });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("overlay.clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: f64::from(clear[0]),
+                        g: f64::from(clear[1]),
+                        b: f64::from(clear[2]),
+                        a: f64::from(clear[3]),
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        overlay(&mut encoder, &view);
+        self.queue.submit(Some(encoder.finish()));
+        self.queue.present(frame);
+        if suboptimal {
+            self.reconfigure_surface();
+        }
+        Ok(())
+    }
+
+    /// Acquire the next surface frame, reconfiguring the surface if it is stale.
+    ///
+    /// `Ok(None)` means the frame was skipped (`Timeout`/`Occluded`) — try again
+    /// next tick. The flag is wgpu's *suboptimal* signal, which asks for a
+    /// reconfigure once the frame has been presented.
+    fn acquire_frame(&mut self) -> Result<Option<(wgpu::SurfaceTexture, bool)>, RenderError> {
+        let acquired = {
+            let surface = self
+                .surface
+                .as_ref()
+                .ok_or_else(|| RenderError::Unsupported("renderer has no surface".into()))?;
+            surface.get_current_texture()
+        };
+        match acquired {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Ok(Some((frame, false))),
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some((frame, true))),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                Ok(None)
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.reconfigure_surface();
+                match self
+                    .surface
+                    .as_ref()
+                    .expect("surface present")
+                    .get_current_texture()
+                {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some((frame, false))),
+                    other => Err(RenderError::Surface(format!(
+                        "surface reacquire failed: {other:?}"
+                    ))),
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Lost => Err(RenderError::Surface("surface lost".into())),
+            wgpu::CurrentSurfaceTexture::Validation => {
+                Err(RenderError::Surface("surface validation error".into()))
+            }
+        }
     }
 
     fn reconfigure_surface(&mut self) {
@@ -1725,6 +1749,34 @@ mod tests {
         };
         let config = renderer.config();
         assert_eq!((config.width, config.height), (32, 32));
+    }
+
+    /// A headless renderer has no surface, so an overlay present reports that
+    /// (rather than panicking) — the guard the camera-less path relies on.
+    #[test]
+    fn present_overlay_without_a_surface_reports_it() {
+        let config = RendererConfig {
+            width: 32,
+            height: 32,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let result = renderer.present_overlay(
+            [0.0, 0.0, 0.0, 1.0],
+            &mut |_: &mut wgpu::CommandEncoder, _: &wgpu::TextureView| {},
+        );
+        assert!(
+            matches!(result, Err(RenderError::Unsupported(_))),
+            "{result:?}"
+        );
     }
 
     /// The GPU path is exercised only when an adapter exists; otherwise the
