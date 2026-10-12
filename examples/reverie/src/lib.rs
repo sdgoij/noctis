@@ -70,6 +70,8 @@ impl Plugin for Reverie {
                 }
                 Err(error) => log::error!("reverie render failed: {error}"),
             }
+
+            ctx.screen_text = game.hud_lines();
         });
     }
 }

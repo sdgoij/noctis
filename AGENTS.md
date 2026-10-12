@@ -135,7 +135,9 @@ needed.
   `ecs::resources::FrameImage` on `EngineContext::frame` — which the window host
   blits across the window in place of the scene (`Renderer::present_image`,
   headless `Renderer::render_image`); this is the seam a *software* renderer (a
-  plugin's own RGBA framebuffer) uses to get on screen.
+  plugin's own RGBA framebuffer) uses to get on screen. Such a driver may also
+  publish screen-space HUD lines — `EngineContext::screen_text` — which the
+  runtime's `AppDriver::ui` draws over the frame.
 - `script`: scripting is the `github.com/sdgoij/slag` engine, pinned to a
   revision in the workspace `Cargo.toml` (`[workspace.dependencies] slag`) — a
   plain dependency, with no feature to enable. A Slag bump is a one-line `rev`

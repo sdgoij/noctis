@@ -20,7 +20,7 @@ mod stats;
 
 pub use input::Input;
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use image::RgbaImage;
@@ -43,6 +43,9 @@ const HEIGHT: usize = 270;
 /// Pixels below the level floor at which a fall counts as a death.
 const DEATH_PLANE: f32 = 70.0;
 
+/// How long a transient HUD message stays up.
+const MESSAGE_DURATION: Duration = Duration::from_secs(3);
+
 /// The running game.
 pub struct Game {
     screen: Option<Screen>,
@@ -51,6 +54,10 @@ pub struct Game {
     effects_enabled: bool,
     finished: bool,
     screenshot_requested: bool,
+    fps: f32,
+    fps_frames: u32,
+    fps_timer: Instant,
+    message: Option<(String, Instant)>,
 }
 
 impl Game {
@@ -72,6 +79,10 @@ impl Game {
             effects_enabled: true,
             finished: false,
             screenshot_requested: false,
+            fps: 0.0,
+            fps_frames: 0,
+            fps_timer: Instant::now(),
+            message: None,
         })
     }
 
@@ -80,8 +91,19 @@ impl Game {
         let mut screen = self.screen.take().expect("the game always holds a screen");
         let delta = dt;
 
+        // A one-second FPS window, as the original's HUD did.
+        self.fps_frames += 1;
+        let window = self.fps_timer.elapsed();
+        if window >= Duration::from_secs(1) {
+            self.fps = self.fps_frames as f32 / window.as_secs_f32();
+            self.fps_frames = 0;
+            self.fps_timer = Instant::now();
+        }
+
         if input.effects_toggle_pressed {
             self.effects_enabled = !self.effects_enabled;
+            let state = if self.effects_enabled { "on" } else { "off" };
+            self.say(format!("effects {state}"));
         }
         if input.palette_randomize_pressed {
             let palette = color::random_palette();
@@ -90,20 +112,31 @@ impl Game {
                 Screen::Level(s) => s.level.palette = palette,
                 Screen::End(s) => s.level.palette = palette,
             }
+            self.say("palette randomized");
         }
         if input.screenshot_pressed {
             self.screenshot_requested = true;
         }
-        if input.mute_toggle_pressed
-            && let Some(audio) = &mut self.audio
-        {
-            audio.toggle_mute();
+        if input.mute_toggle_pressed {
+            let state = match &mut self.audio {
+                Some(audio) => {
+                    if audio.toggle_mute() {
+                        "muted"
+                    } else {
+                        "unmuted"
+                    }
+                }
+                None => "disabled",
+            };
+            self.say(format!("audio {state}"));
         }
         if input.volume_down_pressed || input.volume_up_pressed {
             let amount = if input.volume_down_pressed { -5 } else { 5 };
-            if let Some(audio) = &mut self.audio {
-                audio.adjust_volume(amount);
-            }
+            let status = match &mut self.audio {
+                Some(audio) => format!("volume {}%", audio.adjust_volume(amount)),
+                None => "audio disabled".to_string(),
+            };
+            self.say(status);
         }
 
         // A restart (or a fall) resets the player and the level's coins.
@@ -233,8 +266,61 @@ impl Game {
             }
         }
 
+        if let Some((_, until)) = &self.message
+            && Instant::now() >= *until
+        {
+            self.message = None;
+        }
+
         self.screen = Some(screen);
         Ok(())
+    }
+
+    /// Set a transient HUD message.
+    fn say(&mut self, text: impl Into<String>) {
+        self.message = Some((text.into(), Instant::now() + MESSAGE_DURATION));
+    }
+
+    /// The screen-space HUD lines for the current state: the live level line, the
+    /// end-screen summary, or a lone message on the title screen.
+    pub fn hud_lines(&self) -> Vec<String> {
+        let screen = self
+            .screen
+            .as_ref()
+            .expect("the game always holds a screen");
+        let message = self
+            .message
+            .as_ref()
+            .map(|(text, _)| text.as_str())
+            .unwrap_or("");
+
+        match screen {
+            Screen::Title(_) => {
+                if message.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![message.to_string()]
+                }
+            }
+            Screen::Level(level_screen) => {
+                let mut line = format!(
+                    "fps {:.0} | coins {} | deaths {}",
+                    self.fps, level_screen.coin_count, self.stats.deaths
+                );
+                if !message.is_empty() {
+                    line.push_str(" | ");
+                    line.push_str(message);
+                }
+                vec![line]
+            }
+            Screen::End(_) => {
+                let mut lines = self.stats.summary_lines();
+                if !message.is_empty() {
+                    lines.push(message.to_string());
+                }
+                lines
+            }
+        }
     }
 
     /// Render the current frame, apply the post-process pass, and save a
@@ -297,6 +383,7 @@ impl Game {
             frame
                 .save(&filename)
                 .with_context(|| format!("could not save {filename}"))?;
+            self.say(format!("saved {filename}"));
         }
 
         Ok(frame)
@@ -346,7 +433,7 @@ mod tests {
         let mut game = Game::new(0, false, 0).expect("the game starts");
         let idle = Input::default();
 
-        // The title screen renders at the game's resolution.
+        // The title screen renders at the game's resolution and has no HUD.
         for _ in 0..10 {
             game.update(&idle, STEP).expect("tick the title screen");
         }
@@ -355,6 +442,7 @@ mod tests {
             (title.width(), title.height()),
             (WIDTH as u32, HEIGHT as u32)
         );
+        assert!(game.hud_lines().is_empty(), "the title screen has no HUD");
 
         // Confirm starts the level; let the player fall and land.
         let confirm = Input {
@@ -366,6 +454,18 @@ mod tests {
             game.update(&idle, STEP).expect("tick the level");
         }
         let frame = game.render().expect("render the level");
+        assert_eq!(
+            (frame.width(), frame.height()),
+            (WIDTH as u32, HEIGHT as u32)
+        );
+
+        // The level HUD reports fps, coins, and deaths.
+        let hud = game.hud_lines();
+        assert!(
+            hud.iter()
+                .any(|line| line.contains("coins") && line.contains("deaths")),
+            "unexpected HUD: {hud:?}"
+        );
         assert_eq!(
             (frame.width(), frame.height()),
             (WIDTH as u32, HEIGHT as u32)

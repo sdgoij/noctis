@@ -2,10 +2,6 @@
  * Keep stats for the entire run
  */
 
-// The original printed these to the terminal; the window version has no line to
-// print to, so the reporting helpers are kept for completeness but unused.
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use anyhow::Result;
@@ -39,27 +35,17 @@ impl Stats {
         })
     }
 
-    pub fn print_oneline(&self) {
-        print!(
-            "total playtime: {} | levels beaten: {} | coins collected: {} | deaths: {}",
-            self.format_playtime(),
-            self.levels_beaten,
-            self.format_coins(),
-            self.deaths,
-        );
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            format!("total playtime: {}", self.format_playtime()),
+            format!("levels beaten: {}", self.levels_beaten),
+            format!("coins collected: {}", self.format_coins()),
+            format!("deaths: {}", self.deaths),
+        ];
         if self.is_true_ending() {
-            print!(" | True Ending");
+            lines.push("True Ending!".to_string());
         }
-    }
-
-    pub fn print_multiline(&self) {
-        println!("total playtime: {}", self.format_playtime());
-        println!("levels beaten: {}", self.levels_beaten);
-        println!("coins collected: {}", self.format_coins());
-        println!("deaths: {}", self.deaths);
-        if self.is_true_ending() {
-            println!("\nTrue Ending!");
-        }
+        lines
     }
 
     fn is_true_ending(&self) -> bool {
@@ -68,7 +54,7 @@ impl Stats {
 
     fn format_coins(&self) -> String {
         let smiley = if self.coins_collected == self.coins_total {
-            "\x1b[32m:)\x1b[0m"
+            ":)"
         } else {
             ":("
         };

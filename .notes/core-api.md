@@ -181,8 +181,9 @@ round-trip through a scene like a built-in. `World` already stores any
   driver publishes for the host to present in place of the scene.
 - `ecs::app`: `App` (`new`, `on_startup/on_fixed/on_update/on_late`, `tick(dt)`,
   `run_headless(max_frames, dt)`, `context`, `fixed_steps_taken`),
-  `EngineContext { scene, assets, time, input, actions, events, exit_requested, frame }`
-  (`frame: Option<FrameImage>`),
+  `EngineContext { scene, assets, time, input, actions, events, exit_requested, frame, screen_text }`
+  (`frame: Option<FrameImage>`, `screen_text: Vec<String>` — HUD lines drawn over
+  the presented frame),
   `EngineEvent`.
   Systems run on the thread that owns the `App`, in registration order, so they
   are **not** required to be `Send`/`Sync` — a system may own single-threaded

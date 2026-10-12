@@ -55,6 +55,9 @@ pub struct EngineContext {
     /// A full-window frame to present instead of the scene, when a driver draws
     /// its own pixels (see [`FrameImage`]). `None` renders the scene as usual.
     pub frame: Option<FrameImage>,
+    /// Screen-space HUD lines a driver publishes for the host to draw over the
+    /// presented frame: one string per line, top-left. Empty draws nothing.
+    pub screen_text: Vec<String>,
 }
 
 impl EngineContext {
@@ -69,6 +72,7 @@ impl EngineContext {
             events: Events::new(),
             exit_requested: false,
             frame: None,
+            screen_text: Vec::new(),
         }
     }
 
