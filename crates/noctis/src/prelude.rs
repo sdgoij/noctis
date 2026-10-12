@@ -10,7 +10,7 @@
 //! internal name. It also re-exports serde's `Serialize`/`Deserialize`, which a
 //! custom [`Component`](ecs::reflect::Component) derives.
 
-pub use audio::AudioEngine;
+pub use audio::{AudioEngine, PlaybackConfig, SoundHandle, load_clip_bytes};
 pub use ecs::prelude::*;
 #[cfg(feature = "editor")]
 pub use editor::{ComponentName, Editor, EditorCommand, EntityRef};

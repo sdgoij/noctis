@@ -163,7 +163,7 @@ impl Game {
         if input.confirm_pressed {
             screen = match screen {
                 Screen::Title(level_screen) => {
-                    if let Some(audio) = &self.audio {
+                    if let Some(audio) = &mut self.audio {
                         audio.play_music(&level_screen.level.music)?;
                     }
                     Screen::Level(level_screen)
@@ -248,7 +248,7 @@ impl Game {
 
         if let Some(index) = next_level {
             let level_screen = load_level(index)?;
-            if let Some(audio) = &self.audio {
+            if let Some(audio) = &mut self.audio {
                 audio.play_music(&level_screen.level.music)?;
             }
             screen = Screen::Level(level_screen);
@@ -259,16 +259,17 @@ impl Game {
             };
         }
 
-        if let Some(audio) = &self.audio {
+        if let Some(audio) = &mut self.audio {
             if jumped {
-                audio.play_effect(SoundEffect::Jump)?;
+                audio.play_effect(SoundEffect::Jump);
             }
             if collected_coin {
-                audio.play_effect(SoundEffect::Coin)?;
+                audio.play_effect(SoundEffect::Coin);
             }
             if died {
-                audio.play_effect(SoundEffect::Dead)?;
+                audio.play_effect(SoundEffect::Dead);
             }
+            audio.poll();
         }
 
         if let Some((_, remaining)) = &mut self.message {

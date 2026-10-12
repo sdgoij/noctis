@@ -32,10 +32,12 @@ Controls (as the original): `A`/`D` or `←`/`→` move, `Space`/`W`/`↑` jump,
 `just publish-wasm` builds this project into the browser client staged in
 `docs/` for GitHub Pages, alongside the showcase and Rust Ball; pick
 "Reverie Amidst Ruins" in the page's project menu. The plugin builds for
-`wasm32-unknown-unknown`: `rodio` is a native-only dependency (the web runs
-silent, see `src/game/audio.rs`), palette randomization uses a built-in PRNG
-rather than `rand`/`getrandom`, and screenshots are native-only (the game reads
-the frame delta, not a wall clock, so `Instant`/`SystemTime` are never needed).
+`wasm32-unknown-unknown` and plays sound there too, through the engine's
+`AudioEngine` (rodio natively, the browser's WebAudio on the web, with the
+`AudioContext` resumed on the first user gesture). The other web concessions:
+palette randomization uses a built-in PRNG rather than `rand`/`getrandom`, and
+screenshots are native-only (the game times itself from the frame delta, not a
+wall clock, so `Instant`/`SystemTime` are never needed).
 
 ## Performance
 
