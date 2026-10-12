@@ -84,13 +84,140 @@ struct GizmoDrag {
     parent: Option<Mat4>,
 }
 
+/// The dock a view opens in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dock {
+    /// The left dock.
+    Left,
+    /// The right dock.
+    Right,
+    /// The bottom dock, between the side docks.
+    Bottom,
+}
+
+/// One dockable UI panel: the unit a dock hosts and the menu toggles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum View {
+    /// The scene hierarchy.
+    Outliner,
+    /// The selected entity's components.
+    Inspector,
+    /// The verb console and its scrollback.
+    Console,
+    /// The Extensions enable/disable screen.
+    Extensions,
+}
+
+impl View {
+    /// Every view, in the order the menu toggles appear.
+    const ALL: [View; 4] = [
+        View::Outliner,
+        View::Inspector,
+        View::Console,
+        View::Extensions,
+    ];
+
+    /// The view's name: its tab label and toggle label.
+    fn title(&self) -> &'static str {
+        match self {
+            View::Outliner => "Outliner",
+            View::Inspector => "Inspector",
+            View::Console => "Console",
+            View::Extensions => "Extensions",
+        }
+    }
+
+    /// The dock the view opens in.
+    fn default_dock(&self) -> Dock {
+        match self {
+            View::Outliner => Dock::Left,
+            View::Inspector => Dock::Right,
+            View::Console | View::Extensions => Dock::Bottom,
+        }
+    }
+}
+
+/// A dock's hosted views and the active tab.
+#[derive(Clone, Debug, Default)]
+struct DockState {
+    /// The views shown, in tab order. Empty means the dock is hidden.
+    open: Vec<View>,
+    /// The index of the active tab.
+    active: usize,
+}
+
+/// Which views sit in which dock.
+#[derive(Clone, Debug, Default)]
+struct Layout {
+    left: DockState,
+    right: DockState,
+    bottom: DockState,
+}
+
+impl Layout {
+    /// The editor's default layout: the outliner left, the inspector right, and
+    /// the bottom dock empty.
+    fn editor_default() -> Self {
+        Self {
+            left: DockState {
+                open: vec![View::Outliner],
+                active: 0,
+            },
+            right: DockState {
+                open: vec![View::Inspector],
+                active: 0,
+            },
+            bottom: DockState::default(),
+        }
+    }
+
+    /// The state of `dock`.
+    fn dock(&self, dock: Dock) -> &DockState {
+        match dock {
+            Dock::Left => &self.left,
+            Dock::Right => &self.right,
+            Dock::Bottom => &self.bottom,
+        }
+    }
+
+    /// The mutable state of `dock`.
+    fn dock_mut(&mut self, dock: Dock) -> &mut DockState {
+        match dock {
+            Dock::Left => &mut self.left,
+            Dock::Right => &mut self.right,
+            Dock::Bottom => &mut self.bottom,
+        }
+    }
+
+    /// Whether `view` is currently shown.
+    fn is_open(&self, view: &View) -> bool {
+        self.dock(view.default_dock()).open.contains(view)
+    }
+
+    /// Show `view` in its dock (and select it), or hide it if it is already shown.
+    fn toggle(&mut self, view: View) {
+        let state = self.dock_mut(view.default_dock());
+        match state.open.iter().position(|open| open == &view) {
+            Some(index) => {
+                state.open.remove(index);
+                // Keep the active tab in range after the removal.
+                state.active = state.active.min(state.open.len().saturating_sub(1));
+            }
+            None => {
+                state.open.push(view);
+                state.active = state.open.len() - 1;
+            }
+        }
+    }
+}
+
 /// A windowed editor: owns an [`Editor`] and renders it with egui panels.
 pub struct EditorDriver {
     editor: Editor,
     input: InputState,
     selected: Option<Entity>,
-    show_outliner: bool,
-    show_inspector: bool,
+    /// The dock layout: which views are open, and where.
+    layout: Layout,
     fly_speed: f32,
     gizmo_mode: GizmoMode,
     gizmo_orientation: gizmo::GizmoOrientation,
@@ -130,17 +257,13 @@ pub struct EditorDriver {
     /// The console's input line and scrollback.
     console_line: String,
     console_log: Vec<String>,
-    /// Whether the console and Extensions windows are shown.
-    show_console: bool,
-    show_extensions: bool,
 }
 
 impl std::fmt::Debug for EditorDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EditorDriver")
             .field("selected", &self.selected)
-            .field("show_outliner", &self.show_outliner)
-            .field("show_inspector", &self.show_inspector)
+            .field("layout", &self.layout)
             .field("fly_speed", &self.fly_speed)
             .field("gizmo_mode", &self.gizmo_mode)
             .field("gizmo_orientation", &self.gizmo_orientation)
@@ -161,8 +284,7 @@ impl EditorDriver {
             editor,
             input: InputState::new(),
             selected,
-            show_outliner: true,
-            show_inspector: true,
+            layout: Layout::editor_default(),
             fly_speed: 6.0,
             gizmo_mode: GizmoMode::Translate,
             gizmo_orientation: gizmo::GizmoOrientation::World,
@@ -184,8 +306,6 @@ impl EditorDriver {
             pending_interactions: Interactions::default(),
             console_line: String::new(),
             console_log: Vec::new(),
-            show_console: false,
-            show_extensions: false,
         }
     }
 
@@ -293,19 +413,6 @@ impl EditorDriver {
         self.console_log.push("extensions reloaded".into());
     }
 
-    /// Draw the extension UI: the extensions' own panels, the console, and the
-    /// Extensions screen.
-    ///
-    /// The console and the Extensions screen are editor windows in their own
-    /// right, so they are drawn even with no host attached: the console stays
-    /// reachable and an empty discovery still explains itself. The panels need a
-    /// live host, so they are the only part gated on one.
-    fn extension_ui(&mut self, ui: &mut egui::Ui) {
-        self.extension_panels(ui);
-        self.console_window(ui);
-        self.extensions_window(ui);
-    }
-
     /// Draw each loaded extension's own panel (needs a live host).
     fn extension_panels(&mut self, ui: &mut egui::Ui) {
         if self.extensions.is_none() {
@@ -384,38 +491,27 @@ impl EditorDriver {
     }
 
     /// The console: a scrollback and a line that dispatches the verb vocabulary.
-    fn console_window(&mut self, ui: &mut egui::Ui) {
-        if !self.show_console {
-            return;
-        }
-        let mut open = true;
+    fn console(&mut self, ui: &mut egui::Ui) {
         let mut submitted: Option<String> = None;
-        let log = &self.console_log;
-        let line = &mut self.console_line;
-        egui::Window::new("Console")
-            .id(egui::Id::new("noctis_console"))
-            .open(&mut open)
-            .default_width(360.0)
-            .show(ui.ctx(), |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(160.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for entry in log.iter() {
-                            ui.label(entry);
-                        }
-                    });
-                let response = ui.text_edit_singleline(line);
-                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    submitted = Some(std::mem::take(line));
-                    response.request_focus();
-                }
-            });
+        {
+            let log = &self.console_log;
+            let line = &mut self.console_line;
+            egui::ScrollArea::vertical()
+                .max_height(160.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for entry in log.iter() {
+                        ui.label(entry);
+                    }
+                });
+            let response = ui.text_edit_singleline(line);
+            if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                submitted = Some(std::mem::take(line));
+                response.request_focus();
+            }
+        }
         if let Some(line) = submitted {
             self.run_console(&line);
-        }
-        if !open {
-            self.show_console = false;
         }
     }
 
@@ -445,11 +541,7 @@ impl EditorDriver {
     }
 
     /// The Extensions screen: a list with enable/disable toggles that persist.
-    fn extensions_window(&mut self, ui: &mut egui::Ui) {
-        if !self.show_extensions {
-            return;
-        }
-        let mut open = true;
+    fn extensions_screen(&mut self, ui: &mut egui::Ui) {
         let mut toggled: Option<(String, bool)> = None;
         let entries: Vec<(String, String, String, bool)> = self
             .extensions
@@ -473,31 +565,22 @@ impl EditorDriver {
             .as_ref()
             .map(|(config, _)| config.disabled.clone())
             .unwrap_or_default();
-        egui::Window::new("Extensions")
-            .id(egui::Id::new("noctis_extensions"))
-            .open(&mut open)
-            .default_width(320.0)
-            .show(ui.ctx(), |ui| {
-                if entries.is_empty() {
-                    ui.label("No extensions discovered.");
-                }
-                for (id, name, version, _enabled) in &entries {
-                    let mut on = !disabled.iter().any(|entry| entry == id);
-                    if ui
-                        .checkbox(&mut on, format!("{name} {version}  ({id})"))
-                        .changed()
-                    {
-                        toggled = Some((id.clone(), on));
-                    }
-                }
-                ui.separator();
-                ui.label("Enablement is saved and applied immediately.");
-            });
+        if entries.is_empty() {
+            ui.label("No extensions discovered.");
+        }
+        for (id, name, version, _enabled) in &entries {
+            let mut on = !disabled.iter().any(|entry| entry == id);
+            if ui
+                .checkbox(&mut on, format!("{name} {version}  ({id})"))
+                .changed()
+            {
+                toggled = Some((id.clone(), on));
+            }
+        }
+        ui.separator();
+        ui.label("Enablement is saved and applied immediately.");
         if let Some((id, enabled)) = toggled {
             self.set_extension_enabled(&id, enabled);
-        }
-        if !open {
-            self.show_extensions = false;
         }
     }
 
@@ -827,8 +910,60 @@ impl EditorDriver {
         self.select(entity);
     }
 
+    /// Draw a dock's tab strip and its active view, if the dock holds any views.
+    fn dock(&mut self, ui: &mut egui::Ui, dock: Dock) {
+        if self.layout.dock(dock).open.is_empty() {
+            return;
+        }
+        let panel = match dock {
+            Dock::Left => egui::Panel::left("noctis_dock_left"),
+            Dock::Right => egui::Panel::right("noctis_dock_right"),
+            Dock::Bottom => egui::Panel::bottom("noctis_dock_bottom"),
+        }
+        .resizable(true)
+        .default_size(match dock {
+            Dock::Left | Dock::Right => 240.0,
+            Dock::Bottom => 200.0,
+        });
+        panel.show(ui, |ui| {
+            // Copy the open views out so the `&mut self` borrows inside
+            // `dock_tabs` and `show_view` do not overlap `self.layout`.
+            let views = self.layout.dock(dock).open.clone();
+            let active = self.layout.dock(dock).active;
+            self.dock_tabs(ui, dock, &views, active);
+            if let Some(view) = views.get(active).cloned() {
+                self.show_view(&view, ui);
+            }
+        });
+    }
+
+    /// A dock's tab strip: one selectable label per hosted view.
+    fn dock_tabs(&mut self, ui: &mut egui::Ui, dock: Dock, views: &[View], active: usize) {
+        let mut select = None;
+        ui.horizontal_wrapped(|ui| {
+            for (index, view) in views.iter().enumerate() {
+                if ui.selectable_label(index == active, view.title()).clicked() {
+                    select = Some(index);
+                }
+            }
+        });
+        ui.separator();
+        if let Some(index) = select {
+            self.layout.dock_mut(dock).active = index;
+        }
+    }
+
+    /// Draw the view `view` into `ui`.
+    fn show_view(&mut self, view: &View, ui: &mut egui::Ui) {
+        match view {
+            View::Outliner => self.outliner(ui),
+            View::Inspector => self.inspector(ui),
+            View::Console => self.console(ui),
+            View::Extensions => self.extensions_screen(ui),
+        }
+    }
+
     fn outliner(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Outliner");
         let mut delete = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("Add:");
@@ -876,8 +1011,6 @@ impl EditorDriver {
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Inspector");
-        ui.separator();
         let Some(entity) = self.selected else {
             ui.label("Nothing selected.");
             return;
@@ -1340,10 +1473,12 @@ impl AppDriver for EditorDriver {
                         });
                     ui.separator();
                 }
-                ui.toggle_value(&mut self.show_outliner, "Outliner");
-                ui.toggle_value(&mut self.show_inspector, "Inspector");
-                ui.toggle_value(&mut self.show_console, "Console");
-                ui.toggle_value(&mut self.show_extensions, "Extensions");
+                for view in View::ALL {
+                    let mut open = self.layout.is_open(&view);
+                    if ui.toggle_value(&mut open, view.title()).clicked() {
+                        self.layout.toggle(view);
+                    }
+                }
                 ui.separator();
                 ui.label("Tool:");
                 ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "Move (1)");
@@ -1442,12 +1577,11 @@ impl AppDriver for EditorDriver {
             }
         }
 
-        if self.show_outliner {
-            egui::Panel::left("noctis_outliner").show(ui, |ui| self.outliner(ui));
-        }
-        if self.show_inspector {
-            egui::Panel::right("noctis_inspector").show(ui, |ui| self.inspector(ui));
-        }
+        // The docks claim space around the central viewport. Order matters: the
+        // bottom dock is claimed after the sides, so it sits between them.
+        self.dock(ui, Dock::Left);
+        self.dock(ui, Dock::Right);
+        self.dock(ui, Dock::Bottom);
         // The 3D scene is blitted to the surface *before* egui draws, and egui's
         // default central panel paints an opaque background over it. Use a
         // transparent frame so the viewport shows the rendered scene.
@@ -1470,7 +1604,7 @@ impl AppDriver for EditorDriver {
                 self.viewport_interaction(ui, rect, &response);
             });
 
-        self.extension_ui(ui);
+        self.extension_panels(ui);
 
         // Flush any transform edit made this frame (a gizmo drag, an inspector
         // field) into the derived world transforms the renderer draws from, so
@@ -1659,38 +1793,42 @@ mod tests {
         assert!(!selectable_after_a_frame(&mut driver, &ctx));
     }
 
+    /// Run one editor frame at a fixed screen size and return the painted text.
+    fn one_frame(driver: &mut EditorDriver, ctx: &egui::Context) -> Vec<String> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(raw, |ui| driver.ui(ui));
+        let texts = frame_texts(&output);
+        output.drop_without_applying_deltas();
+        texts
+    }
+
     #[test]
     fn the_console_and_extensions_screen_show_without_a_host() {
         // No extension was discovered, so there is no host; the console and the
-        // Extensions screen are editor windows and must still draw.
+        // Extensions screen are bottom-dock views and must still draw without one.
         let mut driver = EditorDriver::new(Editor::new());
-        driver.show_console = true;
-        driver.show_extensions = true;
         driver.console_log.push("sentinel-console-line".to_string());
-
-        // A floating window is invisible on its first frame (egui runs a sizing
-        // pass), so drive a second frame before reading the painted text.
         let ctx = egui::Context::default();
-        let mut texts = Vec::new();
-        for _ in 0..2 {
-            let raw = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 720.0),
-                )),
-                ..Default::default()
-            };
-            let output = ctx.run_ui(raw, |ui| driver.ui(ui));
-            texts = frame_texts(&output);
-            output.drop_without_applying_deltas();
-        }
 
+        // The console opens in the bottom dock, alone, so it is the active view.
+        driver.layout.toggle(View::Console);
+        let texts = one_frame(&mut driver, &ctx);
         assert!(
             texts
                 .iter()
                 .any(|text| text.contains("sentinel-console-line")),
             "the console drew without a host: {texts:?}"
         );
+
+        // Toggling the Extensions screen on makes it the active tab of that dock.
+        driver.layout.toggle(View::Extensions);
+        let texts = one_frame(&mut driver, &ctx);
         assert!(
             texts
                 .iter()
@@ -1957,5 +2095,40 @@ mod tests {
         assert!(config_path.is_file(), "the config was written");
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn toggling_a_view_opens_and_closes_it_in_its_default_dock() {
+        let mut layout = Layout::default();
+
+        // On: the view joins its default dock and becomes the active tab.
+        layout.toggle(View::Outliner);
+        assert!(layout.is_open(&View::Outliner));
+        assert_eq!(layout.left.open, vec![View::Outliner]);
+        assert_eq!(layout.left.active, 0);
+
+        // A second view in one dock sits beside the first, newest selected.
+        layout.toggle(View::Console);
+        layout.toggle(View::Extensions);
+        assert_eq!(layout.bottom.open, vec![View::Console, View::Extensions]);
+        assert_eq!(layout.bottom.active, 1, "the newest view is selected");
+
+        // Off: removed, and the active index falls back into range.
+        layout.toggle(View::Extensions);
+        assert!(!layout.is_open(&View::Extensions));
+        assert_eq!(layout.bottom.active, 0);
+        layout.toggle(View::Console);
+        assert!(layout.bottom.open.is_empty(), "the dock empties and hides");
+    }
+
+    #[test]
+    fn the_default_layout_is_outliner_left_and_inspector_right() {
+        let layout = Layout::editor_default();
+        assert_eq!(layout.left.open, vec![View::Outliner]);
+        assert_eq!(layout.right.open, vec![View::Inspector]);
+        assert!(layout.bottom.open.is_empty());
+        assert!(layout.is_open(&View::Outliner));
+        assert!(layout.is_open(&View::Inspector));
+        assert!(!layout.is_open(&View::Console));
     }
 }
