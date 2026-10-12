@@ -31,7 +31,9 @@
 > call `std::fs`; `import.rs` reads its *source* file with `std::fs` deliberately
 > (the source is outside the project). **Audio** plays on the web through a
 > `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the
-> same `AudioEngine`, resumed on the first user gesture.
+> same `AudioEngine`, resumed on the first user gesture. The **editor** crate now
+> builds for `wasm32-unknown-unknown` (its Slag `jit`, `notify` and the CLI are
+> native-gated), and `vfs::OpfsStore` gives a browser project a durable home.
 
 Noctis is native-first: `wgpu` for rendering, `rapier3d` for physics, `rodio` for
 audio, `winit` for the window, and Slag for scripting. The goal of this document
@@ -126,7 +128,9 @@ New crates (names provisional; they never leak into the native-only build):
   ```
   Backends: `DirStore` (native `std::fs`), `ZipStore` (a `.zip` read into memory — the
   reader an extension archive and a project bundle share), `MemoryStore` (tests),
-  and `OpfsStore`/`IdbStore` (web, behind `cfg(wasm32)`, to come). Relative-path
+  and `OpfsStore` (web, `cfg(wasm32)` — a working copy read from and saved to the
+  Origin Private File System; see *Loading and storing*). An `IdbStore` (the
+  wider-support fallback) is still to come. Relative-path
   validation is the shared `validate_relative` rule (no `..`, no absolute paths), and
   `duplicate` is the dyn-clone a `Store`-owning `Project` needs for its `Clone`.
 - **`crates/platform-web`** — a web `AppDriver` host: acquire the canvas, create
@@ -211,10 +215,18 @@ Three `Store` backends cover the browser's needs:
 - **OPFS (read/write).** The Origin Private File System is a real, private
   directory tree — the closest match to `std::fs` — so a `DirStore`-shaped
   backend over OPFS lets the editor open, edit and **save** a project in the
-  browser, and lets an imported bundle be **unpacked** for editing.
+  browser, and lets an imported bundle be **unpacked** for editing. **Shipped** as
+  `vfs::OpfsStore`.
 - **IndexedDB (read/write, KV).** A whole-file KV store keyed by path, for
   browsers without OPFS or for a simpler "save a blob per file" model. It is the
   wider-support fallback.
+
+**OPFS is asynchronous, but `Store` is synchronous**, so `OpfsStore` is not a thin
+wrapper — it keeps a **working copy** in memory. `OpfsStore::open` reads the whole
+OPFS tree into a `MemoryStore`, the `Store` methods edit that copy, and
+`OpfsStore::save` writes it back file-by-file (`createWritable`). A `duplicate` is a
+detached snapshot; only the owning store's `save` persists. The same shape a
+future `IdbStore` would take.
 
 Open and save flows:
 
@@ -422,11 +434,18 @@ tool/client, rebuilt only when a plugin or the engine changes.
    are folded in here.
 4. **`crates/web`: the generic client.** Fetch a bundle from a URL, build the
    scene/assets through the `Store`, run the loop, run Slag-interpreted scripts.
-5. **Storage backends.** OPFS (read/write) and the import/save flows.
+5. **Storage backends.** *(Partly shipped.)* `vfs::OpfsStore` (wasm) — a working
+   copy read from and saved to OPFS. The drag-drop import and download-a-`.zip`
+   flows are still to come.
 6. **Audio web backend** and the user-gesture resume. **Shipped:**
    `crates/audio/src/web.rs`.
-7. **The browser editor.** Reuse the web host; add drag-drop import, in-browser
-   save, and (optionally) the DOM bridge for extensions.
+7. **The browser editor.** *(In progress.)* `crates/editor` now builds for
+   `wasm32-unknown-unknown` — its native-only bits (Slag's `jit`, `notify`, the
+   CLI) are gated, and wasm Slag runs the interpreter. What remains is the **egui
+   overlay on the web host** (the client host draws none; egui-winit cannot build
+   for wasm, so the host must feed `egui::RawInput` from DOM events) and a web
+   editor entry that opens a project through `OpfsStore` and runs `EditorDriver`
+   on that host.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
 9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
    links into the browser client (`run_bundle_with`, feature-gated stock entry), and

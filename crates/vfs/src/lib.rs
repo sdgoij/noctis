@@ -12,6 +12,7 @@
 //! - [`ZipStore`] — a `.zip` archive read into memory (read-only; the same reader
 //!   an extension archive and a project bundle use).
 //! - [`MemoryStore`] — an in-memory map, for tests and composition.
+//! - `OpfsStore` — the browser's Origin Private File System (`wasm32` only).
 //!
 //! Every path is **relative** and `/`-separated; [`validate_relative`] is the one
 //! rule (no absolute paths, no `..`) that keeps a store inside its root. That rule
@@ -22,6 +23,8 @@
 
 mod dir;
 mod memory;
+#[cfg(target_arch = "wasm32")]
+mod opfs;
 mod zip;
 
 use std::collections::BTreeMap;
@@ -30,6 +33,8 @@ use std::path::{Component, Path};
 
 pub use dir::DirStore;
 pub use memory::MemoryStore;
+#[cfg(target_arch = "wasm32")]
+pub use opfs::OpfsStore;
 pub use zip::{ZipStore, zip_store};
 
 /// The largest single file a store will read out of an archive.

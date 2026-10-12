@@ -45,6 +45,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod camera;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod command;
 pub mod editor;

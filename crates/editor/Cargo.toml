@@ -20,13 +20,19 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The Slag JavaScript engine, for editor extensions (`noctis` global). It shares
-# the workspace's `slag` spec and adds the native JIT hook (the editor is
-# native-only).
+# the workspace's `slag` spec and adds the native JIT hook (executable memory,
+# via Cranelift/`region`), which cannot link on the web — so the wasm build takes
+# the interpreter only (see the `target_arch = "wasm32"` section below).
 slag = { workspace = true, features = ["jit"] }
 
-# `--watch`: reload extensions when their files change.
+# `--watch`: reload extensions when their files change (native only).
 notify.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Slag on the web: the interpreter, no JIT hook.
+slag.workspace = true
 
 [dev-dependencies]
 image.workspace = true

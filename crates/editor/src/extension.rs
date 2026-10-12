@@ -32,7 +32,30 @@ use crate::Editor;
 use crate::info::EntityDto;
 
 mod wasm;
+#[cfg(not(target_arch = "wasm32"))]
 mod watch;
+#[cfg(target_arch = "wasm32")]
+mod watch {
+    //! The web build has no filesystem watcher (`--watch` is native-only), so the
+    //! `--watch` types are inert stand-ins that keep the driver's shape uniform.
+
+    /// Nothing is watched on the web.
+    #[derive(Debug, Default)]
+    pub struct ExtensionWatch;
+
+    impl ExtensionWatch {
+        /// Always "nothing changed" — there is nothing to watch.
+        pub(crate) fn changed(&self) -> bool {
+            false
+        }
+    }
+
+    /// The `--watch` reload inputs; a web build never has any.
+    #[derive(Debug, Default)]
+    pub struct ExtensionReload {
+        pub(crate) watch: ExtensionWatch,
+    }
+}
 
 use wasm::WasmHost;
 

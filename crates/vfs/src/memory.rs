@@ -24,6 +24,13 @@ impl MemoryStore {
             .expect("a valid relative path");
         store
     }
+
+    /// Every file, for a backend that persists the whole store — the browser
+    /// backend writes this working copy back to OPFS.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn files(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.files
+    }
 }
 
 impl Store for MemoryStore {
