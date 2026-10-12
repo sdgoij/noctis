@@ -419,8 +419,11 @@ A project with no Rust is an entry that dispatches to `run_bundle`, so
 `platform = "wasm"` works for any mix. The key is the project directory; a site is
 one module however many projects it carries. `just publish-wasm` is
 `noctis build --platform wasm --project examples/showcase --project
-examples/rustball --out docs`. The generated crate is cached like the native
-tool/client, rebuilt only when a plugin or the engine changes.
+examples/rustball --out docs`, and it also stages the browser **editor** under
+`docs/editor/` (the `publish-editor` recipe: `cargo build -p web --features editor
+--target wasm32-unknown-unknown`, `wasm-bindgen`, `env.js`, `editor.html`, and the
+showcase bundle as `game.zip`). The generated client crate is cached like the
+native tool/client, rebuilt only when a plugin or the engine changes.
 
 ### Rough edges
 

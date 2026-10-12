@@ -7,9 +7,9 @@
 # `run` takes a project directory or a `.zip` bundle and forwards any extra
 # arguments to `noctis run`.
 #
-# `publish-wasm` builds the browser client, repackages `examples/showcase`, and
-# stages the demo in `docs/` for GitHub Pages; the `wasm-bindgen` CLI must match
-# the crate version in `Cargo.lock`.
+# `publish-wasm` builds the browser client and the browser editor, repackages
+# `examples/showcase`, and stages the demo in `docs/` for GitHub Pages; the
+# `wasm-bindgen` CLI must match the crate version in `Cargo.lock`.
 
 showcase := "examples/showcase"
 rustball := "examples/rustball"
@@ -42,7 +42,20 @@ serve-docs port="8000":
 
 # Build the browser demos and stage them in `docs/` for GitHub Pages. Several
 # `--project`s build one client that dispatches by project name (the Rust project
-# links its plugin); the generated `index.html` selects between them.
-publish-wasm:
+# links its plugin); the generated `index.html` selects between them. The browser
+# editor is staged beside it, under `editor/`.
+publish-wasm: publish-editor
     cargo run -- build --platform wasm --project {{ showcase }} --project {{ rustball }} --out {{ publish }}
     touch {{ publish }}/.nojekyll
+
+# Build the browser **editor** (the `editor` feature of `crates/web`) into
+# `docs/editor/`: its wasm module and JS glue, the Slag `env` shim, the editor host
+# page (as `index.html`), and the showcase bundle the page opens by default.
+publish-editor:
+    cargo build -p web --features editor --target wasm32-unknown-unknown --release
+    mkdir -p {{ publish }}/editor
+    wasm-bindgen --target web --out-name web --out-dir {{ publish }}/editor \
+        target/wasm32-unknown-unknown/release/web.wasm
+    cp crates/web/web/env.js {{ publish }}/editor/env.js
+    cp crates/web/web/editor.html {{ publish }}/editor/index.html
+    cargo run -- pack --project {{ showcase }} --out {{ publish }}/editor/game.zip

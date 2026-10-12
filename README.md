@@ -101,7 +101,7 @@ just build          # cargo build --workspace
 just check          # fmt + clippy over the whole workspace
 just test           # check, then test
 just run examples/showcase
-just publish-wasm   # build the browser demos into docs/ for GitHub Pages
+just publish-wasm   # build the browser demos and editor into docs/ for GitHub Pages
 ```
 
 See the [command reference](#command-reference) for the full `noctis` CLI, and
