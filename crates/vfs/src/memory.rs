@@ -25,6 +25,11 @@ impl MemoryStore {
         store
     }
 
+    /// A store holding `files` (a `/`-joined path to bytes).
+    pub fn from_files(files: BTreeMap<String, Vec<u8>>) -> Self {
+        Self { files }
+    }
+
     /// Every file, for a backend that persists the whole store — the browser
     /// backend writes this working copy back to OPFS.
     #[cfg(target_arch = "wasm32")]

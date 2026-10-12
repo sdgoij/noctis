@@ -439,9 +439,10 @@ tool/client, rebuilt only when a plugin or the engine changes.
    are folded in here.
 4. **`crates/web`: the generic client.** Fetch a bundle from a URL, build the
    scene/assets through the `Store`, run the loop, run Slag-interpreted scripts.
-5. **Storage backends.** *(Partly shipped.)* `vfs::OpfsStore` (wasm) — a working
-   copy read from and saved to OPFS. The drag-drop import and download-a-`.zip`
-   flows are still to come.
+5. **Storage backends.** *(Shipped.)* `vfs::OpfsStore`, plus the whole-tree helpers
+   `vfs::snapshot`/`opfs::load_tree`/`save_tree`; the editor's Save writes through
+   the project's store, and the browser entry persists it to OPFS. The drag-drop
+   import and download-a-`.zip` flows are still to come.
 6. **Audio web backend** and the user-gesture resume. **Shipped:**
    `crates/audio/src/web.rs`.
 7. **The browser editor.** *(Shipped, first cut.)* `crates/editor` builds for
@@ -449,9 +450,10 @@ tool/client, rebuilt only when a plugin or the engine changes.
    are gated, and wasm Slag runs the interpreter. The web host draws an **egui
    overlay** (`platform/src/web_egui.rs`), and `crates/web`'s `editor` feature adds
    a `start_editor` entry and `web/editor.html`, which fetches a bundle and runs
-   `EditorDriver` on that host. Still to come: **saving** (Ctrl+S goes through
-   `std::fs` today — it must write through the `Store`/OPFS), drag-drop import, and
-   the (optional) DOM bridge for extensions.
+   `EditorDriver` on that host. The project lives in **OPFS**: the first run unpacks
+   the bundle into it, and Save writes through the project's **store**
+   (`EditorDriver`'s save hook snapshots it back to OPFS). Still to come: drag-drop
+   import and the (optional) DOM bridge for extensions.
 8. **WebGL2 fallback** (deferred) and wasm threads (COOP/COEP), if needed.
 9. **Project Rust on the web.** *(Shipped.)* The facade builds for wasm; a plugin
    links into the browser client (`run_bundle_with`, feature-gated stock entry), and

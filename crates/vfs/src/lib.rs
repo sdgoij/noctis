@@ -24,7 +24,7 @@
 mod dir;
 mod memory;
 #[cfg(target_arch = "wasm32")]
-mod opfs;
+pub mod opfs;
 mod zip;
 
 use std::collections::BTreeMap;
@@ -259,6 +259,38 @@ pub(crate) fn children(
         .collect())
 }
 
+/// Every file in `store`, as a `/`-joined path to bytes — a recursive walk.
+///
+/// The counterpart of [`MemoryStore::from_files`]: together they move a whole
+/// store between backends (a bundle into browser storage, a project into a
+/// `.zip`).
+pub fn snapshot(store: &dyn Store) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    let mut files = BTreeMap::new();
+    walk(store, "", &mut files)?;
+    Ok(files)
+}
+
+/// Collect `dir` and its subdirectories from `store` into `files`.
+fn walk(
+    store: &dyn Store,
+    dir: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), StoreError> {
+    for entry in store.list(dir)? {
+        let path = if dir.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{dir}/{}", entry.name)
+        };
+        if entry.is_dir {
+            walk(store, &path, files)?;
+        } else {
+            files.insert(path.clone(), store.read(&path)?);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +344,23 @@ mod tests {
         assert_eq!(read.read("assets/models/deep/x.glb").unwrap(), b"bytes");
         assert!(!read.exists(".noctis/textures/dead.bin"));
         assert!(!read.exists("dist/game.exe"));
+    }
+
+    #[test]
+    fn a_store_snapshots_and_rebuilds() {
+        let mut store = MemoryStore::new();
+        store.write("noctis.toml", b"x").unwrap();
+        store.write("scenes/a.scene.json", b"y").unwrap();
+        store.write("assets/models/x.glb", b"z").unwrap();
+
+        // `snapshot` walks the whole tree; `from_files` rebuilds a store from it
+        // (how a bundle becomes browser storage, and back).
+        let files = snapshot(&store).unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(files["assets/models/x.glb"], b"z");
+
+        let rebuilt = MemoryStore::from_files(files);
+        assert_eq!(rebuilt.read_string("scenes/a.scene.json").unwrap(), "y");
+        assert!(rebuilt.is_dir("assets/models"));
     }
 }

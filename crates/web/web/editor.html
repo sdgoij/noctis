@@ -38,7 +38,8 @@
         # then serve crates/web/web/ and open editor.html
 
       `?bundle=<url>` overrides the bundle to load. The editor draws its docks, title
-      bar and status bar over the canvas; saving back to OPFS is a later step.
+      bar and status bar over the canvas. The project lives in OPFS: the first run
+      unpacks the bundle into it, and Save writes it back.
     -->
     <canvas id="noctis-canvas" tabindex="0"></canvas>
 

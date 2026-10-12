@@ -13,6 +13,7 @@ use math::{Mat4, Quat, Vec3, vec3};
 use platform::{AppDriver, PlatformError, WindowConfig, egui};
 use project::{AssetKind, Project, detect};
 use render::{GizmoAxis, GizmoGeometry, GizmoMode};
+use vfs::Store;
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
@@ -320,6 +321,10 @@ impl Layout {
     }
 }
 
+/// A hook the driver calls after a project-backed Save, with the project's store.
+/// The browser entry uses it to persist the store to OPFS.
+type SaveHook = Box<dyn FnMut(&dyn Store)>;
+
 /// A windowed editor: owns an [`Editor`] and renders it with egui panels.
 pub struct EditorDriver {
     editor: Editor,
@@ -374,6 +379,9 @@ pub struct EditorDriver {
     layout_path: Option<PathBuf>,
     /// The layout JSON last written, so an unchanged layout is not rewritten.
     saved_layout: Option<String>,
+    /// Called after a project-backed Save, with the project's store. A host
+    /// without a filesystem (the browser) persists the store this way.
+    on_save: Option<SaveHook>,
 }
 
 impl std::fmt::Debug for EditorDriver {
@@ -427,6 +435,7 @@ impl EditorDriver {
             seen_panels: HashSet::new(),
             layout_path: None,
             saved_layout: None,
+            on_save: None,
         }
     }
 
@@ -441,6 +450,17 @@ impl EditorDriver {
     /// Set the current scene's file (absolute), for Save and the scene picker.
     pub fn with_scene_path(mut self, path: Option<PathBuf>) -> Self {
         self.scene_path = path;
+        self
+    }
+
+    /// Set a hook the driver calls after a **project-backed** Save, with the
+    /// project's store.
+    ///
+    /// A host without a filesystem persists the store this way: the browser entry
+    /// snapshots it and writes it back to OPFS (see `.notes/web.md`). The native
+    /// editor writes files directly and needs no hook.
+    pub fn with_save_hook(mut self, hook: impl FnMut(&dyn Store) + 'static) -> Self {
+        self.on_save = Some(Box::new(hook));
         self
     }
 
@@ -853,50 +873,62 @@ impl EditorDriver {
 
     /// Save the current scene (and the prefab library) back into the project, or
     /// to the scene's own file for a loose `--scene`.
+    ///
+    /// A project always saves **through its store** — a native directory, a bundle,
+    /// or browser storage — so the same editor works on the web; a loose `--scene`
+    /// (no project) writes to its file directly.
     fn save(&mut self) {
-        let target = match self.scene_path.clone() {
-            Some(path) => path,
-            None => match self.project.as_ref() {
-                Some(project) => project.scenes_dir().join(format!(
-                    "{}.scene.json",
-                    scene_file_stem(self.editor.scene_name())
-                )),
-                None => {
-                    self.status =
-                        Some("Nothing to save to: open a project or pass --scene".to_string());
-                    return;
-                }
-            },
+        let Some(project) = self.project.as_mut() else {
+            self.save_loose();
+            return;
         };
 
-        if let Err(error) = self.editor.save(&target) {
+        // The scene's project-relative path: the current file if it is inside the
+        // project, otherwise a fresh one named after the scene.
+        let relative = self
+            .scene_path
+            .as_ref()
+            .and_then(|path| path.strip_prefix(project.root()).ok())
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|| {
+                format!(
+                    "scenes/{}.scene.json",
+                    scene_file_stem(self.editor.scene_name())
+                )
+            });
+
+        if let Err(error) = self.editor.save_to(project.store_mut(), &relative) {
             self.status = Some(format!("Save failed: {error}"));
             return;
         }
 
-        let mut message = match self.project.as_ref() {
-            Some(project) => format!(
-                "Saved {}",
-                target
-                    .strip_prefix(project.root())
-                    .unwrap_or(&target)
-                    .display()
-            ),
-            None => format!("Saved {}", target.display()),
-        };
-
+        let mut message = format!("Saved {relative}");
         // The prefab library lives in the project, so save it there too.
-        if let Some(project) = self.project.as_mut() {
-            for prefab in self.editor.prefabs() {
-                if let Err(error) = project.save_prefab(prefab) {
-                    message = format!("Saved the scene, but a prefab failed: {error}");
-                    break;
-                }
+        for prefab in self.editor.prefabs() {
+            if let Err(error) = project.save_prefab(prefab) {
+                message = format!("Saved the scene, but a prefab failed: {error}");
+                break;
             }
         }
 
-        self.scene_path = Some(target);
+        if let Some(hook) = self.on_save.as_mut() {
+            hook(project.store());
+        }
+
+        self.scene_path = Some(project.root().join(&relative));
         self.status = Some(message);
+    }
+
+    /// Save a loose `--scene` (no project open) to its file.
+    fn save_loose(&mut self) {
+        let Some(path) = self.scene_path.clone() else {
+            self.status = Some("Nothing to save to: open a project or pass --scene".to_string());
+            return;
+        };
+        match self.editor.save(&path) {
+            Ok(()) => self.status = Some(format!("Saved {}", path.display())),
+            Err(error) => self.status = Some(format!("Save failed: {error}")),
+        }
     }
 
     /// Destroy the selected entity (and its descendants), undoably.
@@ -2163,6 +2195,8 @@ fn attach(driver: EditorDriver, extensions: Option<AttachedExtensions>) -> Edito
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     /// Run one editor frame against a headless egui context and report whether
     /// the root UI's labels were left selectable.
@@ -2647,5 +2681,43 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn saving_a_store_backed_project_writes_through_the_store() {
+        // A project in a `MemoryStore` — what the browser builds from OPFS.
+        let mut store = vfs::MemoryStore::new();
+        store
+            .write(
+                "noctis.toml",
+                b"[project]\nname = \"Sandbox\"\n[project.settings]\ndefault_scene = \"scenes/main.scene.json\"\n",
+            )
+            .unwrap();
+        let project = Project::open_in(Box::new(store), "sandbox").expect("open the project");
+        let scene = project.root().join("scenes/main.scene.json");
+
+        let mut editor = Editor::new();
+        editor.spawn("Saved", None);
+
+        // The save hook fires with the store (the browser persists it here).
+        let saved = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&saved);
+        let mut driver = EditorDriver::new(editor)
+            .with_project(Some(project))
+            .with_scene_path(Some(scene))
+            .with_save_hook(move |_store| flag.set(true));
+
+        driver.save();
+
+        assert!(saved.get(), "the save hook ran");
+        let project = driver.project.as_ref().expect("the project is still open");
+        let written = project
+            .store()
+            .read_string("scenes/main.scene.json")
+            .expect("the scene was written through the store");
+        assert!(
+            written.contains("Saved"),
+            "the edited entity is in it: {written}"
+        );
     }
 }

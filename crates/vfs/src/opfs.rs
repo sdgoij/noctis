@@ -3,8 +3,11 @@
 //!
 //! OPFS itself is asynchronous, but [`Store`] is synchronous. So this keeps a
 //! **working copy** in memory: [`OpfsStore::open`] reads the OPFS tree into it, the
-//! `Store` methods edit the copy, and [`OpfsStore::save`] writes it back. See
-//! `.notes/web.md`.
+//! `Store` methods edit the copy, and [`OpfsStore::save`] writes it back — the
+//! whole-tree helpers [`load_tree`]/[`save_tree`] let a host persist a store it
+//! does not own (see `.notes/web.md`).
+
+use std::collections::BTreeMap;
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -30,48 +33,14 @@ pub struct OpfsStore {
 impl OpfsStore {
     /// Open (creating if absent) the OPFS directory `name` as a store.
     pub async fn open(name: &str) -> Result<Self, StoreError> {
-        let root = opfs_root().await?;
-        let dir = get_directory(&root, name).await?;
-        let mut cache = MemoryStore::new();
-        read_into(&dir, "", &mut cache).await?;
+        let dir = directory(name).await?;
+        let cache = MemoryStore::from_files(read_into(&dir, "").await?);
         Ok(Self { dir, cache })
     }
 
     /// Write the working copy back to OPFS.
     pub async fn save(&self) -> Result<(), StoreError> {
-        for (path, bytes) in self.cache.files() {
-            let (parent, name) = split(path);
-            let dir = self.subdirectory(parent).await?;
-            let handle = JsFuture::from(dir.get_file_handle(name))
-                .await
-                .map_err(js_err)?
-                .dyn_into::<FileSystemFileHandle>()
-                .map_err(|_| invalid(format!("OPFS: {path:?} is not a file")))?;
-            let writable = JsFuture::from(handle.create_writable())
-                .await
-                .map_err(js_err)?;
-            let stream = writable
-                .dyn_into::<web_sys::FileSystemWritableFileStream>()
-                .map_err(|_| invalid("OPFS: no writable stream"))?;
-            JsFuture::from(stream.write_with_u8_array(bytes).map_err(js_err)?)
-                .await
-                .map_err(js_err)?;
-            // `close` lives on the parent `WritableStream`.
-            let stream: &web_sys::WritableStream = stream.unchecked_ref();
-            JsFuture::from(web_sys::WritableStream::close(stream))
-                .await
-                .map_err(js_err)?;
-        }
-        Ok(())
-    }
-
-    /// Get (creating as needed) the nested OPFS directory for a `/`-joined path.
-    async fn subdirectory(&self, parent: &str) -> Result<FileSystemDirectoryHandle, StoreError> {
-        let mut dir = self.dir.clone();
-        for part in parent.split('/').filter(|part| !part.is_empty()) {
-            dir = get_directory(&dir, part).await?;
-        }
-        Ok(dir)
+        write_into(&self.dir, self.cache.files()).await
     }
 }
 
@@ -109,14 +78,31 @@ impl Store for OpfsStore {
     }
 
     /// A second store over the same OPFS directory, holding a snapshot copy of the
-    /// working copy (a `duplicate` is a detached view; only `save` from the owner
-    /// persists).
+    /// working copy (a detached view; only the owner's `save` persists).
     fn duplicate(&self) -> Box<dyn Store> {
         Box::new(OpfsStore {
             dir: self.dir.clone(),
             cache: self.cache.clone(),
         })
     }
+}
+
+/// Read the OPFS directory `name` into a flat tree (`/`-joined path to bytes).
+pub async fn load_tree(name: &str) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    let dir = directory(name).await?;
+    read_into(&dir, "").await
+}
+
+/// Write a flat tree into the OPFS directory `name` (creating it if absent).
+pub async fn save_tree(name: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<(), StoreError> {
+    let dir = directory(name).await?;
+    write_into(&dir, files).await
+}
+
+/// The OPFS directory `name`, creating it if absent.
+async fn directory(name: &str) -> Result<FileSystemDirectoryHandle, StoreError> {
+    let root = opfs_root().await?;
+    get_directory(&root, name).await
 }
 
 /// The OPFS root directory (`navigator.storage.getDirectory()`).
@@ -144,11 +130,21 @@ async fn get_directory(
         .map_err(|_| invalid(format!("OPFS: {name:?} is not a directory")))
 }
 
-/// Read `dir` (whose keys are prefixed by `prefix`) into `cache`, recursing.
+/// Read `dir` (whose keys are prefixed by `prefix`) into a flat tree.
 async fn read_into(
     dir: &FileSystemDirectoryHandle,
     prefix: &str,
-    cache: &mut MemoryStore,
+) -> Result<BTreeMap<String, Vec<u8>>, StoreError> {
+    let mut files = BTreeMap::new();
+    read_dir(dir, prefix, &mut files).await?;
+    Ok(files)
+}
+
+/// Recursively collect `dir` into `files`.
+async fn read_dir(
+    dir: &FileSystemDirectoryHandle,
+    prefix: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), StoreError> {
     let iterator = web_sys::FileSystemDirectoryHandle::values(dir);
     loop {
@@ -165,7 +161,7 @@ async fn read_into(
         if handle.kind() == FileSystemHandleKind::Directory {
             let child = handle.unchecked_into::<FileSystemDirectoryHandle>();
             let child_prefix = format!("{prefix}{name}/");
-            Box::pin(read_into(&child, &child_prefix, cache)).await?;
+            Box::pin(read_dir(&child, &child_prefix, files)).await?;
         } else {
             let file = JsFuture::from(handle.unchecked_into::<FileSystemFileHandle>().get_file())
                 .await
@@ -174,10 +170,53 @@ async fn read_into(
                 .map_err(|_| invalid("OPFS: an entry is not a file"))?;
             let buffer = JsFuture::from(file.array_buffer()).await.map_err(js_err)?;
             let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-            cache.write(&format!("{prefix}{name}"), &bytes)?;
+            files.insert(format!("{prefix}{name}"), bytes);
         }
     }
     Ok(())
+}
+
+/// Write `files` under `dir`, creating subdirectories as needed.
+async fn write_into(
+    dir: &FileSystemDirectoryHandle,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), StoreError> {
+    for (path, bytes) in files {
+        let (parent, name) = split(path);
+        let target = subdirectory(dir, parent).await?;
+        let handle = JsFuture::from(target.get_file_handle(name))
+            .await
+            .map_err(js_err)?
+            .dyn_into::<FileSystemFileHandle>()
+            .map_err(|_| invalid(format!("OPFS: {path:?} is not a file")))?;
+        let writable = JsFuture::from(handle.create_writable())
+            .await
+            .map_err(js_err)?;
+        let stream = writable
+            .dyn_into::<web_sys::FileSystemWritableFileStream>()
+            .map_err(|_| invalid("OPFS: no writable stream"))?;
+        JsFuture::from(stream.write_with_u8_array(bytes).map_err(js_err)?)
+            .await
+            .map_err(js_err)?;
+        // `close` lives on the parent `WritableStream`.
+        let stream: &web_sys::WritableStream = stream.unchecked_ref();
+        JsFuture::from(web_sys::WritableStream::close(stream))
+            .await
+            .map_err(js_err)?;
+    }
+    Ok(())
+}
+
+/// Get (creating as needed) the nested directory of a `/`-joined path under `dir`.
+async fn subdirectory(
+    dir: &FileSystemDirectoryHandle,
+    parent: &str,
+) -> Result<FileSystemDirectoryHandle, StoreError> {
+    let mut dir = dir.clone();
+    for part in parent.split('/').filter(|part| !part.is_empty()) {
+        dir = get_directory(&dir, part).await?;
+    }
+    Ok(dir)
 }
 
 /// Split a `/`-joined path into its parent directory and file name.
