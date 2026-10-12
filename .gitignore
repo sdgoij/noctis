@@ -14,6 +14,6 @@
 /crates/web/web/web_bg.wasm.d.ts
 /crates/web/web/game.zip
 
-# The `docs/` demo is committed, but wasm-bindgen's type declarations are not
-# needed to serve it.
-/docs/**/*.d.ts
+# The `docs/` demo is a build artifact: `just publish-wasm` produces it and the
+# Pages workflow (.github/workflows/pages.yml) deploys it, so it is not committed.
+/docs
