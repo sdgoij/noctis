@@ -73,6 +73,9 @@ pub struct WindowHost<D: AppDriver> {
     /// The cursor-capture state last applied to the window, so a driver's wish is
     /// only pushed to winit when it changes.
     cursor_captured: bool,
+    /// Set when egui asked to close the window (the title bar's close button), so
+    /// the event-loop handler can exit.
+    close_requested: bool,
 }
 
 impl<D: AppDriver> WindowHost<D> {
@@ -86,6 +89,7 @@ impl<D: AppDriver> WindowHost<D> {
             window: None,
             last: Instant::now(),
             cursor_captured: false,
+            close_requested: false,
         }
     }
 
@@ -274,6 +278,14 @@ impl<D: AppDriver> WindowHost<D> {
                 &window,
                 &mut actions,
             );
+            // A `Close` command becomes a viewport *event*, not an action: egui-winit
+            // only records it (`start_drag`/`maximize` fire immediately), so apply it
+            // here by asking the event loop to exit.
+            for event in egui.viewport_info.events.drain(..) {
+                if matches!(event, egui::ViewportEvent::Close) {
+                    self.close_requested = true;
+                }
+            }
 
             let paint_jobs = egui.ctx.tessellate(output.shapes, output.pixels_per_point);
 
@@ -383,7 +395,7 @@ impl<D: AppDriver> ApplicationHandler for WindowHost<D> {
             }
             WindowEvent::RedrawRequested => {
                 self.redraw();
-                if self.driver.should_exit() {
+                if self.close_requested || self.driver.should_exit() {
                     event_loop.exit();
                 }
             }
