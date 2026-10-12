@@ -42,10 +42,10 @@
           10.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,
@@ -76,6 +76,40 @@
     },
     {
       "id": 2,
+      "name": "Backdrop",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          576.0,
+          136.0,
+          -2.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          1152.0,
+          1.0,
+          272.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Backdrop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 3,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -109,7 +143,7 @@
       ]
     },
     {
-      "id": 3,
+      "id": 4,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -143,7 +177,7 @@
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -177,7 +211,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -211,7 +245,7 @@
       ]
     },
     {
-      "id": 6,
+      "id": 7,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -245,7 +279,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 8,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -279,7 +313,7 @@
       ]
     },
     {
-      "id": 8,
+      "id": 9,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -313,7 +347,7 @@
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -347,7 +381,7 @@
       ]
     },
     {
-      "id": 10,
+      "id": 11,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -381,7 +415,7 @@
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -415,7 +449,7 @@
       ]
     },
     {
-      "id": 12,
+      "id": 13,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -449,7 +483,7 @@
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -483,7 +517,7 @@
       ]
     },
     {
-      "id": 14,
+      "id": 15,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -517,7 +551,7 @@
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -551,7 +585,7 @@
       ]
     },
     {
-      "id": 16,
+      "id": 17,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -585,7 +619,7 @@
       ]
     },
     {
-      "id": 17,
+      "id": 18,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -619,7 +653,7 @@
       ]
     },
     {
-      "id": 18,
+      "id": 19,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -653,7 +687,7 @@
       ]
     },
     {
-      "id": 19,
+      "id": 20,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -687,7 +721,7 @@
       ]
     },
     {
-      "id": 20,
+      "id": 21,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -721,7 +755,7 @@
       ]
     },
     {
-      "id": 21,
+      "id": 22,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -755,7 +789,7 @@
       ]
     },
     {
-      "id": 22,
+      "id": 23,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -789,7 +823,7 @@
       ]
     },
     {
-      "id": 23,
+      "id": 24,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -823,7 +857,7 @@
       ]
     },
     {
-      "id": 24,
+      "id": 25,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -857,7 +891,7 @@
       ]
     },
     {
-      "id": 25,
+      "id": 26,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -891,7 +925,7 @@
       ]
     },
     {
-      "id": 26,
+      "id": 27,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -925,7 +959,7 @@
       ]
     },
     {
-      "id": 27,
+      "id": 28,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -959,7 +993,7 @@
       ]
     },
     {
-      "id": 28,
+      "id": 29,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -993,7 +1027,7 @@
       ]
     },
     {
-      "id": 29,
+      "id": 30,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1027,7 +1061,7 @@
       ]
     },
     {
-      "id": 30,
+      "id": 31,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1061,7 +1095,7 @@
       ]
     },
     {
-      "id": 31,
+      "id": 32,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1095,7 +1129,7 @@
       ]
     },
     {
-      "id": 32,
+      "id": 33,
       "name": "Coin_69_2",
       "parent": 0,
       "active": true,
@@ -1129,7 +1163,7 @@
       ]
     },
     {
-      "id": 33,
+      "id": 34,
       "name": "Coin_40_6",
       "parent": 0,
       "active": true,
@@ -1163,7 +1197,7 @@
       ]
     },
     {
-      "id": 34,
+      "id": 35,
       "name": "Coin_19_7",
       "parent": 0,
       "active": true,
@@ -1197,7 +1231,7 @@
       ]
     },
     {
-      "id": 35,
+      "id": 36,
       "name": "Coin_31_7",
       "parent": 0,
       "active": true,
@@ -1231,7 +1265,7 @@
       ]
     },
     {
-      "id": 36,
+      "id": 37,
       "name": "Coin_61_7",
       "parent": 0,
       "active": true,
@@ -1265,7 +1299,7 @@
       ]
     },
     {
-      "id": 37,
+      "id": 38,
       "name": "Coin_62_7",
       "parent": 0,
       "active": true,
@@ -1299,7 +1333,7 @@
       ]
     },
     {
-      "id": 38,
+      "id": 39,
       "name": "Coin_63_7",
       "parent": 0,
       "active": true,
@@ -1333,7 +1367,7 @@
       ]
     },
     {
-      "id": 39,
+      "id": 40,
       "name": "Coin_64_7",
       "parent": 0,
       "active": true,
@@ -1367,7 +1401,7 @@
       ]
     },
     {
-      "id": 40,
+      "id": 41,
       "name": "Coin_34_9",
       "parent": 0,
       "active": true,
@@ -1401,7 +1435,7 @@
       ]
     },
     {
-      "id": 41,
+      "id": 42,
       "name": "Coin_9_10",
       "parent": 0,
       "active": true,
@@ -1435,7 +1469,7 @@
       ]
     },
     {
-      "id": 42,
+      "id": 43,
       "name": "Coin_12_10",
       "parent": 0,
       "active": true,
@@ -1469,7 +1503,7 @@
       ]
     },
     {
-      "id": 43,
+      "id": 44,
       "name": "Coin_48_14",
       "parent": 0,
       "active": true,
@@ -1503,7 +1537,7 @@
       ]
     },
     {
-      "id": 44,
+      "id": 45,
       "name": "Coin_51_15",
       "parent": 0,
       "active": true,
@@ -1537,7 +1571,7 @@
       ]
     },
     {
-      "id": 45,
+      "id": 46,
       "name": "Goal",
       "parent": 0,
       "active": true,
@@ -1571,7 +1605,7 @@
       ]
     },
     {
-      "id": 46,
+      "id": 47,
       "name": "Player",
       "parent": 0,
       "active": true,
@@ -1605,7 +1639,7 @@
       ]
     },
     {
-      "id": 47,
+      "id": 48,
       "name": "HUD",
       "parent": 0,
       "active": true,
@@ -1617,10 +1651,10 @@
           5.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,
@@ -1646,7 +1680,7 @@
       ]
     },
     {
-      "id": 48,
+      "id": 49,
       "name": "Game",
       "parent": 0,
       "active": true,
@@ -1658,10 +1692,10 @@
           0.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,

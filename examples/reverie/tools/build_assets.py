@@ -28,6 +28,7 @@ def linear(hex_color):
 # The player's yellow and the level's teal/green palette (from the original
 # source palette in render.rs), plus a warm marker for the goal.
 PALETTE = {
+    "Backdrop": "#071A1D",
     "Ground": "#174B45",
     "GroundTop": "#2F8F5B",
     "Coin": "#A8D96F",
@@ -35,7 +36,9 @@ PALETTE = {
     "Player": "#F2FF66",
 }
 
-BACKDROP = "#071A1D"  # the camera's clear color
+# The camera's clear colour (the renderer ignores `Camera::clear_color` today, so
+# the level also draws a flat `Backdrop` quad in this colour).
+BACKDROP = "#071A1D"
 
 
 def main():

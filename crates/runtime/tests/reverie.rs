@@ -8,11 +8,13 @@
 use std::path::PathBuf;
 
 use ecs::assets::AssetRegistry;
-use ecs::components::{LocalTransform, Name};
+use ecs::components::{Camera, LocalTransform, Name};
 use ecs::resources::Key;
 use ecs::scene::Scene;
+use ecs::world::World;
 use platform::AppDriver;
 use project::{AssetPath, Project};
+use render::{RenderError, Renderer, RendererConfig};
 use runtime::{Runtime, RuntimeConfig};
 use script::engine_host::EngineHost;
 
@@ -107,5 +109,72 @@ fn the_player_falls_lands_and_walks() {
         runtime.script().host().errors().is_empty(),
         "the level reported script errors: {:?}",
         runtime.script().host().errors()
+    );
+}
+
+/// A headless renderer, or `None` when no adapter exists (the test then skips).
+fn headless(width: u32, height: u32) -> Option<Renderer> {
+    match Renderer::headless(RendererConfig {
+        width,
+        height,
+        ..Default::default()
+    }) {
+        Ok(renderer) => Some(renderer),
+        Err(RenderError::NoAdapter) => {
+            eprintln!("skipping GPU test: no adapter");
+            None
+        }
+        Err(other) => panic!("unexpected renderer error: {other}"),
+    }
+}
+
+/// The RGBA pixels of a frame.
+fn pixels(frame: &render::Frame) -> &[[u8; 4]] {
+    frame.rgba.as_chunks::<4>().0
+}
+
+/// The channel-wise maximum difference between two pixels.
+fn diff(a: [u8; 4], b: [u8; 4]) -> u8 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap_or(0)
+}
+
+/// The level must actually rasterize geometry over the empty background — the
+/// check a black window would fail (e.g. a camera pointing the wrong way).
+#[test]
+fn the_level_renders_visible_geometry() {
+    let (scene, assets) = load("scenes/level1.scene.json");
+    let Some(mut renderer) = headless(256, 256) else {
+        return;
+    };
+
+    // Learn the empty-scene background colour (clear colour + tonemap).
+    let mut empty = World::new();
+    let empty_camera = empty.spawn_with(Camera::default());
+    let empty_assets = AssetRegistry::with_defaults();
+    let background = *pixels(
+        &renderer
+            .render_frame(&empty, &empty_assets, empty_camera)
+            .expect("render an empty scene"),
+    )
+    .first()
+    .expect("a frame has pixels");
+
+    let camera = render::first_active_camera(&scene.world).expect("the level has a camera");
+    let frame = renderer
+        .render_frame(&scene.world, &assets, camera)
+        .expect("render the level");
+
+    let total = (frame.width * frame.height) as usize;
+    let detailed = pixels(&frame)
+        .iter()
+        .filter(|pixel| diff(**pixel, background) > 12)
+        .count();
+    assert!(
+        detailed > total / 50,
+        "the level drew almost nothing over the background: {detailed}/{total} pixels"
     );
 }

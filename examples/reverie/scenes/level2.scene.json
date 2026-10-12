@@ -42,10 +42,10 @@
           10.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,
@@ -76,6 +76,40 @@
     },
     {
       "id": 2,
+      "name": "Backdrop",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
+          1120.0,
+          136.0,
+          -2.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          2240.0,
+          1.0,
+          272.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Backdrop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 3,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -109,7 +143,7 @@
       ]
     },
     {
-      "id": 3,
+      "id": 4,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -143,7 +177,7 @@
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -177,7 +211,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -211,40 +245,6 @@
       ]
     },
     {
-      "id": 6,
-      "name": "Ground",
-      "parent": 0,
-      "active": true,
-      "visible": true,
-      "transform": {
-        "translation": [
-          1320.0,
-          136.0,
-          0.0
-        ],
-        "rotation": [
-          0.7071067811865476,
-          0.0,
-          0.0,
-          0.7071067811865476
-        ],
-        "scale": [
-          112.0,
-          1.0,
-          16.0
-        ]
-      },
-      "components": [
-        {
-          "type": "mesh_renderer",
-          "mesh": "primitives/plane",
-          "material": "GroundTop",
-          "cast_shadows": false,
-          "receive_shadows": false
-        }
-      ]
-    },
-    {
       "id": 7,
       "name": "Ground",
       "parent": 0,
@@ -252,7 +252,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          1768.0,
+          1320.0,
           136.0,
           0.0
         ],
@@ -286,6 +286,40 @@
       "visible": true,
       "transform": {
         "translation": [
+          1768.0,
+          136.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
           1888.0,
           104.0,
           0.0
@@ -313,7 +347,7 @@
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -347,40 +381,6 @@
       ]
     },
     {
-      "id": 10,
-      "name": "Ground",
-      "parent": 0,
-      "active": true,
-      "visible": true,
-      "transform": {
-        "translation": [
-          440.0,
-          88.0,
-          0.0
-        ],
-        "rotation": [
-          0.7071067811865476,
-          0.0,
-          0.0,
-          0.7071067811865476
-        ],
-        "scale": [
-          112.0,
-          1.0,
-          16.0
-        ]
-      },
-      "components": [
-        {
-          "type": "mesh_renderer",
-          "mesh": "primitives/plane",
-          "material": "GroundTop",
-          "cast_shadows": false,
-          "receive_shadows": false
-        }
-      ]
-    },
-    {
       "id": 11,
       "name": "Ground",
       "parent": 0,
@@ -388,7 +388,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          808.0,
+          440.0,
           88.0,
           0.0
         ],
@@ -422,7 +422,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          1144.0,
+          808.0,
           88.0,
           0.0
         ],
@@ -456,6 +456,40 @@
       "visible": true,
       "transform": {
         "translation": [
+          1144.0,
+          88.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          112.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "GroundTop",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
           1600.0,
           88.0,
           0.0
@@ -483,7 +517,7 @@
       ]
     },
     {
-      "id": 14,
+      "id": 15,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -517,7 +551,7 @@
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -551,7 +585,7 @@
       ]
     },
     {
-      "id": 16,
+      "id": 17,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -585,7 +619,7 @@
       ]
     },
     {
-      "id": 17,
+      "id": 18,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -619,7 +653,7 @@
       ]
     },
     {
-      "id": 18,
+      "id": 19,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -653,7 +687,7 @@
       ]
     },
     {
-      "id": 19,
+      "id": 20,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -687,7 +721,7 @@
       ]
     },
     {
-      "id": 20,
+      "id": 21,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -721,7 +755,7 @@
       ]
     },
     {
-      "id": 21,
+      "id": 22,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -755,7 +789,7 @@
       ]
     },
     {
-      "id": 22,
+      "id": 23,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -789,7 +823,7 @@
       ]
     },
     {
-      "id": 23,
+      "id": 24,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -823,7 +857,7 @@
       ]
     },
     {
-      "id": 24,
+      "id": 25,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -857,7 +891,7 @@
       ]
     },
     {
-      "id": 25,
+      "id": 26,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -891,7 +925,7 @@
       ]
     },
     {
-      "id": 26,
+      "id": 27,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -925,7 +959,7 @@
       ]
     },
     {
-      "id": 27,
+      "id": 28,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -959,7 +993,7 @@
       ]
     },
     {
-      "id": 28,
+      "id": 29,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -993,7 +1027,7 @@
       ]
     },
     {
-      "id": 29,
+      "id": 30,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1027,7 +1061,7 @@
       ]
     },
     {
-      "id": 30,
+      "id": 31,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1061,7 +1095,7 @@
       ]
     },
     {
-      "id": 31,
+      "id": 32,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1095,7 +1129,7 @@
       ]
     },
     {
-      "id": 32,
+      "id": 33,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1129,7 +1163,7 @@
       ]
     },
     {
-      "id": 33,
+      "id": 34,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1163,7 +1197,7 @@
       ]
     },
     {
-      "id": 34,
+      "id": 35,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1197,7 +1231,7 @@
       ]
     },
     {
-      "id": 35,
+      "id": 36,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1231,7 +1265,7 @@
       ]
     },
     {
-      "id": 36,
+      "id": 37,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1265,7 +1299,7 @@
       ]
     },
     {
-      "id": 37,
+      "id": 38,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1299,7 +1333,7 @@
       ]
     },
     {
-      "id": 38,
+      "id": 39,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1333,7 +1367,7 @@
       ]
     },
     {
-      "id": 39,
+      "id": 40,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1367,7 +1401,7 @@
       ]
     },
     {
-      "id": 40,
+      "id": 41,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1401,7 +1435,7 @@
       ]
     },
     {
-      "id": 41,
+      "id": 42,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1435,7 +1469,7 @@
       ]
     },
     {
-      "id": 42,
+      "id": 43,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1469,7 +1503,7 @@
       ]
     },
     {
-      "id": 43,
+      "id": 44,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1503,7 +1537,7 @@
       ]
     },
     {
-      "id": 44,
+      "id": 45,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1537,7 +1571,7 @@
       ]
     },
     {
-      "id": 45,
+      "id": 46,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1571,40 +1605,6 @@
       ]
     },
     {
-      "id": 46,
-      "name": "Ground",
-      "parent": 0,
-      "active": true,
-      "visible": true,
-      "transform": {
-        "translation": [
-          1800.0,
-          24.0,
-          0.0
-        ],
-        "rotation": [
-          0.7071067811865476,
-          0.0,
-          0.0,
-          0.7071067811865476
-        ],
-        "scale": [
-          16.0,
-          1.0,
-          16.0
-        ]
-      },
-      "components": [
-        {
-          "type": "mesh_renderer",
-          "mesh": "primitives/plane",
-          "material": "Ground",
-          "cast_shadows": false,
-          "receive_shadows": false
-        }
-      ]
-    },
-    {
       "id": 47,
       "name": "Ground",
       "parent": 0,
@@ -1612,7 +1612,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          1864.0,
+          1800.0,
           24.0,
           0.0
         ],
@@ -1646,7 +1646,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          1880.0,
+          1864.0,
           24.0,
           0.0
         ],
@@ -1666,7 +1666,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/plane",
-          "material": "GroundTop",
+          "material": "Ground",
           "cast_shadows": false,
           "receive_shadows": false
         }
@@ -1680,7 +1680,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          2008.0,
+          1880.0,
           24.0,
           0.0
         ],
@@ -1714,7 +1714,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          2024.0,
+          2008.0,
           24.0,
           0.0
         ],
@@ -1734,7 +1734,7 @@
         {
           "type": "mesh_renderer",
           "mesh": "primitives/plane",
-          "material": "Ground",
+          "material": "GroundTop",
           "cast_shadows": false,
           "receive_shadows": false
         }
@@ -1748,7 +1748,7 @@
       "visible": true,
       "transform": {
         "translation": [
-          2232.0,
+          2024.0,
           24.0,
           0.0
         ],
@@ -1782,6 +1782,40 @@
       "visible": true,
       "transform": {
         "translation": [
+          2232.0,
+          24.0,
+          0.0
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0.0,
+          0.0,
+          0.7071067811865476
+        ],
+        "scale": [
+          16.0,
+          1.0,
+          16.0
+        ]
+      },
+      "components": [
+        {
+          "type": "mesh_renderer",
+          "mesh": "primitives/plane",
+          "material": "Ground",
+          "cast_shadows": false,
+          "receive_shadows": false
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "name": "Ground",
+      "parent": 0,
+      "active": true,
+      "visible": true,
+      "transform": {
+        "translation": [
           112.0,
           8.0,
           0.0
@@ -1809,7 +1843,7 @@
       ]
     },
     {
-      "id": 53,
+      "id": 54,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1843,7 +1877,7 @@
       ]
     },
     {
-      "id": 54,
+      "id": 55,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1877,7 +1911,7 @@
       ]
     },
     {
-      "id": 55,
+      "id": 56,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1911,7 +1945,7 @@
       ]
     },
     {
-      "id": 56,
+      "id": 57,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1945,7 +1979,7 @@
       ]
     },
     {
-      "id": 57,
+      "id": 58,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -1979,7 +2013,7 @@
       ]
     },
     {
-      "id": 58,
+      "id": 59,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2013,7 +2047,7 @@
       ]
     },
     {
-      "id": 59,
+      "id": 60,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2047,7 +2081,7 @@
       ]
     },
     {
-      "id": 60,
+      "id": 61,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2081,7 +2115,7 @@
       ]
     },
     {
-      "id": 61,
+      "id": 62,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2115,7 +2149,7 @@
       ]
     },
     {
-      "id": 62,
+      "id": 63,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2149,7 +2183,7 @@
       ]
     },
     {
-      "id": 63,
+      "id": 64,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2183,7 +2217,7 @@
       ]
     },
     {
-      "id": 64,
+      "id": 65,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2217,7 +2251,7 @@
       ]
     },
     {
-      "id": 65,
+      "id": 66,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2251,7 +2285,7 @@
       ]
     },
     {
-      "id": 66,
+      "id": 67,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2285,7 +2319,7 @@
       ]
     },
     {
-      "id": 67,
+      "id": 68,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2319,7 +2353,7 @@
       ]
     },
     {
-      "id": 68,
+      "id": 69,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2353,7 +2387,7 @@
       ]
     },
     {
-      "id": 69,
+      "id": 70,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2387,7 +2421,7 @@
       ]
     },
     {
-      "id": 70,
+      "id": 71,
       "name": "Ground",
       "parent": 0,
       "active": true,
@@ -2421,7 +2455,7 @@
       ]
     },
     {
-      "id": 71,
+      "id": 72,
       "name": "Coin_103_2",
       "parent": 0,
       "active": true,
@@ -2455,7 +2489,7 @@
       ]
     },
     {
-      "id": 72,
+      "id": 73,
       "name": "Coin_106_4",
       "parent": 0,
       "active": true,
@@ -2489,7 +2523,7 @@
       ]
     },
     {
-      "id": 73,
+      "id": 74,
       "name": "Coin_107_4",
       "parent": 0,
       "active": true,
@@ -2523,7 +2557,7 @@
       ]
     },
     {
-      "id": 74,
+      "id": 75,
       "name": "Coin_108_4",
       "parent": 0,
       "active": true,
@@ -2557,7 +2591,7 @@
       ]
     },
     {
-      "id": 75,
+      "id": 76,
       "name": "Coin_15_7",
       "parent": 0,
       "active": true,
@@ -2591,7 +2625,7 @@
       ]
     },
     {
-      "id": 76,
+      "id": 77,
       "name": "Coin_16_7",
       "parent": 0,
       "active": true,
@@ -2625,7 +2659,7 @@
       ]
     },
     {
-      "id": 77,
+      "id": 78,
       "name": "Coin_17_7",
       "parent": 0,
       "active": true,
@@ -2659,7 +2693,7 @@
       ]
     },
     {
-      "id": 78,
+      "id": 79,
       "name": "Coin_18_7",
       "parent": 0,
       "active": true,
@@ -2693,7 +2727,7 @@
       ]
     },
     {
-      "id": 79,
+      "id": 80,
       "name": "Coin_38_7",
       "parent": 0,
       "active": true,
@@ -2727,7 +2761,7 @@
       ]
     },
     {
-      "id": 80,
+      "id": 81,
       "name": "Coin_42_7",
       "parent": 0,
       "active": true,
@@ -2761,7 +2795,7 @@
       ]
     },
     {
-      "id": 81,
+      "id": 82,
       "name": "Coin_64_7",
       "parent": 0,
       "active": true,
@@ -2795,7 +2829,7 @@
       ]
     },
     {
-      "id": 82,
+      "id": 83,
       "name": "Coin_81_7",
       "parent": 0,
       "active": true,
@@ -2829,7 +2863,7 @@
       ]
     },
     {
-      "id": 83,
+      "id": 84,
       "name": "Coin_85_7",
       "parent": 0,
       "active": true,
@@ -2863,7 +2897,7 @@
       ]
     },
     {
-      "id": 84,
+      "id": 85,
       "name": "Coin_108_7",
       "parent": 0,
       "active": true,
@@ -2897,7 +2931,7 @@
       ]
     },
     {
-      "id": 85,
+      "id": 86,
       "name": "Coin_109_7",
       "parent": 0,
       "active": true,
@@ -2931,7 +2965,7 @@
       ]
     },
     {
-      "id": 86,
+      "id": 87,
       "name": "Coin_6_10",
       "parent": 0,
       "active": true,
@@ -2965,7 +2999,7 @@
       ]
     },
     {
-      "id": 87,
+      "id": 88,
       "name": "Coin_7_10",
       "parent": 0,
       "active": true,
@@ -2999,7 +3033,7 @@
       ]
     },
     {
-      "id": 88,
+      "id": 89,
       "name": "Coin_8_10",
       "parent": 0,
       "active": true,
@@ -3033,7 +3067,7 @@
       ]
     },
     {
-      "id": 89,
+      "id": 90,
       "name": "Coin_9_10",
       "parent": 0,
       "active": true,
@@ -3067,7 +3101,7 @@
       ]
     },
     {
-      "id": 90,
+      "id": 91,
       "name": "Coin_25_10",
       "parent": 0,
       "active": true,
@@ -3101,7 +3135,7 @@
       ]
     },
     {
-      "id": 91,
+      "id": 92,
       "name": "Coin_26_10",
       "parent": 0,
       "active": true,
@@ -3135,7 +3169,7 @@
       ]
     },
     {
-      "id": 92,
+      "id": 93,
       "name": "Coin_27_10",
       "parent": 0,
       "active": true,
@@ -3169,7 +3203,7 @@
       ]
     },
     {
-      "id": 93,
+      "id": 94,
       "name": "Coin_28_10",
       "parent": 0,
       "active": true,
@@ -3203,7 +3237,7 @@
       ]
     },
     {
-      "id": 94,
+      "id": 95,
       "name": "Coin_29_10",
       "parent": 0,
       "active": true,
@@ -3237,7 +3271,7 @@
       ]
     },
     {
-      "id": 95,
+      "id": 96,
       "name": "Coin_49_10",
       "parent": 0,
       "active": true,
@@ -3271,7 +3305,7 @@
       ]
     },
     {
-      "id": 96,
+      "id": 97,
       "name": "Coin_50_10",
       "parent": 0,
       "active": true,
@@ -3305,7 +3339,7 @@
       ]
     },
     {
-      "id": 97,
+      "id": 98,
       "name": "Coin_51_10",
       "parent": 0,
       "active": true,
@@ -3339,7 +3373,7 @@
       ]
     },
     {
-      "id": 98,
+      "id": 99,
       "name": "Coin_52_10",
       "parent": 0,
       "active": true,
@@ -3373,7 +3407,7 @@
       ]
     },
     {
-      "id": 99,
+      "id": 100,
       "name": "Coin_70_10",
       "parent": 0,
       "active": true,
@@ -3407,7 +3441,7 @@
       ]
     },
     {
-      "id": 100,
+      "id": 101,
       "name": "Coin_73_10",
       "parent": 0,
       "active": true,
@@ -3441,7 +3475,7 @@
       ]
     },
     {
-      "id": 101,
+      "id": 102,
       "name": "Coin_98_10",
       "parent": 0,
       "active": true,
@@ -3475,7 +3509,7 @@
       ]
     },
     {
-      "id": 102,
+      "id": 103,
       "name": "Coin_99_10",
       "parent": 0,
       "active": true,
@@ -3509,7 +3543,7 @@
       ]
     },
     {
-      "id": 103,
+      "id": 104,
       "name": "Coin_100_10",
       "parent": 0,
       "active": true,
@@ -3543,7 +3577,7 @@
       ]
     },
     {
-      "id": 104,
+      "id": 105,
       "name": "Coin_130_10",
       "parent": 0,
       "active": true,
@@ -3577,7 +3611,7 @@
       ]
     },
     {
-      "id": 105,
+      "id": 106,
       "name": "Coin_131_10",
       "parent": 0,
       "active": true,
@@ -3611,7 +3645,7 @@
       ]
     },
     {
-      "id": 106,
+      "id": 107,
       "name": "Coin_24_15",
       "parent": 0,
       "active": true,
@@ -3645,7 +3679,7 @@
       ]
     },
     {
-      "id": 107,
+      "id": 108,
       "name": "Coin_25_15",
       "parent": 0,
       "active": true,
@@ -3679,7 +3713,7 @@
       ]
     },
     {
-      "id": 108,
+      "id": 109,
       "name": "Coin_36_15",
       "parent": 0,
       "active": true,
@@ -3713,7 +3747,7 @@
       ]
     },
     {
-      "id": 109,
+      "id": 110,
       "name": "Coin_45_15",
       "parent": 0,
       "active": true,
@@ -3747,7 +3781,7 @@
       ]
     },
     {
-      "id": 110,
+      "id": 111,
       "name": "Coin_110_15",
       "parent": 0,
       "active": true,
@@ -3781,7 +3815,7 @@
       ]
     },
     {
-      "id": 111,
+      "id": 112,
       "name": "Coin_111_15",
       "parent": 0,
       "active": true,
@@ -3815,7 +3849,7 @@
       ]
     },
     {
-      "id": 112,
+      "id": 113,
       "name": "Coin_118_15",
       "parent": 0,
       "active": true,
@@ -3849,7 +3883,7 @@
       ]
     },
     {
-      "id": 113,
+      "id": 114,
       "name": "Coin_124_15",
       "parent": 0,
       "active": true,
@@ -3883,7 +3917,7 @@
       ]
     },
     {
-      "id": 114,
+      "id": 115,
       "name": "Coin_128_15",
       "parent": 0,
       "active": true,
@@ -3917,7 +3951,7 @@
       ]
     },
     {
-      "id": 115,
+      "id": 116,
       "name": "Coin_133_15",
       "parent": 0,
       "active": true,
@@ -3951,7 +3985,7 @@
       ]
     },
     {
-      "id": 116,
+      "id": 117,
       "name": "Goal",
       "parent": 0,
       "active": true,
@@ -3985,7 +4019,7 @@
       ]
     },
     {
-      "id": 117,
+      "id": 118,
       "name": "Player",
       "parent": 0,
       "active": true,
@@ -4019,7 +4053,7 @@
       ]
     },
     {
-      "id": 118,
+      "id": 119,
       "name": "HUD",
       "parent": 0,
       "active": true,
@@ -4031,10 +4065,10 @@
           5.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,
@@ -4060,7 +4094,7 @@
       ]
     },
     {
-      "id": 119,
+      "id": 120,
       "name": "Game",
       "parent": 0,
       "active": true,
@@ -4072,10 +4106,10 @@
           0.0
         ],
         "rotation": [
-          0.7071067811865476,
           0.0,
           0.0,
-          0.7071067811865476
+          0.0,
+          1.0
         ],
         "scale": [
           1.0,

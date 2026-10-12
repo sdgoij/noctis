@@ -8,6 +8,22 @@
   ],
   "materials": [
     {
+      "name": "Backdrop",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.0021246888848418626,
+          0.010329823029626936,
+          0.012286488356915872,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 1.0
+      },
+      "extensions": {
+        "KHR_materials_unlit": {}
+      }
+    },
+    {
       "name": "Ground",
       "pbrMetallicRoughness": {
         "baseColorFactor": [

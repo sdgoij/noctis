@@ -22,7 +22,10 @@ LEVELS = ["level1", "level2", "level3"]
 
 TILE = 16.0  # world units per tile (1 unit = 1 original pixel)
 ORTHO_HEIGHT = 270.0
-QUAT_X_90 = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]  # +90 deg about X
+IDENTITY = [0.0, 0.0, 0.0, 1.0]
+# The plane mesh lies in XZ facing +Y; rotating it +90 deg about X stands it up in
+# XY facing the camera. Only the quads get this — the camera and the HUD must not.
+QUAT_X_90 = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
 
 
 def linear(hex_color):
@@ -116,7 +119,7 @@ def ground_runs(grid):
     return runs
 
 
-def entity(eid, name, translation, scale, components, parent=0):
+def entity(eid, name, translation, scale, components, parent=0, rotation=None):
     return {
         "id": eid,
         "name": name,
@@ -125,7 +128,7 @@ def entity(eid, name, translation, scale, components, parent=0):
         "visible": True,
         "transform": {
             "translation": translation,
-            "rotation": QUAT_X_90,
+            "rotation": QUAT_X_90 if rotation is None else rotation,
             "scale": scale,
         },
         "components": components,
@@ -189,6 +192,20 @@ def build_scene(level, index):
                     "hdr": False,
                 }
             ],
+            rotation=IDENTITY,
+        )
+    )
+    eid += 1
+
+    # Backdrop: a flat quad behind everything, filling the level (the renderer
+    # clears to its own colour, not the camera's).
+    entities.append(
+        entity(
+            eid,
+            "Backdrop",
+            [level_width * 0.5, level_height * 0.5, -2.0],
+            [level_width, 1.0, level_height],
+            [mesh("Backdrop")],
         )
     )
     eid += 1
@@ -246,6 +263,7 @@ def build_scene(level, index):
                     "depth_test": False,
                 }
             ],
+            rotation=IDENTITY,
         )
     )
     eid += 1
@@ -265,6 +283,7 @@ def build_scene(level, index):
                     "enabled": True,
                 }
             ],
+            rotation=IDENTITY,
         )
     )
 
