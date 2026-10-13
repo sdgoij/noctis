@@ -119,6 +119,27 @@ mod tests {
     }
 
     #[test]
+    fn the_plugin_spawns_the_water_surface() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        // The water is a custom-shader mesh — the seam's mesh form.
+        assert!(
+            app.context.scene.world.count::<ShaderMeshRenderer>() >= 1,
+            "the water surface is spawned"
+        );
+        assert!(app.context.assets.shaders.handle("water/surface").is_some());
+        assert!(
+            app.context
+                .assets
+                .shader_materials
+                .handle("water/surface")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn holding_w_walks_the_goat_forward() {
         let mut app = App::new("test");
         Goats.build(&mut app);

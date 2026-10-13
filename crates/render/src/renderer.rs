@@ -2489,6 +2489,94 @@ mod tests {
         assert!(b > 40, "the sky is bright: {r},{g},{b}");
     }
 
+    /// A custom-shader mesh draws through the seam (its mesh form). Skips without an
+    /// adapter.
+    #[test]
+    fn a_shader_mesh_draws_or_reports_no_adapter() {
+        use ecs::assets::{Mesh, Shader, ShaderMaterial, Vertex};
+        use ecs::components::{Camera, ShaderMeshRenderer};
+
+        let config = RendererConfig {
+            width: 64,
+            height: 64,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let shader = assets.shaders.insert_named(
+            "mesh.test",
+            Shader::new(
+                "mesh test",
+                "@vertex fn vs_main(in: VsIn) -> @builtin(position) vec4<f32> {\n\
+                 \x20   return frame.view_proj * object.model * vec4<f32>(in.position, 1.0);\n\
+                 }\n\
+                 @fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }",
+            ),
+        );
+        let material = assets.shader_materials.insert_named(
+            "mesh.test",
+            ShaderMaterial {
+                name: "mesh test".into(),
+                shader,
+                ..ShaderMaterial::default()
+            },
+        );
+        let mesh = assets.meshes.insert(Mesh {
+            name: "tri".into(),
+            vertices: vec![
+                Vertex {
+                    position: [0.0, 0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.5, 0.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                Vertex {
+                    position: [-0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                Vertex {
+                    position: [0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [1.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+            ],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        });
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        let e = world.spawn_with(ShaderMeshRenderer {
+            mesh,
+            material,
+            ..ShaderMeshRenderer::default()
+        });
+        world.insert(
+            e,
+            math::Transform::from_translation(math::vec3(0.0, 0.0, -3.0)),
+        );
+
+        let frame = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        let [r, g, b, _] = frame.pixel(32, 32).expect("a centre pixel");
+        assert!(g > r && g > b, "the mesh shader painted green: {r},{g},{b}");
+    }
+
     /// A material's user uniform block is dynamic: writing new floats redraws the
     /// frame without rebuilding a bind group. Skips when no adapter is present.
     #[test]

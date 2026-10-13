@@ -73,6 +73,42 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// The water surface (`.notes/shaders.md`, mesh form): a flat quad at the table's
+/// level, translucent, deeper toward the far edge. The terrain's depth test keeps it
+/// to the pools — over higher ground it fails and is not drawn. Its `user` block is
+/// the colours, the view distance and the alpha.
+const WATER_WGSL: &str = r#"
+struct WaterOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+};
+
+@vertex
+fn vs_main(in: VsIn) -> WaterOut {
+    let world = object.model * vec4<f32>(in.position, 1.0);
+    var out: WaterOut;
+    out.clip = frame.view_proj * world;
+    out.world = world.xyz;
+    return out;
+}
+
+@fragment
+fn fs_main(in: WaterOut) -> @location(0) vec4<f32> {
+    let deep = user[0].rgb;
+    let shallow = user[1].rgb;
+    let d = clamp(length(in.world - frame.camera_pos.xyz) / user[2].x, 0.0, 1.0);
+    let col = mix(shallow, deep, d);
+    return vec4<f32>(col, user[2].y);
+}
+"#;
+
+/// The water's `user` block: deep colour, shallow colour, then view distance and alpha.
+const WATER_UNIFORMS: [f32; 12] = [
+    0.03, 0.12, 0.20, 1.0, // deep
+    0.10, 0.28, 0.34, 1.0, // shallow
+    40.0, 0.62, 0.0, 0.0, // view distance, alpha
+];
+
 /// How far the goat may walk from the origin before the mesh ends, in units.
 const FIELD: f32 = 44.0;
 /// The gaits' ground speeds, in metres per second (the original's stride maths).
@@ -631,6 +667,8 @@ pub struct World {
     sky: AssetHandle<ShaderMaterial>,
     /// Seconds since the world was built, for the sky's slow sun arc.
     sky_time: f32,
+    /// The water surface entity, moved to the table's level each frame.
+    water_surface: Entity,
 }
 
 /// Advance the whole world one frame: the weather and the water, the goat, the
@@ -645,6 +683,14 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     world.sky_time += dt;
     if let Some(material) = ctx.assets.shader_materials.get_mut(world.sky) {
         material.uniforms = sky_uniforms(world.sky_time, world.weather.rain());
+    }
+    // The water surface follows the table.
+    if let Some(transform) = ctx
+        .scene
+        .world
+        .get_mut::<LocalTransform>(world.water_surface)
+    {
+        transform.translation.y = world.water.level();
     }
     let ate = drive_goat(
         ctx,
@@ -1021,6 +1067,74 @@ fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
     ]
 }
 
+/// The water surface mesh: a unit quad in the XZ plane, scaled to the field by the
+/// entity's transform.
+fn water_quad() -> Mesh {
+    let corner = |x: f32, z: f32| Vertex {
+        position: [x, 0.0, z],
+        normal: [0.0, 1.0, 0.0],
+        uv: [x + 0.5, z + 0.5],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+        color: [1.0, 1.0, 1.0, 1.0],
+    };
+    Mesh {
+        name: "water/surface".into(),
+        vertices: vec![
+            corner(-0.5, -0.5),
+            corner(0.5, -0.5),
+            corner(0.5, 0.5),
+            corner(-0.5, 0.5),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        ..Default::default()
+    }
+}
+
+/// Spawn the water surface: a flat, translucent quad at the table's level, drawn by a
+/// custom shader through the seam (its mesh form — the seam's first mesh draw). The
+/// level is moved each frame in [`apply_frame`].
+fn spawn_water(ctx: &mut EngineContext) -> Entity {
+    let shader = ctx
+        .assets
+        .shaders
+        .insert_named("water/surface", Shader::new("goats water", WATER_WGSL));
+    let material = ctx.assets.shader_materials.insert_named(
+        "water/surface",
+        ShaderMaterial {
+            name: "goats water".into(),
+            shader,
+            uniforms: WATER_UNIFORMS.to_vec(),
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            ..ShaderMaterial::default()
+        },
+    );
+    let mesh = ctx
+        .assets
+        .meshes
+        .insert_named("water/surface", water_quad());
+    let water = ctx.scene.world.spawn();
+    ctx.scene.world.insert(water, Name::new("Water"));
+    ctx.scene.world.insert(
+        water,
+        LocalTransform::from_translation(math::vec3(0.0, 0.0, 0.0)).with_scale(math::vec3(
+            2.0 * FIELD,
+            1.0,
+            2.0 * FIELD,
+        )),
+    );
+    ctx.scene.world.insert(
+        water,
+        ShaderMeshRenderer {
+            mesh,
+            material,
+            cast_shadows: false,
+            receive_shadows: false,
+        },
+    );
+    water
+}
+
 /// Build the whole world: the ground, the meadow, the sky, then the goat. Called
 /// by the plugin's frame system on the first tick, and by the harness directly.
 pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
@@ -1033,6 +1147,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let meadow = grass::Meadow::default();
     spawn_grass(ctx, &meadow, &water, &craters);
     let sky = spawn_sky(ctx);
+    let water_surface = spawn_water(ctx);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1048,6 +1163,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         seeded: false,
         sky,
         sky_time: 0.0,
+        water_surface,
     })
 }
 

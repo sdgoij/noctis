@@ -86,6 +86,10 @@ next two, and both are bounded.
 
 ## The engine features this needs
 
+A running list of what the engine still lacks — reflections, scene depth, frame
+sun/weather, billboards, the UI seam — with the port's stopgap for each, is
+[`.notes/engine-gaps.md`](engine-gaps.md).
+
 ### Skeletal animation — [`animation.md`](animation.md)
 
 **Add** — see [`.notes/animation.md`](animation.md). The goat loads and draws at
@@ -196,9 +200,10 @@ Single-player sandbox first; each milestone is playable.
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
    material's `user` block and animated there: the sun arcs and the colour drains
    toward grey in rain; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
-   Day/night lighting and audio follow; the **terrain** now carries per-vertex
-   grass / sand / rock through the engine's vertex colour, and the water — a
-   translucent surface — is the seam's next consumer.
+   Day/night lighting and audio follow; the **terrain** carries per-vertex
+   grass / sand / rock through the engine's vertex colour, and the **water** is a
+   translucent surface drawn through the seam's mesh form. Reflections, and the
+   bang's fire / smoke / light, remain.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
