@@ -233,12 +233,39 @@ fn dip_one(c: &Crater, d2: f32) -> f32 {
     }
 }
 
+/// The terrain's per-vertex palette (linear RGB): grass on the gentle ground, rock
+/// on the steep faces, sand in the low hollows the water fills — the original's
+/// three biome colours, derived from slope and height rather than its noise.
+const GRASS_COLOR: [f32; 3] = [0.122, 0.311, 0.087];
+const ROCK_COLOR: [f32; 3] = [0.20, 0.185, 0.165];
+const SAND_COLOR: [f32; 3] = [0.52, 0.45, 0.30];
+
+/// A smooth `0..1` ramp, tolerant of `edge0 > edge1` (the sand ramp descends).
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The terrain colour at a vertex: grass, rock on the steep, sand in the low.
+fn terrain_color(slope: f32, y: f32) -> [f32; 4] {
+    let rock = smoothstep(0.95, 0.80, slope);
+    let sand = smoothstep(0.30, -0.40, y);
+    let mix3 = |a: [f32; 3], b: [f32; 3], t: f32| {
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        ]
+    };
+    let ground = mix3(GRASS_COLOR, ROCK_COLOR, rock);
+    let c = mix3(ground, SAND_COLOR, sand);
+    [c[0], c[1], c[2], 1.0]
+}
+
 /// Build the ground mesh: a `QUADS × QUADS` grid centred on the origin, with
-/// per-vertex normals from central differences (the original's `terrainVertex`).
-/// `craters` dishes the ground, so a rebuild after a bang shows the hole.
-///
-/// The vertex layout is the engine's standard one; the per-vertex colours the
-/// original carries have no slot yet, so the mesh is one material for now.
+/// per-vertex normals from central differences (the original's `terrainVertex`) and
+/// per-vertex colours from slope and height. `craters` dishes the ground, so a
+/// rebuild after a bang shows the hole.
 pub fn build_mesh(craters: &Craters) -> Mesh {
     let n = QUADS + 1;
     let half = QUADS as f32 * CELL * 0.5;
@@ -274,6 +301,7 @@ pub fn build_mesh(craters: &Craters) -> Mesh {
                 normal: [-dx * inv, inv, -dz * inv],
                 uv: [x * UV, z * UV],
                 tangent: [1.0, 0.0, 0.0, 1.0],
+                color: terrain_color(inv, y),
             });
         }
     }
@@ -310,6 +338,35 @@ mod tests {
         assert_eq!(height(0.0, 0.0), 0.0);
         // And the relief only reaches full strength past the bowl's ramp.
         assert!(height(FLAT + RAMP, 0.0).abs() > 0.0);
+    }
+
+    #[test]
+    fn the_terrain_carries_biome_colours() {
+        let mesh = build_mesh(&Craters::default());
+        // Every vertex has an opaque colour...
+        assert!(
+            mesh.vertices
+                .iter()
+                .all(|v| (v.color[3] - 1.0).abs() < 1e-6),
+        );
+        // ...and they are grass, rock and sand, not one flat colour.
+        let first = mesh.vertices[0].color;
+        assert!(
+            mesh.vertices.iter().any(|v| v.color != first),
+            "the terrain colour varies"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| v.color[1] > v.color[0] && v.color[1] > v.color[2]),
+            "grass (green-dominant) appears"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| v.color[0] > v.color[2] && v.color[0] > v.color[1]),
+            "sand (red-dominant) appears"
+        );
     }
 
     #[test]

@@ -84,6 +84,7 @@ struct VsIn {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec4<f32>,
+    @location(6) color: vec4<f32>,
 };
 
 // The skinned input: the standard vertex attributes plus four joint indices and
@@ -93,6 +94,7 @@ struct VsInSkinned {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec4<f32>,
+    @location(6) color: vec4<f32>,
     @location(4) joints: vec4<f32>,
     @location(5) weights: vec4<f32>,
 };
@@ -103,6 +105,7 @@ struct VsOut {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec4<f32>,
+    @location(4) color: vec4<f32>,
 };
 
 @vertex
@@ -114,6 +117,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.normal = normalize((object.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz);
     out.uv = in.uv;
     out.tangent = in.tangent;
+    out.color = in.color;
     return out;
 }
 
@@ -133,6 +137,7 @@ fn vs_skinned(in: VsInSkinned) -> VsOut {
     out.normal = normalize((object.normal_matrix * (skinned * vec4<f32>(in.normal, 0.0))).xyz);
     out.uv = in.uv;
     out.tangent = in.tangent;
+    out.color = in.color;
     return out;
 }
 
@@ -185,6 +190,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var base_sample = object.base_color;
     if (object.flags.x > 0.5) {
         base_sample = base_sample * textureSampleLevel(base_color_tex, material_sampler, in.uv, 0.0);
+    }
+    // Per-vertex material (the terrain's grass / sand / rock), when the material opts in.
+    if (object.flags2.w > 0.5) {
+        base_sample = vec4<f32>(base_sample.rgb * in.color.rgb, base_sample.a * in.color.a);
     }
     if (base_sample.a < object.params.w) {
         discard;

@@ -25,6 +25,7 @@ fn vertex(position: Vec3, normal: Vec3, uv: [f32; 2], tangent: [f32; 4]) -> Vert
         normal: [normal.x, normal.y, normal.z],
         uv,
         tangent,
+        color: [1.0, 1.0, 1.0, 1.0],
     }
 }
 

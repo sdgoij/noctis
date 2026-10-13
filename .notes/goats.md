@@ -126,14 +126,13 @@ The goats screens become systems: `uiScreen` state, a system that draws the
 active panel through the seam, and the existing `SETTINGS` / `TUNING` writes
 behind it.
 
-### Vertex colour (small)
+### Vertex colour (shipped)
 
-`Vertex` (`crates/ecs/src/assets.rs:255`) carries position / normal / uv / tangent
-and no colour, so the terrain's per-vertex grass/sand/rock cannot be authored as
-the original does. **Add** a `color: [f32; 4]` to `Vertex` (default white) and a
-`Material` flag to use it, with a fourth blend weight for a detail texture. It is
-cheap, general (gizmos and FX want it too), and exactly the goat's terrain case;
-the alternative — a material-blend texture — is more setup for less generality.
+`Vertex` carries `color: [f32; 4]` (default white), uploaded at shader location 6 —
+clear of the skin buffer's 4 and 5 — and a `Material` flag, `vertex_colors`,
+multiplies the shaded base colour by it. The terrain authors its grass / sand / rock
+per vertex (`examples/goats/crates/goats/src/terrain.rs`), from slope and height
+rather than a blend map; a fourth blend weight for a detail texture is still open.
 
 ### Ground collision
 
@@ -197,8 +196,9 @@ Single-player sandbox first; each milestone is playable.
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
    material's `user` block and animated there: the sun arcs and the colour drains
    toward grey in rain; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
-   Day/night lighting and audio follow, and the terrain and water — vertex
-   colours and a translucent surface — are the seam's next consumers.
+   Day/night lighting and audio follow; the **terrain** now carries per-vertex
+   grass / sand / rock through the engine's vertex colour, and the water — a
+   translucent surface — is the seam's next consumer.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.

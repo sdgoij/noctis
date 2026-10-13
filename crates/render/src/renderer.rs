@@ -2202,7 +2202,7 @@ fn object_uniform(item: &DrawItem, material: &Material) -> ObjectUniform {
             has(material.occlusion_texture),
             if material.double_sided { 1.0 } else { 0.0 },
             if material.unlit { 1.0 } else { 0.0 },
-            0.0,
+            if material.vertex_colors { 1.0 } else { 0.0 },
         ],
     }
 }
@@ -2590,18 +2590,21 @@ mod tests {
                     normal: [0.0, 0.0, 1.0],
                     uv: [0.5, 0.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: [-0.5, -0.5, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     uv: [0.0, 1.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: [0.5, -0.5, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     uv: [1.0, 1.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
             ],
             indices: vec![0, 1, 2],
@@ -2665,6 +2668,7 @@ mod tests {
             normal: [0.0, 0.0, 1.0],
             uv: [0.5, 0.5],
             tangent: [1.0, 0.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
         };
         let mesh = assets.meshes.insert(Mesh {
             name: "triangle".into(),
@@ -2731,18 +2735,21 @@ mod tests {
                     normal: [0.0, 0.0, 1.0],
                     uv: [0.5, 0.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: [-0.6, -0.6, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     uv: [0.0, 1.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
                 Vertex {
                     position: [0.6, -0.6, 0.0],
                     normal: [0.0, 0.0, 1.0],
                     uv: [1.0, 1.0],
                     tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
                 },
             ],
             indices: vec![0, 1, 2],
@@ -2798,6 +2805,90 @@ mod tests {
         assert_ne!(
             lit_with_light.rgba, lit_without_light.rgba,
             "the control: a lit material responds to lighting"
+        );
+    }
+
+    /// Vertex colours tint the shaded base: an unlit, vertex-coloured material mixed
+    /// from red vertices renders red. Skips without an adapter.
+    #[test]
+    fn vertex_colours_tint_the_frame_or_reports_no_adapter() {
+        use ecs::assets::{Material, Mesh, Vertex};
+        use ecs::components::{Camera, MeshRenderer};
+        use math::vec3;
+
+        let config = RendererConfig {
+            width: 64,
+            height: 64,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let mut assets = AssetRegistry::with_defaults();
+        let mesh = assets.meshes.insert(Mesh {
+            name: "tri".into(),
+            vertices: vec![
+                Vertex {
+                    position: [0.0, 0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.5, 0.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: red,
+                },
+                Vertex {
+                    position: [-0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [0.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: red,
+                },
+                Vertex {
+                    position: [0.6, -0.6, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    uv: [1.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0, 1.0],
+                    color: red,
+                },
+            ],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        });
+        // White base, unlit: the frame is exactly the vertex colour.
+        let material = assets.materials.insert_named(
+            "vtint",
+            Material {
+                name: "vtint".into(),
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                unlit: true,
+                vertex_colors: true,
+                ..Material::default()
+            },
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        let e = world.spawn_with(MeshRenderer {
+            mesh,
+            material,
+            ..MeshRenderer::default()
+        });
+        world.insert(e, math::Transform::from_translation(vec3(0.0, 0.0, -3.0)));
+
+        let frame = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        let [r, g, b, a] = frame.pixel(32, 32).expect("a centre pixel");
+        assert_eq!(a, 255);
+        assert!(
+            r > g && r > b,
+            "the vertex colour tints the frame: {r},{g},{b}"
         );
     }
 

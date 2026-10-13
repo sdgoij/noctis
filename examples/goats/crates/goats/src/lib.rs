@@ -73,9 +73,6 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The ground's colour: the original's `T_GRASS` (`98,150,84` sRGB) in linear.
-const GRASS: [f32; 4] = [0.122, 0.311, 0.087, 1.0];
-
 /// How far the goat may walk from the origin before the mesh ends, in units.
 const FIELD: f32 = 44.0;
 /// The gaits' ground speeds, in metres per second (the original's stride maths).
@@ -1064,9 +1061,12 @@ fn spawn_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
         "terrain/grass",
         Material {
             name: "terrain grass".to_string(),
-            base_color: GRASS,
+            // The biome colour is per vertex (grass / sand / rock in `terrain`), so
+            // the base is white and the vertex colours carry it.
+            base_color: [1.0, 1.0, 1.0, 1.0],
             metallic: 0.0,
             roughness: 0.95,
+            vertex_colors: true,
             ..Material::default()
         },
     );

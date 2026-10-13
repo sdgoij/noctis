@@ -44,7 +44,7 @@ pub struct ObjectUniform {
     pub emissive: [f32; 4],
     /// `x` = has base-color tex, `y` = has normal tex, `z` = has MR tex, `w` = has emissive tex.
     pub flags: [f32; 4],
-    /// `x` = has occlusion tex, `y` = double sided, remaining reserved.
+    /// `x` = occlusion tex, `y` = double sided, `z` = unlit, `w` = vertex colours.
     pub flags2: [f32; 4],
 }
 

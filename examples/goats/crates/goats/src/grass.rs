@@ -319,6 +319,7 @@ fn push_cube(v: &mut Vec<Vertex>, indices: &mut Vec<u32>, center: [f32; 3], half
                 normal,
                 uv: [0.0, 0.0],
                 tangent: [1.0, 0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);

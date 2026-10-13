@@ -23,14 +23,19 @@ pub struct GpuVertex {
     pub uv: [f32; 2],
     /// Tangent with handedness in `w`.
     pub tangent: [f32; 4],
+    /// Linear vertex colour (RGBA).
+    pub color: [f32; 4],
 }
 
 impl GpuVertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+    // Colour is location 6, not 4: a skinned draw's second vertex buffer owns 4 and
+    // 5 (its joint indices and weights), and vertex locations need not be contiguous.
+    const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x3,
         2 => Float32x2,
         3 => Float32x4,
+        6 => Float32x4,
     ];
 
     /// The vertex buffer layout for the standard mesh format.
@@ -94,6 +99,7 @@ impl GpuMesh {
                 normal: v.normal,
                 uv: v.uv,
                 tangent: v.tangent,
+                color: v.color,
             })
             .collect();
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -437,17 +443,20 @@ mod tests {
             std::mem::size_of::<GpuVertex>(),
             std::mem::size_of::<ecs::assets::Vertex>()
         );
-        assert_eq!(std::mem::size_of::<GpuVertex>(), 48);
+        assert_eq!(std::mem::size_of::<GpuVertex>(), 64);
     }
 
     #[test]
     fn vertex_layout_attributes_are_contiguous() {
         let layout = GpuVertex::layout();
-        assert_eq!(layout.array_stride, 48);
-        assert_eq!(layout.attributes.len(), 4);
+        assert_eq!(layout.array_stride, 64);
+        assert_eq!(layout.attributes.len(), 5);
         assert_eq!(layout.attributes[0].offset, 0);
         assert_eq!(layout.attributes[1].offset, 12);
         assert_eq!(layout.attributes[2].offset, 24);
         assert_eq!(layout.attributes[3].offset, 32);
+        assert_eq!(layout.attributes[4].offset, 48);
+        // Colour is location 6, clear of the skin buffer's 4 and 5.
+        assert_eq!(layout.attributes[4].shader_location, 6);
     }
 }

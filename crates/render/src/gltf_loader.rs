@@ -287,6 +287,7 @@ fn build_loaded(
                         normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
                         uv: uv_transform.map_or(uv, |transform| transform.apply(uv)),
                         tangent: tangents.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                        color: [1.0, 1.0, 1.0, 1.0],
                     }
                 })
                 .collect::<Vec<_>>();
@@ -488,6 +489,7 @@ fn build_material(material: gltf::Material<'_>) -> Material {
         },
         double_sided: material.double_sided(),
         unlit: material.unlit(),
+        vertex_colors: false,
         filter: filter_from_mag_filter(
             pbr.base_color_texture()
                 .and_then(|info| info.texture().sampler().mag_filter()),

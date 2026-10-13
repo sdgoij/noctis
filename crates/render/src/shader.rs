@@ -81,6 +81,7 @@ pub fn prelude(form: ShadeForm) -> String {
                  \x20   @location(1) normal: vec3<f32>,\n\
                  \x20   @location(2) uv: vec2<f32>,\n\
                  \x20   @location(3) tangent: vec4<f32>,\n\
+                 \x20   @location(6) color: vec4<f32>,\n\
                  };\n\n",
             );
         }

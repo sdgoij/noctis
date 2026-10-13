@@ -1276,6 +1276,7 @@ pub fn mesh_from_positions(
                 normal: [n.x, n.y, n.z],
                 uv: [0.0, 0.0],
                 tangent: [0.0, 0.0, 0.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
             }
         })
         .collect();

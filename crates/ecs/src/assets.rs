@@ -268,7 +268,7 @@ impl<T> Assets<T> {
 }
 
 /// A vertex in the engine's standard mesh layout.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct Vertex {
     /// Object-space position.
@@ -279,6 +279,21 @@ pub struct Vertex {
     pub uv: [f32; 2],
     /// Tangent with handedness in `w`.
     pub tangent: [f32; 4],
+    /// Linear vertex colour (RGBA), white when a mesh carries none. Used when the
+    /// material opts in ([`Material::vertex_colors`]).
+    pub color: [f32; 4],
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self {
+            position: [0.0; 3],
+            normal: [0.0; 3],
+            uv: [0.0; 2],
+            tangent: [0.0; 4],
+            color: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
 }
 
 /// A per-vertex skin influence: up to four joints and their blend weights.
@@ -384,6 +399,9 @@ pub struct Material {
     ///
     /// [`base_color_texture`]: Material::base_color_texture
     pub unlit: bool,
+    /// Multiply the shaded base colour by each vertex's [`Vertex::color`] — the
+    /// per-vertex material the terrain uses for grass / sand / rock.
+    pub vertex_colors: bool,
     /// Sampler filtering for this material's texture lookups.
     pub filter: TextureFilter,
 }
@@ -405,6 +423,7 @@ impl Default for Material {
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
             unlit: false,
+            vertex_colors: false,
             filter: TextureFilter::Linear,
         }
     }
