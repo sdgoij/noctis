@@ -4,7 +4,9 @@
 //! physics, audio, and scripting crates read and write them; the editor and the
 //! scripting API expose them by name.
 
-use crate::assets::{AnimationClip, AssetHandle, AudioClip, FontAsset, Material, Mesh, Skin};
+use crate::assets::{
+    AnimationClip, AssetHandle, AudioClip, FontAsset, Material, Mesh, ShaderMaterial, Skin,
+};
 use crate::world::Entity;
 use math::{Mat4, Quat, Transform, Vec3, vec3};
 
@@ -300,6 +302,40 @@ impl Default for MeshRenderer {
             receive_shadows: true,
         }
     }
+}
+
+/// A renderable mesh drawn by a custom [`ShaderMaterial`] instead of the engine's
+/// PBR material — the custom-shader twin of [`MeshRenderer`]. The shader is
+/// compiled against the engine's fixed prelude ([`.notes/shaders.md`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShaderMeshRenderer {
+    /// The mesh asset.
+    pub mesh: AssetHandle<Mesh>,
+    /// The shader material asset.
+    pub material: AssetHandle<ShaderMaterial>,
+    /// Whether this entity casts shadows.
+    pub cast_shadows: bool,
+    /// Whether this entity receives shadows.
+    pub receive_shadows: bool,
+}
+
+impl Default for ShaderMeshRenderer {
+    fn default() -> Self {
+        Self {
+            mesh: AssetHandle::NONE,
+            material: AssetHandle::NONE,
+            cast_shadows: true,
+            receive_shadows: true,
+        }
+    }
+}
+
+/// Runs a full-screen [`ShaderMaterial`] fragment pass over the render target
+/// before the scene draws — a sky ([`.notes/shaders.md`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ScreenShaderMaterial {
+    /// The shader material asset.
+    pub material: AssetHandle<ShaderMaterial>,
 }
 
 /// A rigid body's simulation type.
@@ -700,6 +736,10 @@ pub mod component_index {
         Light,
         /// [`super::MeshRenderer`]
         MeshRenderer,
+        /// [`super::ShaderMeshRenderer`]
+        ShaderMeshRenderer,
+        /// [`super::ScreenShaderMaterial`]
+        ScreenShaderMaterial,
         /// [`super::SkinnedMeshRenderer`]
         SkinnedMeshRenderer,
         /// [`super::Animator`]
@@ -728,6 +768,8 @@ pub mod component_index {
                 ComponentKind::Camera => "Camera",
                 ComponentKind::Light => "Light",
                 ComponentKind::MeshRenderer => "MeshRenderer",
+                ComponentKind::ShaderMeshRenderer => "ShaderMeshRenderer",
+                ComponentKind::ScreenShaderMaterial => "ScreenShaderMaterial",
                 ComponentKind::SkinnedMeshRenderer => "SkinnedMeshRenderer",
                 ComponentKind::Animator => "Animator",
                 ComponentKind::RigidBody => "RigidBody",
@@ -749,6 +791,8 @@ pub mod component_index {
                 "Camera" => ComponentKind::Camera,
                 "Light" => ComponentKind::Light,
                 "MeshRenderer" => ComponentKind::MeshRenderer,
+                "ShaderMeshRenderer" => ComponentKind::ShaderMeshRenderer,
+                "ScreenShaderMaterial" => ComponentKind::ScreenShaderMaterial,
                 "SkinnedMeshRenderer" => ComponentKind::SkinnedMeshRenderer,
                 "Animator" => ComponentKind::Animator,
                 "RigidBody" => ComponentKind::RigidBody,
@@ -763,8 +807,10 @@ pub mod component_index {
         /// Every kind the coverage scenes must contain, in a stable order.
         ///
         /// `SkinnedMeshRenderer` and `Animator` are deliberately absent until the
-        /// animation draw path is proven ([`.notes/animation.md`]); both are still
-        /// addressable by name.
+        /// animation draw path is proven ([`.notes/animation.md`]), and
+        /// `ShaderMeshRenderer` and `ScreenShaderMaterial` until the shader seam's
+        /// draw path is proven ([`.notes/shaders.md`]); all are still addressable by
+        /// name.
         pub const ALL: [ComponentKind; 13] = [
             ComponentKind::LocalTransform,
             ComponentKind::GlobalTransform,

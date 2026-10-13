@@ -530,6 +530,25 @@ fn component_descs(
             receive_shadows: m.receive_shadows,
         });
     }
+    if let Some(m) = world.get::<ShaderMeshRenderer>(entity) {
+        out.push(ComponentDesc::ShaderMeshRenderer {
+            mesh: assets.meshes.path_of(m.mesh).map(str::to_string),
+            material: assets
+                .shader_materials
+                .path_of(m.material)
+                .map(str::to_string),
+            cast_shadows: m.cast_shadows,
+            receive_shadows: m.receive_shadows,
+        });
+    }
+    if let Some(s) = world.get::<ScreenShaderMaterial>(entity) {
+        out.push(ComponentDesc::ScreenShaderMaterial {
+            material: assets
+                .shader_materials
+                .path_of(s.material)
+                .map(str::to_string),
+        });
+    }
     if let Some(m) = world.get::<SkinnedMeshRenderer>(entity) {
         out.push(ComponentDesc::SkinnedMeshRenderer {
             mesh: assets.meshes.path_of(m.mesh).map(str::to_string),
@@ -632,6 +651,17 @@ fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<
                     .as_deref()
                     .filter(|p| assets.materials.handle(p).is_none())
             }),
+        ComponentDesc::ShaderMeshRenderer { mesh, material, .. } => mesh
+            .as_deref()
+            .filter(|p| assets.meshes.handle(p).is_none())
+            .or_else(|| {
+                material
+                    .as_deref()
+                    .filter(|p| assets.shader_materials.handle(p).is_none())
+            }),
+        ComponentDesc::ScreenShaderMaterial { material } => material
+            .as_deref()
+            .filter(|p| assets.shader_materials.handle(p).is_none()),
         ComponentDesc::SkinnedMeshRenderer {
             mesh,
             skin,
@@ -723,6 +753,42 @@ fn apply_component(
                     material: material_handle,
                     cast_shadows: *cast_shadows,
                     receive_shadows: *receive_shadows,
+                },
+            );
+        }
+        ComponentDesc::ShaderMeshRenderer {
+            mesh,
+            material,
+            cast_shadows,
+            receive_shadows,
+        } => {
+            let mesh_handle = mesh
+                .as_deref()
+                .and_then(|p| assets.meshes.handle(p))
+                .unwrap_or_default();
+            let material_handle = material
+                .as_deref()
+                .and_then(|p| assets.shader_materials.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                ShaderMeshRenderer {
+                    mesh: mesh_handle,
+                    material: material_handle,
+                    cast_shadows: *cast_shadows,
+                    receive_shadows: *receive_shadows,
+                },
+            );
+        }
+        ComponentDesc::ScreenShaderMaterial { material } => {
+            let material_handle = material
+                .as_deref()
+                .and_then(|p| assets.shader_materials.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                ScreenShaderMaterial {
+                    material: material_handle,
                 },
             );
         }
@@ -925,6 +991,8 @@ pub fn desc_name(desc: &ComponentDesc) -> &str {
         ComponentDesc::Camera { .. } => "Camera",
         ComponentDesc::Light { .. } => "Light",
         ComponentDesc::MeshRenderer { .. } => "MeshRenderer",
+        ComponentDesc::ShaderMeshRenderer { .. } => "ShaderMeshRenderer",
+        ComponentDesc::ScreenShaderMaterial { .. } => "ScreenShaderMaterial",
         ComponentDesc::SkinnedMeshRenderer { .. } => "SkinnedMeshRenderer",
         ComponentDesc::Animator { .. } => "Animator",
         ComponentDesc::RigidBody { .. } => "RigidBody",
@@ -1045,6 +1113,8 @@ pub fn remove_reflected_component(
         "Camera" => world.remove::<Camera>(entity).is_some(),
         "Light" => world.remove::<Light>(entity).is_some(),
         "MeshRenderer" => world.remove::<MeshRenderer>(entity).is_some(),
+        "ShaderMeshRenderer" => world.remove::<ShaderMeshRenderer>(entity).is_some(),
+        "ScreenShaderMaterial" => world.remove::<ScreenShaderMaterial>(entity).is_some(),
         "RigidBody" => world.remove::<RigidBody>(entity).is_some(),
         "Collider" => world.remove::<Collider>(entity).is_some(),
         "AudioSource" => world.remove::<AudioSource>(entity).is_some(),
@@ -1446,6 +1516,22 @@ pub enum ComponentDesc {
         cast_shadows: bool,
         /// Whether it receives shadows.
         receive_shadows: bool,
+    },
+    /// A custom-shader mesh renderer.
+    ShaderMeshRenderer {
+        /// Mesh asset path.
+        mesh: Option<String>,
+        /// Shader material asset path.
+        material: Option<String>,
+        /// Whether it casts shadows.
+        cast_shadows: bool,
+        /// Whether it receives shadows.
+        receive_shadows: bool,
+    },
+    /// A full-screen shader pass (a sky).
+    ScreenShaderMaterial {
+        /// Shader material asset path.
+        material: Option<String>,
     },
     /// A skinned mesh renderer.
     SkinnedMeshRenderer {
@@ -2108,6 +2194,63 @@ mod tests {
             &assets,
             &registry
         ));
+    }
+
+    #[test]
+    fn shader_components_round_trip_through_json() {
+        use crate::assets::{Shader, ShaderMaterial};
+
+        let mut assets = AssetRegistry::with_defaults();
+        let mesh = assets.meshes.insert_named("shader/mesh", Mesh::default());
+        let shader = assets
+            .shaders
+            .insert_named("shader/sky", Shader::new("sky", ""));
+        let material = assets.shader_materials.insert_named(
+            "shader/sky_mat",
+            ShaderMaterial {
+                name: "sky".into(),
+                shader,
+                ..ShaderMaterial::default()
+            },
+        );
+
+        let registry = ComponentRegistry::new();
+        let mut scene = Scene::new("Shaders");
+        let entity = scene.world.spawn();
+        scene.world.insert(
+            entity,
+            ShaderMeshRenderer {
+                mesh,
+                material,
+                cast_shadows: false,
+                receive_shadows: true,
+            },
+        );
+        scene
+            .world
+            .insert(entity, ScreenShaderMaterial { material });
+
+        // Both appear in the reflected list, by their canonical names.
+        let listed = reflect_components(&scene.world, entity, &assets, &registry);
+        assert!(listed.iter().any(|(n, _)| n == "ShaderMeshRenderer"));
+        assert!(listed.iter().any(|(n, _)| n == "ScreenShaderMaterial"));
+
+        // Apply them to a fresh entity; the handles resolve back from their paths.
+        let mut fresh = World::new();
+        let target = fresh.spawn();
+        for (name, value) in &listed {
+            set_reflected_component(&mut fresh, target, name, value, &assets, &registry).unwrap();
+        }
+        let applied = fresh
+            .get::<ShaderMeshRenderer>(target)
+            .expect("shader mesh");
+        assert_eq!(applied.mesh, mesh);
+        assert_eq!(applied.material, material);
+        assert!(!applied.cast_shadows);
+        assert_eq!(
+            fresh.get::<ScreenShaderMaterial>(target).unwrap().material,
+            material
+        );
     }
 
     #[test]

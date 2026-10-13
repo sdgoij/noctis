@@ -11,10 +11,10 @@
 
 use crate::camera::CameraView;
 use crate::frustum::{Frustum, transform_aabb};
-use ecs::assets::{AlphaMode, AssetHandle, AssetRegistry, Material, Mesh, Skin};
+use ecs::assets::{AlphaMode, AssetHandle, AssetRegistry, Material, Mesh, ShaderMaterial, Skin};
 use ecs::components::{
-    Active, GlobalTransform, LocalTransform, MeshRenderer, Parent, Skeleton, SkinnedMeshRenderer,
-    Visible,
+    Active, GlobalTransform, LocalTransform, MeshRenderer, Parent, ScreenShaderMaterial,
+    ShaderMeshRenderer, Skeleton, SkinnedMeshRenderer, Visible,
 };
 use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
@@ -44,6 +44,40 @@ pub struct DrawItem {
     pub skin: Option<Vec<Mat4>>,
 }
 
+/// One custom-shader mesh instance scheduled for drawing (`.notes/shaders.md`) —
+/// a [`ShaderMeshRenderer`] resolved, culled and sorted like a [`DrawItem`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderDraw {
+    /// The owning entity.
+    pub entity: Entity,
+    /// The mesh to draw.
+    pub mesh: AssetHandle<Mesh>,
+    /// The shader material to shade with.
+    pub material: AssetHandle<ShaderMaterial>,
+    /// The world transform.
+    pub world_matrix: Mat4,
+    /// The world-space bounds (indexed against culling and sorting).
+    pub world_bounds: Aabb,
+    /// Distance from the camera eye to the bounds centre.
+    pub distance: f32,
+    /// Whether this item uses alpha blending.
+    pub transparent: bool,
+    /// Whether the item casts shadows.
+    pub cast_shadows: bool,
+    /// Whether the item receives shadows.
+    pub receive_shadows: bool,
+}
+
+/// A full-screen shader pass scheduled before the scene (`.notes/shaders.md`) —
+/// a [`ScreenShaderMaterial`] entity (a sky).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreenDraw {
+    /// The owning entity.
+    pub entity: Entity,
+    /// The shader material to run.
+    pub material: AssetHandle<ShaderMaterial>,
+}
+
 /// The sorted output of [`extract_draw_list`].
 #[derive(Clone, Debug, Default)]
 pub struct DrawList {
@@ -51,17 +85,24 @@ pub struct DrawList {
     pub opaque: Vec<DrawItem>,
     /// Transparent items, furthest first.
     pub transparent: Vec<DrawItem>,
+    /// Custom-shader screen passes (a sky), before the scene (`.notes/shaders.md`).
+    pub screen: Vec<ScreenDraw>,
+    /// Custom-shader opaque mesh items, nearest first.
+    pub shader_opaque: Vec<ShaderDraw>,
+    /// Custom-shader transparent mesh items, furthest first.
+    pub shader_transparent: Vec<ShaderDraw>,
     /// How many candidate entities were rejected by frustum culling.
     pub culled: usize,
 }
 
 impl DrawList {
-    /// The total number of items (opaque + transparent).
+    /// The number of engine PBR items (opaque + transparent). The shader-seam
+    /// lists are separate.
     pub fn len(&self) -> usize {
         self.opaque.len() + self.transparent.len()
     }
 
-    /// `true` if there is nothing to draw.
+    /// `true` if there is no engine PBR item. The shader-seam lists are separate.
     pub fn is_empty(&self) -> bool {
         self.opaque.is_empty() && self.transparent.is_empty()
     }
@@ -267,6 +308,81 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // ---- the shader seam (`.notes/shaders.md`) ----------------------------
+    // Screen passes first (a sky runs before the scene), then custom-shader meshes,
+    // culled and sorted exactly as the PBR items are.
+    for (entity, screen) in world.query::<ScreenShaderMaterial>() {
+        if screen.material.is_none() || !is_renderable(world, entity) {
+            continue;
+        }
+        list.screen.push(ScreenDraw {
+            entity,
+            material: screen.material,
+        });
+    }
+    // A stable order across passes: by entity, so a scene's spawn order is the draw
+    // order until an explicit order arrives (`.notes/shaders.md`, open questions).
+    list.screen.sort_by_key(|item| item.entity.index());
+
+    for (entity, renderer) in world.query::<ShaderMeshRenderer>() {
+        if renderer.mesh.is_none() {
+            continue;
+        }
+        let Some(mesh) = assets.meshes.get(renderer.mesh) else {
+            continue;
+        };
+        if !is_renderable(world, entity) {
+            continue;
+        }
+
+        let matrix = world_matrix(world, entity);
+        let local = mesh_bounds(mesh);
+        let world_bounds = transform_aabb(&matrix, &local);
+
+        if !frustum.intersects_aabb(&world_bounds) {
+            list.culled += 1;
+            continue;
+        }
+
+        let center = world_bounds.center();
+        let delta = center - view.eye;
+        let distance = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+        let transparent = matches!(
+            assets
+                .shader_materials
+                .get(renderer.material)
+                .map(|m| m.alpha_mode),
+            Some(AlphaMode::Blend)
+        );
+
+        let draw = ShaderDraw {
+            entity,
+            mesh: renderer.mesh,
+            material: renderer.material,
+            world_matrix: matrix,
+            world_bounds,
+            distance,
+            transparent,
+            cast_shadows: renderer.cast_shadows,
+            receive_shadows: renderer.receive_shadows,
+        };
+        if draw.transparent {
+            list.shader_transparent.push(draw);
+        } else {
+            list.shader_opaque.push(draw);
+        }
+    }
+    list.shader_opaque.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    list.shader_transparent.sort_by(|a, b| {
+        b.distance
+            .partial_cmp(&a.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     list
 }
 
@@ -274,7 +390,7 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
 mod tests {
     use super::*;
     use crate::camera::extract_camera;
-    use ecs::assets::{Material, Mesh, Texture, TextureFormat, Vertex};
+    use ecs::assets::{Material, Mesh, Shader, ShaderMaterial, Texture, TextureFormat, Vertex};
     use ecs::components::Camera;
     use math::vec3;
 
@@ -488,5 +604,103 @@ mod tests {
         spawn_renderable(&mut world, &registry, vec3(0.0, 0.0, -5.0));
         let view = camera_view(&world, camera);
         assert_eq!(extract_draw_list(&world, &registry, &view).len(), 1);
+    }
+
+    /// A registry with a mesh and two shader materials (an opaque and a blended
+    /// one), for the shader-seam extraction cases.
+    fn setup_shader() -> (World, AssetRegistry, Entity) {
+        let mut registry = AssetRegistry::new();
+        registry.meshes.insert_named("tri", triangle_mesh("tri"));
+        let shader = registry.shaders.insert_named("s", Shader::new("s", ""));
+        registry.shader_materials.insert_named(
+            "opaque",
+            ShaderMaterial {
+                name: "opaque".into(),
+                shader,
+                ..ShaderMaterial::default()
+            },
+        );
+        registry.shader_materials.insert_named(
+            "blend",
+            ShaderMaterial {
+                name: "blend".into(),
+                shader,
+                alpha_mode: AlphaMode::Blend,
+                ..ShaderMaterial::default()
+            },
+        );
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        (world, registry, camera)
+    }
+
+    fn spawn_shader_mesh(
+        world: &mut World,
+        registry: &AssetRegistry,
+        at: math::Vec3,
+        material: &str,
+    ) -> Entity {
+        let e = world.spawn();
+        world.insert(e, LocalTransform::from_translation(at));
+        world.insert(
+            e,
+            ShaderMeshRenderer {
+                mesh: registry.meshes.handle("tri").unwrap(),
+                material: registry.shader_materials.handle(material).unwrap(),
+                ..ShaderMeshRenderer::default()
+            },
+        );
+        e
+    }
+
+    #[test]
+    fn shader_meshes_are_culled_and_split_by_alpha() {
+        let (mut world, registry, camera) = setup_shader();
+        spawn_shader_mesh(&mut world, &registry, vec3(0.0, 0.0, -5.0), "opaque");
+        spawn_shader_mesh(&mut world, &registry, vec3(0.0, 0.0, -8.0), "blend");
+        // Behind the camera: culled, like any renderable.
+        spawn_shader_mesh(&mut world, &registry, vec3(0.0, 0.0, 5.0), "opaque");
+
+        let view = camera_view(&world, camera);
+        let list = extract_draw_list(&world, &registry, &view);
+        assert_eq!(list.shader_opaque.len(), 1);
+        assert_eq!(list.shader_transparent.len(), 1);
+        assert_eq!(list.culled, 1);
+        // The engine PBR lists are untouched by shader-seam entities.
+        assert!(list.opaque.is_empty() && list.transparent.is_empty());
+    }
+
+    #[test]
+    fn screen_passes_extract_in_entity_order_and_skip_hidden() {
+        let (mut world, registry, camera) = setup_shader();
+        let first = world.spawn();
+        world.insert(
+            first,
+            ScreenShaderMaterial {
+                material: registry.shader_materials.handle("blend").unwrap(),
+            },
+        );
+        let second = world.spawn();
+        world.insert(
+            second,
+            ScreenShaderMaterial {
+                material: registry.shader_materials.handle("opaque").unwrap(),
+            },
+        );
+        // A hidden pass is skipped.
+        let hidden = world.spawn();
+        world.insert(hidden, Visible(false));
+        world.insert(
+            hidden,
+            ScreenShaderMaterial {
+                material: registry.shader_materials.handle("blend").unwrap(),
+            },
+        );
+
+        let view = camera_view(&world, camera);
+        let list = extract_draw_list(&world, &registry, &view);
+        assert_eq!(list.screen.len(), 2);
+        assert_eq!(list.screen[0].entity, first);
+        assert_eq!(list.screen[1].entity, second);
     }
 }

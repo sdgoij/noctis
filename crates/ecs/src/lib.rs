@@ -40,14 +40,14 @@ pub mod prelude {
     pub use crate::app::{App, EngineContext, EngineEvent, NullPlugin, Plugin, Stage, System};
     pub use crate::assets::{
         AnimationChannel, AnimationClip, AnimationProperty, AssetHandle, AssetId, AssetRegistry,
-        Assets, AudioClip, FontAsset, HdrTexture, Material, Mesh, ScriptAsset, Skin, Texture,
-        TextureFormat, Vertex, VertexInfluence,
+        Assets, AudioClip, FontAsset, HdrTexture, Material, Mesh, ScriptAsset, Shader,
+        ShaderMaterial, Skin, Texture, TextureFormat, Vertex, VertexInfluence,
     };
     pub use crate::components::{
         Active, Animator, AudioSource, BodyType, Camera, Children, Collider, ColliderShape,
         GlobalTransform, Light, LightKind, LocalTransform, MeshRenderer, Name, Parent,
-        PrefabInstance, Projection, RigidBody, Script, Skeleton, SkinnedMeshRenderer, Text,
-        TextAnchor, Visible,
+        PrefabInstance, Projection, RigidBody, ScreenShaderMaterial, Script, ShaderMeshRenderer,
+        Skeleton, SkinnedMeshRenderer, Text, TextAnchor, Visible,
     };
     pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
     pub use crate::resources::{

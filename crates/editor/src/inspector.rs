@@ -989,7 +989,13 @@ fn add_component(editor: &mut Editor, entity: Entity, name: ComponentName) {
         ComponentName::Visible => {
             editor.insert_component(entity, Visible(true));
         }
-        ComponentName::LocalTransform | ComponentName::GlobalTransform | ComponentName::Name => {}
+        // The shader-seam components are engine-authorable but not yet offered by
+        // the inspector's Add menu (`.notes/shaders.md`).
+        ComponentName::LocalTransform
+        | ComponentName::GlobalTransform
+        | ComponentName::Name
+        | ComponentName::ShaderMeshRenderer
+        | ComponentName::ScreenShaderMaterial => {}
     }
 }
 

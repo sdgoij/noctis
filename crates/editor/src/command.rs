@@ -157,6 +157,10 @@ pub enum ComponentName {
     Light,
     /// [`ecs::components::MeshRenderer`]
     MeshRenderer,
+    /// [`ecs::components::ShaderMeshRenderer`]
+    ShaderMeshRenderer,
+    /// [`ecs::components::ScreenShaderMaterial`]
+    ScreenShaderMaterial,
     /// [`ecs::components::SkinnedMeshRenderer`]
     SkinnedMeshRenderer,
     /// [`ecs::components::Animator`]
@@ -185,6 +189,8 @@ impl ComponentName {
             ComponentName::Camera => ComponentKind::Camera,
             ComponentName::Light => ComponentKind::Light,
             ComponentName::MeshRenderer => ComponentKind::MeshRenderer,
+            ComponentName::ShaderMeshRenderer => ComponentKind::ShaderMeshRenderer,
+            ComponentName::ScreenShaderMaterial => ComponentKind::ScreenShaderMaterial,
             ComponentName::SkinnedMeshRenderer => ComponentKind::SkinnedMeshRenderer,
             ComponentName::Animator => ComponentKind::Animator,
             ComponentName::RigidBody => ComponentKind::RigidBody,
@@ -211,6 +217,8 @@ impl ComponentName {
             ComponentKind::Camera => ComponentName::Camera,
             ComponentKind::Light => ComponentName::Light,
             ComponentKind::MeshRenderer => ComponentName::MeshRenderer,
+            ComponentKind::ShaderMeshRenderer => ComponentName::ShaderMeshRenderer,
+            ComponentKind::ScreenShaderMaterial => ComponentName::ScreenShaderMaterial,
             ComponentKind::SkinnedMeshRenderer => ComponentName::SkinnedMeshRenderer,
             ComponentKind::Animator => ComponentName::Animator,
             ComponentKind::RigidBody => ComponentName::RigidBody,

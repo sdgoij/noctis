@@ -410,6 +410,78 @@ impl Default for Material {
     }
 }
 
+/// The capacity of a shader material's user uniform block, in `vec4` slots —
+/// `USER_SLOTS` in the WGSL prelude ([`.notes/shaders.md`](../../../.notes/shaders.md)).
+pub const USER_SLOTS: usize = 64;
+
+/// The capacity of a shader material's texture array — `TEXTURE_SLOTS` in the
+/// prelude. Handles past this many are ignored at upload.
+pub const TEXTURE_SLOTS: usize = 32;
+
+/// A custom WGSL shader compiled against the engine's prelude
+/// ([`.notes/shaders.md`](../../../.notes/shaders.md)).
+///
+/// The engine owns every binding: its prelude declares the `@group`/`@binding`
+/// contract, the vertex input struct and the constants, and is prepended to
+/// [`wgsl`](Shader::wgsl). The body therefore declares only its varyings and the
+/// `vs_main` / `fs_main` entry points — never a `@group`/`@binding`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Shader {
+    /// A human-readable name.
+    pub name: String,
+    /// The shader body, run against the engine's prepended prelude.
+    pub wgsl: String,
+    /// The vertex entry-point name.
+    pub vs_entry: String,
+    /// The fragment entry-point name.
+    pub fs_entry: String,
+}
+
+impl Shader {
+    /// A shader with the conventional `vs_main` / `fs_main` entry points.
+    pub fn new(name: impl Into<String>, wgsl: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            wgsl: wgsl.into(),
+            vs_entry: "vs_main".to_string(),
+            fs_entry: "fs_main".to_string(),
+        }
+    }
+}
+
+/// A mesh material drawn by a custom [`Shader`]: the shader, an ordered list of
+/// textures, and a block of floats the shader reads as `user[]`
+/// ([`.notes/shaders.md`](../../../.notes/shaders.md)).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderMaterial {
+    /// A human-readable name.
+    pub name: String,
+    /// The shader this material draws with.
+    pub shader: AssetHandle<Shader>,
+    /// The textures bound to `group 2`, in order, up to [`TEXTURE_SLOTS`].
+    pub textures: Vec<AssetHandle<Texture>>,
+    /// The values of the user uniform block, read as `user[i]` up to [`USER_SLOTS`]
+    /// slots (the tail is zero-filled).
+    pub uniforms: Vec<f32>,
+    /// Alpha handling, as [`Material::alpha_mode`].
+    pub alpha_mode: AlphaMode,
+    /// Whether back faces are rendered.
+    pub double_sided: bool,
+}
+
+impl Default for ShaderMaterial {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            shader: AssetHandle::NONE,
+            textures: Vec::new(),
+            uniforms: Vec::new(),
+            alpha_mode: AlphaMode::Opaque,
+            double_sided: false,
+        }
+    }
+}
+
 /// The pixel format of a [`Texture`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextureFormat {
@@ -669,6 +741,10 @@ pub struct AssetRegistry {
     pub skins: Assets<Skin>,
     /// Animation clip assets.
     pub animations: Assets<AnimationClip>,
+    /// Custom shader assets.
+    pub shaders: Assets<Shader>,
+    /// Custom shader material assets.
+    pub shader_materials: Assets<ShaderMaterial>,
 }
 
 impl AssetRegistry {
@@ -738,6 +814,8 @@ impl AssetRegistry {
             + self.hdr.len()
             + self.skins.len()
             + self.animations.len()
+            + self.shaders.len()
+            + self.shader_materials.len()
     }
 
     /// `true` if every store is empty.
@@ -939,5 +1017,47 @@ mod tests {
 
         // `with_defaults` itself stays minimal (placeholders only).
         assert!(AssetRegistry::with_defaults().meshes.is_empty());
+    }
+
+    #[test]
+    fn shader_materials_default_to_opaque_and_empty() {
+        let material = ShaderMaterial::default();
+        assert!(material.shader.is_none());
+        assert!(material.textures.is_empty());
+        assert!(material.uniforms.is_empty());
+        assert_eq!(material.alpha_mode, AlphaMode::Opaque);
+        assert!(!material.double_sided);
+    }
+
+    #[test]
+    fn shaders_and_materials_round_trip_through_the_registry() {
+        let mut registry = AssetRegistry::new();
+        let shader = registry
+            .shaders
+            .insert_named("sky", Shader::new("sky", "fn fs_main() -> vec4<f32> {}"));
+        assert_eq!(registry.shaders.len(), 1);
+        assert_eq!(registry.shaders.path_of(shader), Some("sky"));
+        // A new shader gets the conventional entry points.
+        assert_eq!(registry.shaders.get(shader).unwrap().vs_entry, "vs_main");
+        assert_eq!(registry.shaders.get(shader).unwrap().fs_entry, "fs_main");
+
+        let material = registry.shader_materials.insert_named(
+            "sky",
+            ShaderMaterial {
+                name: "sky".into(),
+                shader,
+                textures: vec![AssetHandle::NONE],
+                uniforms: vec![0.5, 1.0],
+                alpha_mode: AlphaMode::Blend,
+                double_sided: true,
+            },
+        );
+        let read = registry.shader_materials.get(material).unwrap();
+        assert_eq!(read.shader, shader);
+        assert_eq!(read.uniforms, vec![0.5, 1.0]);
+        assert_eq!(read.alpha_mode, AlphaMode::Blend);
+
+        // Both stores count toward the registry total.
+        assert_eq!(registry.len(), 2);
     }
 }

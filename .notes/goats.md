@@ -5,8 +5,9 @@ onto the engine as a Noctis **project**: a Rust plugin that owns the simulation,
 scenes for the world, and the game's own assets. The goal is the same game — or
 one close enough to read as the same — running in a Noctis window. This document
 is the contract for that port; the engine features it depends on are designed in
-[`.notes/animation.md`](animation.md) (skeletal animation) and, once built, their
-own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike), M1
+[`.notes/animation.md`](animation.md) (skeletal animation) and
+[`.notes/shaders.md`](shaders.md) (the shader seam); the screen-UI seam earns its
+own note when built. **M0 (the render-path spike), M1
 (locomotion), M2 (the world sim) and M3 (hazards) are shipped** as `examples/goats`;
 the rest is not built yet. The port's test harness — the headless driver and its
 seed/observe seams — is designed in [`.notes/harness.md`](harness.md).
@@ -106,8 +107,7 @@ For the goats look, in order: (1) the **sky** as a full-screen pass reading the
 engine's camera basis, time, sun and weather; (2) the **terrain** as a lit,
 vertex-coloured mesh (below); (3) the **water** as a translucent mesh with the
 seam's uniforms — reflections are a later tier. Each is ordinary engine work on
-top of one seam, and the seam earns its own note (`.notes/shaders.md`) when it is
-built.
+top of one seam, and the seam has [its own note](shaders.md).
 
 ### The screen-UI seam
 
