@@ -189,6 +189,21 @@ impl Hazards {
         }
     }
 
+    /// Fire a bang at `(x, z)` as a fuse would, with a fresh chain budget -- the
+    /// harness's seed seam (the original's `goats.explosions.blast`).
+    #[cfg(test)]
+    pub(crate) fn detonate(
+        &mut self,
+        x: f32,
+        z: f32,
+        seed: f32,
+        goat: &mut Goat,
+        meadow: &grass::Meadow,
+        craters: &mut Craters,
+    ) {
+        self.blast(At { x, z, seed }, 0, goat, meadow, craters);
+    }
+
     /// A blast sets off the armed mines it reaches, `FUSE` seconds later
     /// (`chainFrom`).
     fn chain_from(&mut self, x: f32, z: f32, depth: u32, meadow: &grass::Meadow) {
@@ -386,8 +401,9 @@ impl Hazards {
     }
 
     /// Whether cell `(cx, cz)` holds an armed mine now: the derived field, minus the
-    /// mines that have gone off, plus the replacements (`mineArmed`).
-    fn mine_armed(&self, cx: i32, cz: i32) -> bool {
+    /// mines that have gone off, plus the replacements (`mineArmed`). Crate-visible
+    /// so the harness can stand the goat on one and prove the spawn disc is clear.
+    pub(crate) fn mine_armed(&self, cx: i32, cz: i32) -> bool {
         let key = tuft_key(cx, cz);
         if self.spent.contains(&key) {
             return false;

@@ -7,6 +7,11 @@ headlessly and asserts, case by case, on what the run produced. This note is the
 contract for bringing that to the port — the same **method**, not the same
 machinery. It is the test counterpart to [`.notes/goats.md`](goats.md).
 
+**Shipped.** `crates/goats` carries the harness as a `#[cfg(test)] mod harness`:
+`mod.rs` (the `Sim` driver and the `Checks` reporter) beside `water.rs`, `goat.rs`,
+`explosions.rs` and `weather.rs` — 17 cases that drive `spawn_world`/`apply_frame`
+directly, no `App` and no plugin. The sections below are the design it realises.
+
 ## What the original harness is
 
 `goats/crates/harness` evaluates the client's **JavaScript scene** on the Slag

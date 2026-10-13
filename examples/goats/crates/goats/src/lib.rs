@@ -30,6 +30,9 @@ pub mod terrain;
 mod water;
 mod weather;
 
+#[cfg(test)]
+mod harness;
+
 use noctis::prelude::*;
 
 /// The goat model, compiled in — the original embeds it with `include_bytes!`

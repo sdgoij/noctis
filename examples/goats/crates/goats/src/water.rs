@@ -68,6 +68,8 @@ pub struct Water {
     level: f32,
     /// Whether the table stands above the ground: there is water to draw.
     on: bool,
+    /// The `flood <h>` override: a level set by hand, or `None` for the rain's own.
+    force: Option<f32>,
     /// Whether the system is on at all (the frame-cost bisect).
     enabled: bool,
 }
@@ -81,6 +83,7 @@ impl Water {
             wet: 0.0,
             level: LOW,
             on: false,
+            force: None,
             enabled: true,
         };
         water.resample(craters);
@@ -134,6 +137,21 @@ impl Water {
     /// Whether the system is on.
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Pin the level by hand — the harness's `flood <h>` seed (the original's
+    /// `waterSetForce`). The console (M6) will be its next caller.
+    #[cfg(test)]
+    pub fn set_force(&mut self, level: f32) {
+        self.force = Some(level);
+        self.refresh();
+    }
+
+    /// Hand the level back to the rain (the original's `waterForceOff`).
+    #[cfg(test)]
+    pub fn force_off(&mut self) {
+        self.force = None;
+        self.refresh();
     }
 
     /// The table's level, in metres.
@@ -230,10 +248,14 @@ impl Water {
         (self.level - self.heights[j * N + i]).max(0.0)
     }
 
-    /// Recompute the level and the "is there water" flag from the current wetting and
-    /// the enabled leaf (`waterUpdate`).
+    /// Recompute the level and the "is there water" flag from the current wetting,
+    /// the override and the enabled leaf (`waterUpdate`).
     fn refresh(&mut self) {
-        self.level = if !self.enabled || self.wet <= 0.0 {
+        self.level = if !self.enabled {
+            LOW
+        } else if let Some(force) = self.force {
+            force
+        } else if self.wet <= 0.0 {
             LOW
         } else {
             LOW + self.wet * FILL * (HIGH - LOW)

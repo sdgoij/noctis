@@ -126,6 +126,19 @@ impl Weather {
         self.sway_time
     }
 
+    /// Set the rain by hand, for the harness's seed seam (the original's
+    /// `rainAmount`). A value a state's target matches also takes that state, so
+    /// `update` holds it rather than easing it away.
+    #[cfg(test)]
+    pub fn set_rain(&mut self, rain: f32) {
+        self.rain = rain;
+        if rain >= 0.99 {
+            self.kind = Kind::Rain;
+        } else if rain <= 0.01 {
+            self.kind = Kind::Clear;
+        }
+    }
+
     /// The wind's speed, in metres per second.
     pub fn wind_speed(&self) -> f32 {
         (self.wind_x * self.wind_x + self.wind_z * self.wind_z).sqrt()
