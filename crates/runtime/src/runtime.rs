@@ -109,8 +109,10 @@ pub struct Runtime<H: ScriptHost + 'static = NoopHost> {
     script: Arc<Mutex<ScriptRuntime<H>>>,
     renderer: Option<Renderer>,
     last_frame: Option<Frame>,
-    /// Whether the windowed game currently captures the cursor (mouse-look).
-    /// `Esc` toggles it; the menu/pause build ties it to the paused state.
+    /// Whether the windowed game currently captures the cursor (hides and locks
+    /// it, for mouse-look). Off until something asks: a script (or a plugin) calls
+    /// `set_mouse_captured(true)` to play; `Esc` toggles it, and the menu/pause
+    /// build releases it. A game that never asks keeps its pointer.
     pub(crate) captured: bool,
     /// The resolver that turns a `load_scene` path into scene JSON, if any.
     scene_loader: Option<SceneLoader>,
@@ -298,7 +300,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             script,
             renderer: None,
             last_frame: None,
-            captured: true,
+            captured: false,
             scene_loader: None,
             scene_request,
             capture_request,
@@ -993,24 +995,27 @@ mod tests {
     }
 
     #[test]
-    fn a_script_releases_the_cursor() {
+    fn the_cursor_stays_free_until_a_script_captures_it() {
         use platform::AppDriver;
         let mut host = RecordingHost::new();
         host.on("on_update", |api: &mut ScriptApi<'_, '_>| {
-            api.set_mouse_captured(false);
+            api.set_mouse_captured(true);
         });
         let config = RuntimeConfig {
             audio: false,
             ..RuntimeConfig::default()
         };
         let mut runtime = Runtime::with_host(load_scene(), config, host);
-        assert!(runtime.cursor_captured(), "captured by default");
+        assert!(
+            !runtime.cursor_captured(),
+            "a game keeps its pointer until it asks for mouse-look"
+        );
 
         runtime.tick_once();
 
         assert!(
-            !runtime.cursor_captured(),
-            "the script did not release the cursor"
+            runtime.cursor_captured(),
+            "the script did not capture the cursor"
         );
     }
 
