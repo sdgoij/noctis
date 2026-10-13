@@ -91,9 +91,15 @@ const ZOOM_SPEED: f32 = 0.01;
 const MIN_DIST: f32 = 2.5;
 /// The farthest the camera may orbit.
 const MAX_DIST: f32 = 40.0;
-/// The pitch limits, just shy of vertical so the up vector stays defined.
-const MAX_PITCH: f32 = 1.35;
+/// The pitch limits. The camera stays above the goat — the original's
+/// `clamp(camPitch, 0.08, 1.35)`, negative here because this orbit's pitch grows
+/// downward — so it never drops to the horizon or below, and cannot go into the
+/// ground.
 const MIN_PITCH: f32 = -1.35;
+const MAX_PITCH: f32 = -0.08;
+/// The least the camera may rise above the ground directly beneath it, so a slope
+/// it backs into cannot put it underground.
+const CAMERA_CLEARANCE: f32 = 0.35;
 
 /// The orbit camera's state, about the goat.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -689,6 +695,9 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
     orbit.dist = (orbit.dist - ctx.input.mouse.scroll * ZOOM_SPEED).clamp(MIN_DIST, MAX_DIST);
 
     let (position, rotation) = orbit.view(target);
+    // Never let the camera sit in the ground it is looking across.
+    let floor = terrain::height(position.x, position.z) + CAMERA_CLEARANCE;
+    let position = math::vec3(position.x, position.y.max(floor), position.z);
     if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(camera) {
         transform.translation = position;
         transform.rotation = rotation;
@@ -1552,6 +1561,41 @@ mod tests {
         assert!(
             (before - after - 0.4).abs() < 0.05,
             "one notch dollies ~0.4 units: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn the_camera_stays_above_the_ground() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        let cam = app.context.scene.world.spawn_with(Camera {
+            is_active: true,
+            ..Camera::default()
+        });
+        app.context.scene.world.insert(
+            cam,
+            LocalTransform::from_translation(math::vec3(0.0, 4.5, 9.0)),
+        );
+        app.tick(1.0 / 60.0);
+
+        // Drag to swing the camera under the goat, and dolly well out.
+        app.context.input.press_mouse(MouseButton::Left);
+        app.context.input.add_mouse_motion(0.0, -4000.0);
+        app.context.input.add_scroll(400.0);
+        app.tick(1.0 / 60.0);
+
+        let pos = app
+            .context
+            .scene
+            .world
+            .get::<LocalTransform>(cam)
+            .expect("a camera transform")
+            .translation;
+        assert!(
+            pos.y > terrain::height(pos.x, pos.z),
+            "the camera is above the ground: y {} vs {}",
+            pos.y,
+            terrain::height(pos.x, pos.z)
         );
     }
 }

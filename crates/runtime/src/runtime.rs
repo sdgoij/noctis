@@ -324,6 +324,11 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         if let Some(captured) = requested_capture {
             self.captured = captured;
         }
+        // A driver's wish wins over a script's: a plugin that owns the loop asks
+        // for mouse-look through the context, the way it publishes `screen_text`.
+        if let Some(captured) = self.app.context.mouse_captured {
+            self.captured = captured;
+        }
         self.render();
     }
 
@@ -1017,6 +1022,35 @@ mod tests {
             runtime.cursor_captured(),
             "the script did not capture the cursor"
         );
+    }
+
+    #[test]
+    fn a_driver_can_ask_for_mouse_look() {
+        use platform::AppDriver;
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, RecordingHost::new());
+        assert!(!runtime.cursor_captured());
+
+        // A plugin that owns the loop publishes a wish through the context, the
+        // way it publishes `screen_text` — no script involved.
+        runtime.app_mut().on_update("test.capture", |ctx| {
+            ctx.mouse_captured = Some(true);
+        });
+        runtime.tick_once();
+        assert!(
+            runtime.cursor_captured(),
+            "the driver's wish captured the cursor"
+        );
+
+        // And it can release it again.
+        runtime.app_mut().on_update("test.release", |ctx| {
+            ctx.mouse_captured = Some(false);
+        });
+        runtime.tick_once();
+        assert!(!runtime.cursor_captured(), "the driver released the cursor");
     }
 
     #[test]

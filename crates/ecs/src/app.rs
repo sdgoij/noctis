@@ -58,6 +58,12 @@ pub struct EngineContext {
     /// Screen-space HUD lines a driver publishes for the host to draw over the
     /// presented frame: one string per line, top-left. Empty draws nothing.
     pub screen_text: Vec<String>,
+    /// A driver's wish for the cursor: `Some(true)` captures it (hidden and locked
+    /// to the window, for mouse-look), `Some(false)` releases it, and `None`
+    /// leaves the decision to scripts and the pause state. The window host applies
+    /// it, the way it draws `screen_text` — the seam a plugin that owns the loop
+    /// asks for mouse-look through, without a script.
+    pub mouse_captured: Option<bool>,
 }
 
 impl EngineContext {
@@ -73,6 +79,7 @@ impl EngineContext {
             exit_requested: false,
             frame: None,
             screen_text: Vec::new(),
+            mouse_captured: None,
         }
     }
 
