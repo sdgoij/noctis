@@ -1,0 +1,23 @@
+# Goats — a Noctis port of the Slag Goat sandbox.
+#
+# The project root *is* the plugin library crate: a `Cargo.toml` here is what makes
+# `noctis` treat the project as carrying Rust, and `src/lib.rs` exports the plugin
+# with `#[noctis::plugin]`. M0 (the render-path spike, `.notes/goats.md`) loads the
+# goat model as a static mesh and builds the ground from the original's own noise;
+# the simulation and the animation come later. `noctis` is depended on without the
+# `editor` feature — a shipped game must not carry it.
+[package]
+name = "goats"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+noctis = { path = "../../crates/noctis", default-features = false }
+log = "0.4"
+
+# Detach from the engine workspace. The project builds in its own target directory
+# here, and is compiled into the generated `.noctis/` tool and client crates.
+[workspace]

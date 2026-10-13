@@ -26,6 +26,50 @@ use ecs::scene::set_parent;
 use ecs::world::{Entity, World};
 use math::{Quat, Transform, vec3};
 
+/// A `KHR_texture_transform` applied to a texture's UVs.
+///
+/// glTF lets a texture carry an affine transform (`offset`, `rotation`, `scale`),
+/// which is how a tiled detail map is packed into an atlas. The engine samples one
+/// UV set per vertex, so the transform is baked into the primitive's UVs as the
+/// mesh is built (see [`base_color_uv_transform`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct UvTransform {
+    offset: [f32; 2],
+    rotation: f32,
+    scale: [f32; 2],
+}
+
+impl UvTransform {
+    /// Apply the transform to a UV. The extension's order is scale, then rotation
+    /// (counter-clockwise), then the offset.
+    fn apply(&self, uv: [f32; 2]) -> [f32; 2] {
+        let (sin, cos) = self.rotation.sin_cos();
+        let u = self.scale[0] * uv[0];
+        let v = self.scale[1] * uv[1];
+        [
+            cos * u - sin * v + self.offset[0],
+            sin * u + cos * v + self.offset[1],
+        ]
+    }
+}
+
+/// A material's base-color texture transform, if it carries one.
+///
+/// Only the base-color map drives the engine's single UV set; a transform that
+/// differs per map (the same material's normal or metallic-roughness texture) is
+/// not representable with one UV attribute and is ignored.
+fn base_color_uv_transform(material: gltf::Material<'_>) -> Option<UvTransform> {
+    let transform = material
+        .pbr_metallic_roughness()
+        .base_color_texture()?
+        .texture_transform()?;
+    Some(UvTransform {
+        offset: transform.offset(),
+        rotation: transform.rotation(),
+        scale: transform.scale(),
+    })
+}
+
 /// A node in the imported glTF hierarchy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeDesc {
@@ -129,6 +173,12 @@ fn build_loaded(
         .collect::<Vec<_>>();
 
     let materials = document.materials().map(build_material).collect::<Vec<_>>();
+    // The UV transform each material's base-color map asks for, precomputed so
+    // the primitive loop can bake it in without re-walking the materials.
+    let material_uv = document
+        .materials()
+        .map(base_color_uv_transform)
+        .collect::<Vec<_>>();
 
     let mut meshes = Vec::new();
     let mut mesh_materials = Vec::new();
@@ -153,6 +203,12 @@ fn build_loaded(
                 .read_tex_coords(0)
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_default();
+            let uv_transform = primitive
+                .material()
+                .index()
+                .and_then(|index| material_uv.get(index))
+                .copied()
+                .flatten();
             let tangents: Vec<[f32; 4]> = reader
                 .read_tangents()
                 .map(|t| t.collect())
@@ -165,11 +221,14 @@ fn build_loaded(
             let vertices = positions
                 .iter()
                 .enumerate()
-                .map(|(i, p)| Vertex {
-                    position: *p,
-                    normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
-                    uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
-                    tangent: tangents.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                .map(|(i, p)| {
+                    let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+                    Vertex {
+                        position: *p,
+                        normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
+                        uv: uv_transform.map_or(uv, |transform| transform.apply(uv)),
+                        tangent: tangents.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -675,6 +734,107 @@ mod tests {
         assert!((mat.metallic - 0.1).abs() < 1e-6);
         assert!((mat.roughness - 0.7).abs() < 1e-6);
         assert!(mat.base_color_texture.is_none());
+    }
+
+    /// A 1x1 PNG, for a primitive whose material references a texture.
+    fn one_pixel_png() -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode the test texture");
+        bytes
+    }
+
+    /// A textured triangle whose base-color map carries `KHR_texture_transform`
+    /// (required), as an atlas-packed model — the goat's fleece — does.
+    fn textured_triangle_glb() -> Vec<u8> {
+        let positions: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let normals: [[f32; 3]; 3] = [[0.0, 0.0, 1.0]; 3];
+        let uvs: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let indices: [u16; 3] = [0, 1, 2];
+
+        let mut bin = Vec::new();
+        for p in positions {
+            for c in p {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let normal_offset = bin.len();
+        for n in normals {
+            for c in n {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let uv_offset = bin.len();
+        for uv in uvs {
+            for c in uv {
+                bin.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let index_offset = bin.len();
+        for i in indices {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let png = one_pixel_png();
+        let image_len = png.len();
+        let image_offset = bin.len();
+        bin.extend_from_slice(&png);
+        let total = bin.len();
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "extensionsUsed": ["KHR_texture_transform"],
+  "extensionsRequired": ["KHR_texture_transform"],
+  "scene": 0,
+  "scenes": [ {{ "name": "Main", "nodes": [0] }} ],
+  "nodes": [ {{ "name": "Tri", "mesh": 0 }} ],
+  "meshes": [ {{ "name": "TriMesh", "primitives": [
+     {{ "attributes": {{ "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }}, "indices": 3, "material": 0 }}
+  ] }} ],
+  "materials": [ {{ "name": "Fur", "pbrMetallicRoughness": {{
+     "baseColorTexture": {{ "index": 0, "extensions": {{ "KHR_texture_transform": {{ "scale": [2.0, 3.0], "offset": [0.5, 0.25] }} }} }}
+  }} }} ],
+  "textures": [ {{ "source": 0, "sampler": 0 }} ],
+  "samplers": [ {{ "magFilter": 9729, "minFilter": 9729, "wrapS": 10497, "wrapT": 10497 }} ],
+  "images": [ {{ "bufferView": 4, "mimeType": "image/png" }} ],
+  "buffers": [ {{ "byteLength": {total} }} ],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {normal_offset}, "byteLength": 36 }},
+    {{ "buffer": 0, "byteOffset": {uv_offset}, "byteLength": 24 }},
+    {{ "buffer": 0, "byteOffset": {index_offset}, "byteLength": 6 }},
+    {{ "buffer": 0, "byteOffset": {image_offset}, "byteLength": {image_len} }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" }},
+    {{ "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }}
+  ]
+}}"#
+        );
+        make_glb(&json, &bin)
+    }
+
+    #[test]
+    fn texture_transform_is_applied_to_uvs() {
+        let loaded =
+            load_gltf_bytes(&textured_triangle_glb()).expect("a texture-transform model imports");
+        let mesh = &loaded.meshes[0];
+        // scale [2, 3], offset [0.5, 0.25], no rotation.
+        assert_eq!(mesh.vertices[0].uv, [0.5, 0.25]);
+        assert_eq!(mesh.vertices[1].uv, [2.5, 0.25]);
+        assert_eq!(mesh.vertices[2].uv, [0.5, 3.25]);
+        // The base-color map resolved to a real texture handle.
+        assert!(!loaded.materials[0].base_color_texture.is_none());
     }
 
     /// A triangle whose material carries `KHR_materials_unlit`.

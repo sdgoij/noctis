@@ -53,6 +53,17 @@ around a central viewport, and a status bar that opens and closes dockable views
 — is designed in [`.notes/editor-ui.md`](.notes/editor-ui.md). It is shipped; tab
 drag between docks is the one follow-up.
 
+Skeletal animation — playing a skinned glTF model's clips through an `Animator`
+component and a GPU-skinned draw path — is designed in
+[`.notes/animation.md`](.notes/animation.md). **Nothing is built yet.**
+
+Porting **Slag Goat** (`goats/`), a JavaScript-and-raylib goat sandbox, onto the
+engine — a Rust plugin for the simulation, scenes for the world and menus, egui
+for the screens — is planned in [`.notes/goats.md`](.notes/goats.md). **M0 (the
+render-path spike) is shipped** as `examples/goats`: the goat model loads as a
+static mesh, the ground is built from the original's noise, and an orbit camera
+frames it. The simulation, the animation and the rest are not built yet.
+
 ## Commands
 
 ```sh
@@ -130,7 +141,10 @@ needed.
   light, IBL, or SSAO, the flat-shaded path for 2D sprites and UI — and may
   sample its textures with **nearest** filtering for crisp pixel art; both are
   imported from glTF (`KHR_materials_unlit`, a `NEAREST` mag-filter) and
-  authorable in the inspector. There is still no dedicated 2D/sprite renderer or
+  authorable in the inspector. A glTF material's `KHR_texture_transform` is
+  applied to the primitive's UVs (the base-color map's transform — the engine has
+  one UV set, so a map whose transform differs is not representable). There is
+  still no dedicated 2D/sprite renderer or
   screen-space texture blit: a sprite is a textured quad on an orthographic
   camera. A driver may instead publish a whole frame of its own pixels —
   `ecs::resources::FrameImage` on `EngineContext::frame` — which the window host

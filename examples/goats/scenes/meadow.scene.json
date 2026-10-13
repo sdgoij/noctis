@@ -1,0 +1,42 @@
+{
+  "name": "Meadow",
+  "format_version": 1,
+  "mode": "3d",
+  "entities": [
+    {
+      "id": 0,
+      "name": "Main Camera",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [0.0, 4.5, 9.0], "rotation": [-0.1961, 0.0, 0.0, 0.9806], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "camera",
+          "projection": { "kind": "perspective", "fov_y": 0.9, "near": 0.1, "far": 300.0 },
+          "is_active": true,
+          "priority": 0,
+          "clear_color": [0.05, 0.07, 0.10, 1.0],
+          "hdr": true
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "active": true,
+      "visible": true,
+      "transform": { "translation": [8.0, 12.0, 6.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+      "components": [
+        {
+          "type": "light",
+          "kind": { "kind": "directional", "direction": [-0.5, -1.0, -0.35] },
+          "color": [1.0, 0.97, 0.9],
+          "intensity": 2.6,
+          "cast_shadows": true
+        }
+      ]
+    }
+  ]
+}

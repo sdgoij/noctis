@@ -15,7 +15,10 @@ pub use ecs::prelude::*;
 #[cfg(feature = "editor")]
 pub use editor::{ComponentName, Editor, EditorCommand, EntityRef};
 pub use physics::{PhysicsConfig, PhysicsWorld};
-pub use render::{Frame, RenderError, Renderer, RendererConfig};
+pub use render::{
+    Frame, LoadedGltf, RegisteredGltf, RenderError, Renderer, RendererConfig, load_gltf,
+    load_gltf_bytes,
+};
 pub use runtime::{RunSummary, Runtime, RuntimeConfig};
 pub use script::{NoopHost, RecordingHost, ScriptHost, ScriptRuntime};
 pub use serde::{Deserialize, Serialize};

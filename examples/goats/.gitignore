@@ -1,0 +1,7 @@
+# The project is its own (detached) cargo workspace, so its build output lands
+# here rather than in the engine's root `target/`.
+/target/
+/Cargo.lock
+
+# The engine's generated import cache and per-project tool/client crates.
+.noctis/
