@@ -8,7 +8,7 @@
 //! offset) and group 2 (per-material textures).
 
 use crate::gpu::ibl_gpu::IblGpu;
-use crate::gpu::resources::GpuVertex;
+use crate::gpu::resources::{GpuVertex, SkinVertex};
 use crate::gpu::targets::align_up;
 use crate::gpu::uniforms::{FrameUniform, ObjectUniform, ShadowUniform};
 use crate::lights::LightsUniform;
@@ -34,6 +34,9 @@ pub struct BindGroupLayouts {
     pub tonemap: wgpu::BindGroupLayout,
     /// Group 0 of the present (surface blit) pass.
     pub present: wgpu::BindGroupLayout,
+    /// The joint matrices of a skinned draw (group 3 of the PBR pass, group 2 of
+    /// the depth pass), bound with a dynamic offset.
+    pub skin: wgpu::BindGroupLayout,
 }
 
 fn buffer_entry(
@@ -181,6 +184,20 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         entries: &[texture(0), sampler(1, false)],
     });
 
+    let skin = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("skin.layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: true,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+
     BindGroupLayouts {
         frame,
         object,
@@ -190,6 +207,7 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         ssao,
         tonemap,
         present,
+        skin,
     }
 }
 
@@ -198,12 +216,18 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
 pub struct Pipelines {
     /// Depth-only (shadow map and camera depth prepass).
     pub depth: wgpu::RenderPipeline,
+    /// Depth-only for a skinned mesh.
+    pub depth_skinned: wgpu::RenderPipeline,
     /// Ambient occlusion resolve.
     pub ssao: wgpu::RenderPipeline,
     /// Opaque PBR.
     pub pbr_opaque: wgpu::RenderPipeline,
     /// Alpha-blended PBR.
     pub pbr_transparent: wgpu::RenderPipeline,
+    /// Opaque PBR for a skinned mesh.
+    pub pbr_opaque_skinned: wgpu::RenderPipeline,
+    /// Alpha-blended PBR for a skinned mesh.
+    pub pbr_transparent_skinned: wgpu::RenderPipeline,
     /// Gizmo line list.
     pub gizmo_line: wgpu::RenderPipeline,
     /// Gizmo triangle list.
@@ -287,6 +311,40 @@ pub fn create_pipelines(
         })
     };
 
+    let depth_skinned = {
+        let layout = pipeline_layout(
+            device,
+            "depth.skinned.layout",
+            &[&layouts.view, &layouts.object, &layouts.skin],
+        );
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("depth.skinned.pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &depth_shader,
+                entry_point: Some("vs_skinned"),
+                compilation_options: Default::default(),
+                buffers: &[Some(GpuVertex::layout()), Some(SkinVertex::layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+
     let ssao = {
         let layout = pipeline_layout(device, "ssao.layout", &[&layouts.ssao]);
         let fragment = wgpu::FragmentState {
@@ -321,57 +379,82 @@ pub fn create_pipelines(
         })
     };
 
-    let make_pbr = |label: &str, blend: Option<wgpu::BlendState>, depth_write: bool| {
-        let layout = pipeline_layout(
-            device,
-            &format!("{label}.layout"),
-            &[&layouts.frame, &layouts.object, &layouts.material],
-        );
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &pbr_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(GpuVertex::layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                // Without MSAA the prepass already wrote the depth this pass
-                // shares. With MSAA the forward passes render into their own
-                // multisampled depth, which the *opaque* pass has to populate
-                // (the transparent pass must not, or it would occlude itself).
-                depth_write_enabled: Some(depth_write),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample,
-            fragment: Some(wgpu::FragmentState {
-                module: &pbr_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        })
-    };
-    let pbr_opaque = make_pbr("pbr.opaque", None, samples > 1);
+    let make_pbr =
+        |label: &str, blend: Option<wgpu::BlendState>, depth_write: bool, skinned: bool| {
+            let one = [Some(GpuVertex::layout())];
+            let two = [Some(GpuVertex::layout()), Some(SkinVertex::layout())];
+            let buffers: &[Option<wgpu::VertexBufferLayout>] = if skinned { &two } else { &one };
+            let layout = if skinned {
+                pipeline_layout(
+                    device,
+                    &format!("{label}.layout"),
+                    &[
+                        &layouts.frame,
+                        &layouts.object,
+                        &layouts.material,
+                        &layouts.skin,
+                    ],
+                )
+            } else {
+                pipeline_layout(
+                    device,
+                    &format!("{label}.layout"),
+                    &[&layouts.frame, &layouts.object, &layouts.material],
+                )
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &pbr_shader,
+                    entry_point: Some(if skinned { "vs_skinned" } else { "vs_main" }),
+                    compilation_options: Default::default(),
+                    buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    // Without MSAA the prepass already wrote the depth this pass
+                    // shares. With MSAA the forward passes render into their own
+                    // multisampled depth, which the *opaque* pass has to populate
+                    // (the transparent pass must not, or it would occlude itself).
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample,
+                fragment: Some(wgpu::FragmentState {
+                    module: &pbr_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+    let pbr_opaque = make_pbr("pbr.opaque", None, samples > 1, false);
     let pbr_transparent = make_pbr(
         "pbr.transparent",
         Some(wgpu::BlendState::ALPHA_BLENDING),
         false,
+        false,
+    );
+    let pbr_opaque_skinned = make_pbr("pbr.opaque.skinned", None, samples > 1, true);
+    let pbr_transparent_skinned = make_pbr(
+        "pbr.transparent.skinned",
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        false,
+        true,
     );
 
     let gizmo = |label: &str, topology: wgpu::PrimitiveTopology| {
@@ -517,9 +600,12 @@ pub fn create_pipelines(
 
     Pipelines {
         depth,
+        depth_skinned,
         ssao,
         pbr_opaque,
         pbr_transparent,
+        pbr_opaque_skinned,
+        pbr_transparent_skinned,
         gizmo_line,
         gizmo_triangle,
         text,
@@ -828,6 +914,104 @@ fn make_object_bind_group(
                 buffer,
                 offset: 0,
                 size: NonZeroU64::new(std::mem::size_of::<ObjectUniform>() as u64),
+            }),
+        }],
+    })
+}
+
+/// The largest joint count one skinned draw may have (one slot of matrices).
+pub const MAX_SKIN_MATRICES: u32 = 128;
+
+/// A growable storage buffer of joint matrices, one slot per skinned draw, bound
+/// with a dynamic offset.
+///
+/// Each skinned mesh uploads its joints' skin matrices into one slot and binds the
+/// buffer at that slot's offset, so a herd of goats shares one buffer.
+#[derive(Debug)]
+pub struct SkinBindings {
+    buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    capacity: u32,
+    stride: u32,
+    layout: wgpu::BindGroupLayout,
+}
+
+impl SkinBindings {
+    /// Create with room for `capacity` skinned draws.
+    pub fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        capacity: u32,
+    ) -> SkinBindings {
+        let alignment = device.limits().min_storage_buffer_offset_alignment.max(1);
+        let stride = align_up(MAX_SKIN_MATRICES * 64, alignment);
+        let capacity = capacity.max(1);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("skin.buffer"),
+            size: u64::from(stride) * u64::from(capacity),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = make_skin_bind_group(device, layout, &buffer);
+        SkinBindings {
+            buffer,
+            bind_group,
+            capacity,
+            stride,
+            layout: layout.clone(),
+        }
+    }
+
+    /// Ensure there is room for at least `needed` skinned draws.
+    pub fn ensure(&mut self, device: &wgpu::Device, needed: u32) {
+        if needed <= self.capacity {
+            return;
+        }
+        let new_capacity = needed.next_power_of_two().max(self.capacity * 2);
+        self.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("skin.buffer"),
+            size: u64::from(self.stride) * u64::from(new_capacity),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.bind_group = make_skin_bind_group(device, &self.layout, &self.buffer);
+        self.capacity = new_capacity;
+    }
+
+    /// The dynamic offset (in bytes) of slot `index`.
+    pub fn offset(&self, index: u32) -> u32 {
+        index * self.stride
+    }
+
+    /// Upload the column-major joint matrices of slot `index`.
+    pub fn write(&self, queue: &wgpu::Queue, index: u32, matrices: &[f32]) {
+        queue.write_buffer(
+            &self.buffer,
+            u64::from(index * self.stride),
+            bytemuck::cast_slice(matrices),
+        );
+    }
+
+    /// The bind group to bind with a dynamic offset.
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        &self.bind_group
+    }
+}
+
+fn make_skin_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("skin.bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer,
+                offset: 0,
+                size: None,
             }),
         }],
     })

@@ -67,6 +67,11 @@ struct ObjectUniform {
 
 @group(1) @binding(0) var<uniform> object: ObjectUniform;
 
+// The joint matrices for a skinned draw, one per joint of its skin. Bound with a
+// dynamic offset so several skinned meshes share the buffer; only `vs_skinned`
+// reads it, so an unskinned pipeline need not bind the group.
+@group(3) @binding(0) var<storage, read> skin: array<mat4x4<f32>>;
+
 @group(2) @binding(0) var base_color_tex: texture_2d<f32>;
 @group(2) @binding(1) var normal_tex: texture_2d<f32>;
 @group(2) @binding(2) var mr_tex: texture_2d<f32>;
@@ -79,6 +84,17 @@ struct VsIn {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) tangent: vec4<f32>,
+};
+
+// The skinned input: the standard vertex attributes plus four joint indices and
+// their weights, from a second vertex buffer.
+struct VsInSkinned {
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tangent: vec4<f32>,
+    @location(4) joints: vec4<f32>,
+    @location(5) weights: vec4<f32>,
 };
 
 struct VsOut {
@@ -96,6 +112,25 @@ fn vs_main(in: VsIn) -> VsOut {
     out.clip = frame.view_proj * world;
     out.world_pos = world.xyz;
     out.normal = normalize((object.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz);
+    out.uv = in.uv;
+    out.tangent = in.tangent;
+    return out;
+}
+
+/// Blend the four weighted joint matrices for a vertex.
+fn skin_matrix(joints: vec4<f32>, weights: vec4<f32>) -> mat4x4<f32> {
+    return skin[u32(joints.x)] * weights.x + skin[u32(joints.y)] * weights.y +
+        skin[u32(joints.z)] * weights.z + skin[u32(joints.w)] * weights.w;
+}
+
+@vertex
+fn vs_skinned(in: VsInSkinned) -> VsOut {
+    let skinned = skin_matrix(in.joints, in.weights);
+    let world = object.model * skinned * vec4<f32>(in.position, 1.0);
+    var out: VsOut;
+    out.clip = frame.view_proj * world;
+    out.world_pos = world.xyz;
+    out.normal = normalize((object.normal_matrix * (skinned * vec4<f32>(in.normal, 0.0))).xyz);
     out.uv = in.uv;
     out.tangent = in.tangent;
     return out;

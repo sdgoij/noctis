@@ -19,8 +19,22 @@ struct ObjectUniform {
 
 @group(0) @binding(0) var<uniform> view: ViewUniform;
 @group(1) @binding(0) var<uniform> object: ObjectUniform;
+// The joint matrices of a skinned draw, bound with a dynamic offset (group 2 in
+// this pass, where the PBR pass has it at group 3).
+@group(2) @binding(0) var<storage, read> skin: array<mat4x4<f32>>;
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
     return view.view_proj * object.model * vec4<f32>(position, 1.0);
+}
+
+@vertex
+fn vs_skinned(
+    @location(0) position: vec3<f32>,
+    @location(4) joints: vec4<f32>,
+    @location(5) weights: vec4<f32>,
+) -> @builtin(position) vec4<f32> {
+    let skinned = skin[u32(joints.x)] * weights.x + skin[u32(joints.y)] * weights.y +
+        skin[u32(joints.z)] * weights.z + skin[u32(joints.w)] * weights.w;
+    return view.view_proj * object.model * skinned * vec4<f32>(position, 1.0);
 }

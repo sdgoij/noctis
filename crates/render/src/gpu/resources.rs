@@ -43,11 +43,41 @@ impl GpuVertex {
     }
 }
 
+/// A vertex's skin influence, a second vertex buffer beside [`GpuVertex`].
+///
+/// Parallel to a skinned mesh's vertices; absent for a static mesh. Joint indices
+/// are `f32` here (the shader truncates them) so the attribute is a plain float
+/// vector like the rest of the layout.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable, PartialEq, Default)]
+pub struct SkinVertex {
+    /// Joint indices into the draw's joint matrices.
+    pub joints: [f32; 4],
+    /// Blend weights.
+    pub weights: [f32; 4],
+}
+
+impl SkinVertex {
+    const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4];
+
+    /// The skin buffer's vertex layout (shader locations 4 and 5).
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 /// An uploaded mesh.
 #[derive(Debug)]
 pub struct GpuMesh {
     /// Vertex buffer.
     pub vertex_buffer: wgpu::Buffer,
+    /// Joint indices and weights, one per vertex; `None` for a static mesh.
+    pub skin_buffer: Option<wgpu::Buffer>,
     /// Index buffer.
     pub index_buffer: wgpu::Buffer,
     /// Number of indices.
@@ -71,6 +101,28 @@ impl GpuMesh {
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        // A skinned mesh carries a second vertex buffer with the joint indices and
+        // weights; a static mesh has none.
+        let skin_buffer = (!mesh.influences.is_empty()).then(|| {
+            let skin: Vec<SkinVertex> = mesh
+                .influences
+                .iter()
+                .map(|influence| SkinVertex {
+                    joints: [
+                        f32::from(influence.joints[0]),
+                        f32::from(influence.joints[1]),
+                        f32::from(influence.joints[2]),
+                        f32::from(influence.joints[3]),
+                    ],
+                    weights: influence.weights,
+                })
+                .collect();
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("{name}.skin")),
+                contents: bytemuck::cast_slice(&skin),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("{name}.indices")),
             contents: bytemuck::cast_slice(&mesh.indices),
@@ -78,6 +130,7 @@ impl GpuMesh {
         });
         GpuMesh {
             vertex_buffer,
+            skin_buffer,
             index_buffer,
             index_count: mesh.indices.len() as u32,
         }
