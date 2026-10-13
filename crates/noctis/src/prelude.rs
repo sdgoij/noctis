@@ -16,8 +16,8 @@ pub use ecs::prelude::*;
 pub use editor::{ComponentName, Editor, EditorCommand, EntityRef};
 pub use physics::{PhysicsConfig, PhysicsWorld};
 pub use render::{
-    Frame, LoadedGltf, RegisteredGltf, RenderError, Renderer, RendererConfig, load_gltf,
-    load_gltf_bytes,
+    Frame, IblConfig, LoadedGltf, RegisteredGltf, RenderError, Renderer, RendererConfig, load_gltf,
+    load_gltf_bytes, load_hdr_bytes,
 };
 pub use runtime::{RunSummary, Runtime, RuntimeConfig};
 pub use script::{NoopHost, RecordingHost, ScriptHost, ScriptRuntime};

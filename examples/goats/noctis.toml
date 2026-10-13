@@ -20,7 +20,11 @@ width = 1280
 height = 720
 
 [render]
-# The HDR pipeline and 4x MSAA. There is no [render] environment, so image-based
-# lighting is the neutral (fully white) fallback; a directional sun lights the scene.
+# The HDR pipeline and 4x MSAA, and the sky the image-based lighting is
+# precomputed from. The engine's fallback (no environment) is a fully white,
+# fully-lit sky, which overexposes pale materials — the goat came out flat white.
+# The meadow sky gives a moderate ambient instead; the directional sun lights the
+# scene on top.
 hdr = true
 sample_count = 4
+environment = "assets/hdris/meadow.hdr"

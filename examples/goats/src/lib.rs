@@ -1476,5 +1476,33 @@ mod tests {
             fur.base_color_texture, fur.normal_texture,
             "the base colour and normal are separate images"
         );
+        // ...and each resolves to a real texture in the registry (a remapped
+        // handle that names nothing would silently bind the white fallback).
+        assert!(assets.textures.get(fur.base_color_texture).is_some());
+        assert!(assets.textures.get(fur.normal_texture).is_some());
+    }
+
+    #[test]
+    fn the_environment_asset_is_a_usable_sky() {
+        // The project's `[render] environment`. The engine's fallback is a fully
+        // white, fully-lit environment, which overexposes anything pale (the goat
+        // went flat white); a real sky gives a moderate ambient instead.
+        let bytes = std::fs::read("assets/hdris/meadow.hdr").expect("the environment file");
+        let hdr = load_hdr_bytes("meadow", &bytes).expect("a decodable Radiance HDR");
+
+        assert!(
+            hdr.width >= 64 && hdr.height >= 32,
+            "a usable sky resolution"
+        );
+        assert_eq!(
+            hdr.data.len(),
+            (hdr.width * hdr.height * 3) as usize,
+            "linear RGB samples"
+        );
+        let avg = hdr.data.iter().sum::<f32>() / hdr.data.len() as f32;
+        assert!(
+            (0.1..0.8).contains(&avg),
+            "a moderate sky radiance: bright enough to light, dim enough not to clip ({avg})"
+        );
     }
 }
