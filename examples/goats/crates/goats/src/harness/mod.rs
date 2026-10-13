@@ -213,6 +213,11 @@ impl Sim {
         self.world.shake.strength()
     }
 
+    /// The red damage pulse's energy now (`0` when the screen is clear).
+    pub fn pulse(&self) -> f32 {
+        self.world.pulse.energy
+    }
+
     /// How many fx instances (fire, smoke, grit) are live.
     pub fn fx_live(&self) -> usize {
         self.world.fx.live()

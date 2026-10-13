@@ -230,6 +230,22 @@ const FX_ENTITIES: usize = 64;
 /// Billboard entities reserved for the mine "tell" (a handful at most).
 const TELL_ENTITIES: usize = 8;
 
+// The red damage pulse (M5): the frame tints red for a beat when a bang hurts
+// this goat (`TUNING.explosions.pulse`). Its peak is a fresh, hard hit; a second
+// bang cannot make a bruise look like a scratch.
+/// The damage that is a full-strength pulse (`pulse.damage`).
+const PULSE_DAMAGE: f32 = 25.0;
+/// The damage a blast deals at its centre, over [`PULSE_DAMAGE`] — the falloff
+/// squared, so `impact^2 * PULSE_GAIN` is a hit's pulse (`hazards::BLAST_DAMAGE`).
+const PULSE_GAIN: f32 = 45.0 / PULSE_DAMAGE;
+/// The pulse's fade, in fractions a second (`pulse.decay`).
+const PULSE_DECAY: f32 = 2.4;
+/// The most the screen is tinted at a full-strength hit.
+const PULSE_ALPHA: f32 = 0.6;
+/// The full-screen sprite's size and how far in front of the eye it sits.
+const PULSE_SIZE: f32 = 12.0;
+const PULSE_DIST: f32 = 0.25;
+
 /// The orbit camera's state, about the goat.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Orbit {
@@ -278,6 +294,26 @@ impl Orbit {
             pitch: pitch.clamp(MIN_PITCH, MAX_PITCH),
             dist,
         }
+    }
+}
+
+/// The red damage pulse (M5): a full-screen tint that decays after a bang hurts
+/// this goat, the strongest unrecovered hit winning (the original's `hurtBy`).
+#[derive(Clone, Copy, Debug, Default)]
+struct Pulse {
+    /// `0..=1`; `0` is a clear screen.
+    energy: f32,
+}
+
+impl Pulse {
+    /// Take a hit worth `damage` (the blast's falloff squared, scaled).
+    fn hit(&mut self, damage: f32) {
+        self.energy = self.energy.max((damage / PULSE_DAMAGE).clamp(0.0, 1.0));
+    }
+
+    /// Fade one frame.
+    fn update(&mut self, dt: f32) {
+        self.energy = (self.energy - PULSE_DECAY * dt).max(0.0);
     }
 }
 
@@ -791,6 +827,10 @@ pub struct World {
     flash: Flash,
     /// The camera's knock from nearby bangs (M5).
     shake: Shake,
+    /// The red damage pulse (M5).
+    pulse: Pulse,
+    /// The pooled billboard entity the pulse is written onto.
+    pulse_entities: Vec<Entity>,
 }
 
 /// Advance the whole world one frame: the weather and the water, the goat, the
@@ -842,9 +882,10 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     for bang in &bangs {
         let ground = world.craters.surface(bang.x, bang.z);
         world.fx.blast(bang.x, bang.z, ground, bang.seed);
+        world.pulse.hit(bang.impact * bang.impact * PULSE_GAIN);
     }
     world.fx.update(dt);
-    sync_sprites(ctx, world, dt);
+    world.pulse.update(dt);
     // A crater — or its heal — moves the ground: rebuild the mesh, resample the
     // water table, and re-derive the meadow from it.
     let ground_changed = world.craters.revision() != world.crater_rev;
@@ -868,6 +909,9 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &world.craters,
         &mut world.shake,
     );
+    // The world's billboard sprites are written after the camera moves, because the
+    // damage pulse sits in front of it.
+    sync_sprites(ctx, world, dt);
 
     let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
     let goat = &world.goat;
@@ -1167,6 +1211,27 @@ fn sync_sprites(ctx: &mut EngineContext, world: &mut World, dt: f32) {
             })
             .collect();
     write_sprites(ctx, &world.tell_entities, &tell_visuals);
+
+    // The red damage pulse: a full-screen tint just in front of the eye, fading.
+    let mut pulse_visuals = Vec::new();
+    if world.pulse.energy > 0.0
+        && let Some(camera) = active_camera(ctx)
+        && let Some(transform) = ctx.scene.world.get::<LocalTransform>(camera)
+    {
+        let forward = transform.rotation.rotate_vec3(math::vec3(0.0, 0.0, -1.0));
+        pulse_visuals.push(fx::Visual {
+            billboard: Billboard {
+                texture: world.fx_textures.dust,
+                size: math::vec2(PULSE_SIZE, PULSE_SIZE),
+                color: [0.55, 0.0, 0.0, world.pulse.energy * PULSE_ALPHA],
+                blend: BillboardBlend::Alpha,
+                depth_test: false,
+                ..Billboard::default()
+            },
+            position: transform.translation + forward * PULSE_DIST,
+        });
+    }
+    write_sprites(ctx, &world.pulse_entities, &pulse_visuals);
 }
 
 /// Write `visuals` onto `entities`, hiding any pool entity with no sprite.
@@ -1466,6 +1531,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let tell_entities = spawn_billboard_pool(ctx, "Tell", TELL_ENTITIES);
     let cloud_entities = spawn_billboard_pool(ctx, "Cloud", weather_fx::CLOUD_COUNT);
     let rain_entities = spawn_billboard_pool(ctx, "Rain", weather_fx::RAIN_COUNT);
+    let pulse_entities = spawn_billboard_pool(ctx, "Pulse", 1);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1495,6 +1561,8 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
             left: 0.0,
         },
         shake: Shake::default(),
+        pulse: Pulse::default(),
+        pulse_entities,
     })
 }
 
