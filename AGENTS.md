@@ -64,8 +64,9 @@ for the screens — is planned in [`.notes/goats.md`](.notes/goats.md). **M0 (th
 render-path spike) and M1 (locomotion) are shipped** as `examples/goats`: the goat
 model loads as a skinned mesh, the ground is built from the original's noise, and
 the goat's idle/walk/trot/run/jump/sleep state machine drives it under an orbit
-camera. M2 has started with the health/energy system (exhaustion, death, restart);
-the grass, weather, water, food and the rest are not built yet.
+camera. M2 has the health/energy system (exhaustion, death, restart) and the
+meadow (the procedural grass field, and grazing it); the weather, water, the rest
+of the food model and the world simulation are not built yet.
 
 ## Commands
 

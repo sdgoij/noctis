@@ -1,17 +1,18 @@
 //! Goats — a Noctis port of the Slag Goat sandbox (`goats/`).
 //!
 //! The goat model loads as a skinned mesh, the ground is a mesh built from the
-//! original's own noise function ([`terrain`]), and the goat walks the meadow
-//! under an orbit camera. This is M1 of the port (see `.notes/goats.md`): the
+//! original's own noise function ([`terrain`]), and a procedural meadow
+//! ([`grass`]) is grazed. This is M1 of the port (see `.notes/goats.md`): the
 //! goat's locomotion state machine — idle, its three gaits, a jump and sleep —
 //! driven from input, where each state plays a baked clip through the engine's
-//! `Animator` and the root moves at the state's authored speed. On top sits the
-//! first slice of M2, the health and energy system: energy drains with effort,
-//! exhaustion caps the gait, and running out of health kills the goat until it
-//! is restarted.
+//! `Animator` and the root moves at the state's authored speed. On top sits M2's
+//! health and energy system, and its meadow: energy drains with effort, eating
+//! grass tops it up, exhaustion caps the gait, and running out of health kills
+//! the goat until it is restarted.
 
 #![forbid(unsafe_code)]
 
+mod grass;
 mod terrain;
 
 use noctis::prelude::*;
@@ -57,6 +58,24 @@ const EXHAUST_HEALTH_DRAIN: f32 = 3.0;
 const RESTED_ENERGY: f32 = 20.0;
 /// Seconds spent idle while exhausted before the goat drops off asleep.
 const AUTO_SLEEP_DELAY: f32 = 2.0;
+
+/// The tuft colour: the original's `TUFT` (`78,128,66` sRGB) in linear.
+const TUFT: [f32; 4] = [0.076, 0.216, 0.054, 1.0];
+
+// The meal, from the original's `TUNING.food`. A bite tops up energy and fills
+// the belly; the belly eases the rain slowdown once weather lands, and decays, so
+// the goat has to keep grazing.
+/// Energy restored per tuft.
+const EAT_ENERGY: f32 = 8.0;
+/// Belly filled per tuft, `0..=1`.
+const EAT_SATIETY: f32 = 0.55;
+/// A meal taken with the belly already this full has nothing left to *fill*, so it
+/// heals instead (the original's `fullBelly`).
+const FULL_BELLY: f32 = 0.85;
+/// Health restored by a meal taken on a full belly.
+const FULL_BELLY_HEAL: f32 = 3.0;
+/// Belly lost per second.
+const SATIETY_DECAY: f32 = 0.02;
 
 /// Height above the goat's feet that the camera orbits and looks at.
 const EYE_HEIGHT: f32 = 0.75;
@@ -127,8 +146,8 @@ impl Orbit {
 
 /// The goat's locomotion state — the original's `mode`.
 ///
-/// The original also has `flung` and `eat`; those arrive with the milestones that
-/// cause them — the blasts and the food (`.notes/goats.md` M2/M3).
+/// The original also has `flung`; it arrives with the milestone that causes it —
+/// the blasts (`.notes/goats.md` M3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Idle,
@@ -137,14 +156,15 @@ enum Mode {
     Run,
     Jump,
     Sleep,
+    Eat,
     Dead,
 }
 
 impl Mode {
     /// Whether the state's clip is a cycle, or a one-shot the engine holds on
-    /// its last frame (a jump lands, a death stays down).
+    /// its last frame (a jump lands, a meal ends, a death stays down).
     fn loops(self) -> bool {
-        !matches!(self, Mode::Jump | Mode::Dead)
+        !matches!(self, Mode::Jump | Mode::Eat | Mode::Dead)
     }
 
     /// A short label for the HUD.
@@ -156,13 +176,14 @@ impl Mode {
             Mode::Run => "running",
             Mode::Jump => "jumping",
             Mode::Sleep => "sleeping (Z to wake)",
+            Mode::Eat => "eating",
             Mode::Dead => "dead (R to restart)",
         }
     }
 }
 
-/// The goat's clips by role. The gaits are one clip each; idle, jump and sleep
-/// have several takes the goat cycles through, exactly as the original's
+/// The goat's clips by role. The gaits are one clip each; idle, jump, sleep and
+/// eat have several takes the goat cycles through, exactly as the original's
 /// `VARIANTS` do.
 #[derive(Default)]
 struct Clips {
@@ -172,6 +193,7 @@ struct Clips {
     run: AssetHandle<AnimationClip>,
     jump: Vec<AssetHandle<AnimationClip>>,
     sleep: Vec<AssetHandle<AnimationClip>>,
+    eat: Vec<AssetHandle<AnimationClip>>,
     death: AssetHandle<AnimationClip>,
 }
 
@@ -187,6 +209,7 @@ impl Clips {
             Mode::Run => Some(self.run),
             Mode::Jump => at(&self.jump, variant),
             Mode::Sleep => at(&self.sleep, variant),
+            Mode::Eat => at(&self.eat, variant),
             Mode::Dead => Some(self.death),
         }
         .unwrap_or(self.walk)
@@ -212,12 +235,13 @@ fn advance(current: i32, count: usize) -> i32 {
 
 /// Which take of each multi-variant role plays next. `idle` starts at `0` and
 /// the others at `-1`, so the first *re-*entered idle is the second take while
-/// the first jump and sleep are the first — the original's `playerVariant`.
+/// the first jump, sleep and eat are the first — the original's `playerVariant`.
 #[derive(Clone, Copy)]
 struct Variants {
     idle: i32,
     jump: i32,
     sleep: i32,
+    eat: i32,
 }
 
 impl Default for Variants {
@@ -226,6 +250,7 @@ impl Default for Variants {
             idle: 0,
             jump: -1,
             sleep: -1,
+            eat: -1,
         }
     }
 }
@@ -265,6 +290,12 @@ struct Goat {
     exhausted: bool,
     /// Seconds spent idle while exhausted, towards the auto-sleep.
     idle_timer: f32,
+    /// The belly, `0..=1`: filled by grazing, emptied over time.
+    satiety: f32,
+    /// Seconds into the current meal.
+    eat_time: f32,
+    /// The eat clip's length, so the meal ends when its clip does.
+    eat_duration: f32,
 }
 
 impl Goat {
@@ -279,6 +310,7 @@ impl Goat {
             Mode::Idle => self.variant.idle = advance(self.variant.idle, self.clips.idle.len()),
             Mode::Jump => self.variant.jump = advance(self.variant.jump, self.clips.jump.len()),
             Mode::Sleep => self.variant.sleep = advance(self.variant.sleep, self.clips.sleep.len()),
+            Mode::Eat => self.variant.eat = advance(self.variant.eat, self.clips.eat.len()),
             _ => {}
         }
     }
@@ -289,6 +321,7 @@ impl Goat {
             Mode::Idle => self.variant.idle,
             Mode::Jump => self.variant.jump,
             Mode::Sleep => self.variant.sleep,
+            Mode::Eat => self.variant.eat,
             _ => 0,
         };
         (self.clips.pick(self.mode, variant), self.mode.loops())
@@ -319,6 +352,38 @@ impl Goat {
         self.energy = (self.energy - JUMP_ENERGY_COST).max(0.0);
         let (clip, _) = self.animation();
         self.jump_duration = assets
+            .animations
+            .get(clip)
+            .map(|clip| clip.duration)
+            .unwrap_or(0.0);
+    }
+
+    /// Eat `tuft`: remove it from the meadow, face it, and top up energy and belly
+    /// — the original's `startEat`. The caller ensures a tuft is in reach and the
+    /// goat is free.
+    fn start_eat(
+        &mut self,
+        assets: &AssetRegistry,
+        meadow: &mut grass::Meadow,
+        tuft: &grass::Tuft,
+    ) {
+        meadow.consume(tuft);
+        // Turn to face the tuft, so the head comes down where the grass was: the
+        // model's local `+X` is forward, so this is `atan2(-dz, dx)`.
+        self.yaw = (-(tuft.z - self.z)).atan2(tuft.x - self.x);
+        // A meal on an already-full belly has nothing to fill, so it heals.
+        let heal = if self.satiety >= FULL_BELLY {
+            FULL_BELLY_HEAL
+        } else {
+            0.0
+        };
+        self.energy = (self.energy + EAT_ENERGY).min(MAX_STATS);
+        self.satiety = (self.satiety + EAT_SATIETY).min(1.0);
+        self.health = (self.health + heal).min(MAX_STATS);
+        self.enter(Mode::Eat);
+        self.eat_time = 0.0;
+        let (clip, _) = self.animation();
+        self.eat_duration = assets
             .animations
             .get(clip)
             .map(|clip| clip.duration)
@@ -398,24 +463,36 @@ fn active_camera(ctx: &EngineContext) -> Option<Entity> {
 #[derive(Default)]
 pub struct Goats;
 
+/// The running world: the goat, its meadow, and the grass field's rebuild state.
+struct World {
+    goat: Goat,
+    meadow: grass::Meadow,
+    /// The cell the grass field was last built around, so a move rebuilds it.
+    grass_cell: (i32, i32),
+    /// The sway clock, advanced each frame (the wind is quiet until weather).
+    sway: f32,
+}
+
 impl Plugin for Goats {
     fn build(&self, app: &mut App) {
-        let mut goats: Option<Goat> = None;
+        let mut world: Option<World> = None;
         let mut orbit = Orbit::default();
         let mut seeded = false;
 
         app.on_update("goats.frame", move |ctx| {
-            // The world is built on the first tick, so the closure owns the goat.
-            if goats.is_none() {
-                goats = spawn_world(ctx);
+            // The world is built on the first tick, so the closure owns it.
+            if world.is_none() {
+                world = spawn_world(ctx);
             }
-            if let Some(goat) = goats.as_mut() {
-                drive_goat(ctx, goat);
+            if let Some(world) = world.as_mut() {
+                let ate = drive_goat(ctx, &mut world.goat, &mut world.meadow);
+                update_meadow(ctx, world, ate);
             }
 
-            let target = goats
+            let target = world
                 .as_ref()
-                .map(|goat| {
+                .map(|world| {
+                    let goat = &world.goat;
                     math::vec3(
                         goat.x,
                         terrain::height(goat.x, goat.z) + goat.lift + EYE_HEIGHT,
@@ -427,16 +504,28 @@ impl Plugin for Goats {
 
             let dt = ctx.time.delta();
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            let (state, health, energy) = goats
-                .as_ref()
-                .map_or(("standing", MAX_STATS, MAX_STATS), |goat| {
-                    (goat.mode.label(), goat.health, goat.energy)
-                });
+            let (state, health, energy, belly, hint) =
+                world
+                    .as_ref()
+                    .map_or(("standing", MAX_STATS, MAX_STATS, 0.0, ""), |world| {
+                        let goat = &world.goat;
+                        let in_reach =
+                            !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
+                                && grass::nearest(goat.x, goat.z, grass::EAT_RANGE, &world.meadow)
+                                    .is_some();
+                        (
+                            goat.mode.label(),
+                            goat.health,
+                            goat.energy,
+                            goat.satiety,
+                            if in_reach { "  |  eat (E)" } else { "" },
+                        )
+                    });
             ctx.screen_text = vec![format!(
                 "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
-                 health {health:.0}  energy {energy:.0}  |  \
-                 W walk, Ctrl trot, Shift run, Space jump, Z sleep, R restart",
-                dt * 1000.0
+                 health {health:.0}  energy {energy:.0}  belly {:.0}%{hint}",
+                dt * 1000.0,
+                belly * 100.0,
             )];
         });
     }
@@ -444,17 +533,20 @@ impl Plugin for Goats {
 
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
 /// root and play the state's clip.
-fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
+fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Meadow) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
     let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
     let pressed = |c: char| Key::letter(c).is_some_and(|key| input.key_pressed(key));
 
-    // Turning is locked while asleep or dead; every other state may steer, even
-    // a jump. `A` turns left (it increases `yaw`, the original's `turn += 1`).
-    if !matches!(goat.mode, Mode::Sleep | Mode::Dead) {
+    // Turning is locked while asleep, dead or eating; every other state may steer,
+    // even a jump. `A` turns left (it increases `yaw`, the original's `turn += 1`).
+    if !matches!(goat.mode, Mode::Sleep | Mode::Dead | Mode::Eat) {
         goat.yaw += axis(down('A'), down('D')) * TURN_RATE * dt;
     }
+
+    // The belly empties over time.
+    goat.satiety = (goat.satiety - SATIETY_DECAY * dt).max(0.0);
 
     // The movement intent, and the gait the modifiers ask for. An exhausted goat
     // cannot run or trot.
@@ -469,9 +561,13 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
         Mode::Walk
     };
 
+    // The nearest tuft in reach; a free state lets the goat eat it.
+    let food = grass::nearest(goat.x, goat.z, grass::EAT_RANGE, meadow);
+
     // The state machine (the original's `sceneFrame`): a locked state runs to its
-    // end, a free one follows input. Jump, sleep and restart take their key on the
-    // press edge, so one tap is one action.
+    // end, a free one follows input. Eat, jump, sleep and restart take their key
+    // on the press edge, so one tap is one action.
+    let mut ate = false;
     match goat.mode {
         Mode::Dead => {
             if pressed('R') {
@@ -489,8 +585,19 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
                 goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
             }
         }
+        Mode::Eat => {
+            goat.eat_time += dt;
+            if goat.eat_time >= goat.eat_duration {
+                goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
+            }
+        }
         _ => {
-            if pressed('Z') {
+            if pressed('E')
+                && let Some(tuft) = food
+            {
+                goat.start_eat(&ctx.assets, meadow, &tuft);
+                ate = true;
+            } else if pressed('Z') {
                 goat.enter(Mode::Sleep);
             } else if input.key_pressed(Key::Space) {
                 goat.start_jump(&ctx.assets, gait, move_axis);
@@ -546,6 +653,8 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
         animator.looped = looped;
         animator.speed = if reversing { BACK_SPEED } else { 1.0 };
     }
+
+    ate
 }
 
 /// Advance the orbit camera about `target` from player input.
@@ -584,10 +693,18 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
     }
 }
 
-/// Build the whole world: the ground, then the goat.
-fn spawn_world(ctx: &mut EngineContext) -> Option<Goat> {
+/// Build the whole world: the ground, the meadow, then the goat.
+fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     spawn_terrain(ctx);
-    spawn_goat(ctx)
+    let meadow = grass::Meadow::default();
+    spawn_grass(ctx, &meadow);
+    let goat = spawn_goat(ctx)?;
+    Some(World {
+        goat,
+        meadow,
+        grass_cell: (0, 0),
+        sway: 0.0,
+    })
 }
 
 /// Build the ground mesh and put it in the scene under one entity.
@@ -619,6 +736,61 @@ fn spawn_terrain(ctx: &mut EngineContext) {
             receive_shadows: true,
         },
     );
+}
+
+/// Build the meadow: its mesh and material, under one entity. The mesh is rebuilt
+/// in place by [`update_meadow`] as the goat moves or grazes.
+fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow) {
+    let mesh = ctx.assets.meshes.insert_named(
+        "grass/meadow",
+        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0),
+    );
+    let material = ctx.assets.materials.insert_named(
+        "grass/tuft",
+        Material {
+            name: "grass tuft".to_string(),
+            base_color: TUFT,
+            metallic: 0.0,
+            roughness: 0.9,
+            ..Material::default()
+        },
+    );
+
+    let field = ctx.scene.world.spawn();
+    ctx.scene.world.insert(field, Name::new("Meadow"));
+    ctx.scene.world.insert(field, LocalTransform::default());
+    ctx.scene.world.insert(
+        field,
+        MeshRenderer {
+            mesh,
+            material,
+            cast_shadows: false,
+            receive_shadows: true,
+        },
+    );
+}
+
+/// Empty the belly and regrow eaten tufts each frame, and rebuild the grass field
+/// around the goat when it has walked into a new cell or the meadow changed.
+///
+/// The rebuild replaces the mesh asset in place (same handle, new revision), so
+/// the renderer re-uploads it rather than drawing the field the goat has left.
+fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
+    let dt = ctx.time.delta();
+    let regrew = world.meadow.update(dt);
+    world.sway += dt;
+
+    let cell = (
+        (world.goat.x / grass::CELL).floor() as i32,
+        (world.goat.z / grass::CELL).floor() as i32,
+    );
+    if ate || regrew || cell != world.grass_cell {
+        world.grass_cell = cell;
+        ctx.assets.meshes.insert_named(
+            "grass/meadow",
+            grass::build_mesh(&world.meadow, world.goat.x, world.goat.z, world.sway, 0.0),
+        );
+    }
 }
 
 /// Import the goat model, stand it on the ground, and give it its gait clips.
@@ -676,6 +848,7 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         run: first(role("run")),
         jump: role("jump"),
         sleep: role("sleep"),
+        eat: role("eat"),
         death: first(role("death")),
     };
     ctx.scene
@@ -707,6 +880,9 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         energy: MAX_STATS,
         exhausted: false,
         idle_timer: 0.0,
+        satiety: 0.0,
+        eat_time: 0.0,
+        eat_duration: 0.0,
     })
 }
 
@@ -1179,5 +1355,101 @@ mod tests {
             "dropped off: {:?}",
             playing(&app)
         );
+    }
+
+    /// A bare goat for exercising the eat logic without a world.
+    fn lone_goat() -> Goat {
+        Goat {
+            root: Entity::from_raw(0, 0),
+            skinned: Entity::from_raw(1, 0),
+            lift: 0.0,
+            x: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            clips: Clips::default(),
+            variant: Variants::default(),
+            mode: Mode::Idle,
+            jump_time: 0.0,
+            jump_speed: 0.0,
+            jump_dir: 0.0,
+            jump_duration: 0.0,
+            health: MAX_STATS,
+            energy: MAX_STATS,
+            exhausted: false,
+            idle_timer: 0.0,
+            satiety: 0.0,
+            eat_time: 0.0,
+            eat_duration: 0.0,
+        }
+    }
+
+    #[test]
+    fn eating_a_tuft_tops_up_energy_and_belly() {
+        let mut goat = lone_goat();
+        goat.energy = 50.0;
+        let mut meadow = grass::Meadow::default();
+        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow).expect("a tuft in reach");
+
+        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
+
+        assert_eq!(goat.mode, Mode::Eat);
+        assert!(meadow.is_eaten(tuft.cx, tuft.cz), "the tuft was eaten");
+        assert!(
+            (goat.energy - 58.0).abs() < 1e-3,
+            "energy +8: {}",
+            goat.energy
+        );
+        assert!(
+            (goat.satiety - EAT_SATIETY).abs() < 1e-3,
+            "belly filled: {}",
+            goat.satiety
+        );
+
+        // It turns to face the tuft (facing is the model's local `+X`).
+        let forward = math::vec3(goat.yaw.cos(), 0.0, -goat.yaw.sin());
+        let to_tuft = math::normalize(math::vec3(tuft.x, 0.0, tuft.z));
+        let dot = forward.x * to_tuft.x + forward.y * to_tuft.y + forward.z * to_tuft.z;
+        assert!(dot > 0.99, "faces the tuft: {forward:?}");
+    }
+
+    #[test]
+    fn a_meal_on_a_full_belly_heals() {
+        let mut goat = lone_goat();
+        goat.health = 50.0;
+        goat.satiety = FULL_BELLY;
+        let mut meadow = grass::Meadow::default();
+        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow).expect("a tuft in reach");
+
+        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
+        assert!(
+            goat.health > 50.0,
+            "a full belly turns grass into health: {}",
+            goat.health
+        );
+    }
+
+    #[test]
+    fn the_plugin_spawns_the_meadow() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        assert!(
+            app.context
+                .scene
+                .world
+                .query::<Name>()
+                .any(|(_, name)| name.as_str() == "Meadow"),
+            "the meadow entity was spawned"
+        );
+        assert!(app.context.assets.materials.handle("grass/tuft").is_some());
+        let mesh = app
+            .context
+            .assets
+            .meshes
+            .handle("grass/meadow")
+            .and_then(|handle| app.context.assets.meshes.get(handle))
+            .expect("the meadow mesh");
+        assert!(!mesh.vertices.is_empty(), "the meadow has tufts at spawn");
     }
 }
