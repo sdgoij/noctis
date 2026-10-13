@@ -1452,4 +1452,29 @@ mod tests {
             .expect("the meadow mesh");
         assert!(!mesh.vertices.is_empty(), "the meadow has tufts at spawn");
     }
+
+    #[test]
+    fn the_goat_materials_carry_distinct_textures() {
+        let loaded = load_gltf_bytes(GOAT_GLB).expect("import");
+        let mut assets = AssetRegistry::with_defaults();
+        let handles = loaded.register(&mut assets);
+
+        // Four textures, all unnamed in the file. Registering must not collapse
+        // them into one asset (which pointed every map at a single image and left
+        // the goat a flat, textureless colour).
+        assert_eq!(handles.textures.len(), 4, "the goat has four textures");
+
+        // The fur's base colour and normal are different images, not one collapse.
+        let fur = assets
+            .materials
+            .handle("GoatFur")
+            .and_then(|handle| assets.materials.get(handle))
+            .expect("the fur material");
+        assert!(!fur.base_color_texture.is_none(), "the fur is textured");
+        assert!(!fur.normal_texture.is_none());
+        assert_ne!(
+            fur.base_color_texture, fur.normal_texture,
+            "the base colour and normal are separate images"
+        );
+    }
 }

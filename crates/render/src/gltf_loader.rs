@@ -635,32 +635,40 @@ impl LoadedGltf {
     /// Insert every texture, material, and mesh into `registry`, returning the
     /// real handles. Material texture references are rewritten in the process.
     pub fn register(&self, registry: &mut AssetRegistry) -> RegisteredGltf {
-        let texture_handles: Vec<AssetHandle<Texture>> = self
-            .textures
-            .iter()
-            .map(|t| registry.textures.insert_named(t.name.clone(), t.clone()))
-            .collect();
+        // Textures are frequently unnamed, so several share the name "texture";
+        // `insert_named` replaces by path, which would collapse them into one
+        // asset and point every map at it. Uniquify so each stays its own asset
+        // (glTF references them by index, resolved below).
+        let mut texture_handles = Vec::with_capacity(self.textures.len());
+        for (index, texture) in self.textures.iter().enumerate() {
+            let key = unique_name(&texture.name, "texture", index, |path| {
+                registry.textures.handle(path).is_some()
+            });
+            texture_handles.push(registry.textures.insert_named(key, texture.clone()));
+        }
 
-        let material_handles: Vec<AssetHandle<Material>> = self
-            .materials
-            .iter()
-            .map(|m| {
-                let mut fixed = m.clone();
-                fixed.base_color_texture = remap_texture(m.base_color_texture, &texture_handles);
-                fixed.normal_texture = remap_texture(m.normal_texture, &texture_handles);
-                fixed.metallic_roughness_texture =
-                    remap_texture(m.metallic_roughness_texture, &texture_handles);
-                fixed.emissive_texture = remap_texture(m.emissive_texture, &texture_handles);
-                fixed.occlusion_texture = remap_texture(m.occlusion_texture, &texture_handles);
-                registry.materials.insert_named(m.name.clone(), fixed)
-            })
-            .collect();
+        let mut material_handles = Vec::with_capacity(self.materials.len());
+        for (index, material) in self.materials.iter().enumerate() {
+            let mut fixed = material.clone();
+            fixed.base_color_texture = remap_texture(material.base_color_texture, &texture_handles);
+            fixed.normal_texture = remap_texture(material.normal_texture, &texture_handles);
+            fixed.metallic_roughness_texture =
+                remap_texture(material.metallic_roughness_texture, &texture_handles);
+            fixed.emissive_texture = remap_texture(material.emissive_texture, &texture_handles);
+            fixed.occlusion_texture = remap_texture(material.occlusion_texture, &texture_handles);
+            let key = unique_name(&material.name, "material", index, |path| {
+                registry.materials.handle(path).is_some()
+            });
+            material_handles.push(registry.materials.insert_named(key, fixed));
+        }
 
-        let mesh_handles: Vec<AssetHandle<Mesh>> = self
-            .meshes
-            .iter()
-            .map(|m| registry.meshes.insert_named(m.name.clone(), m.clone()))
-            .collect();
+        let mut mesh_handles = Vec::with_capacity(self.meshes.len());
+        for (index, mesh) in self.meshes.iter().enumerate() {
+            let key = unique_name(&mesh.name, "mesh", index, |path| {
+                registry.meshes.handle(path).is_some()
+            });
+            mesh_handles.push(registry.meshes.insert_named(key, mesh.clone()));
+        }
 
         let default_material = registry
             .materials
@@ -1163,6 +1171,45 @@ mod tests {
             .next()
             .expect("a skinned renderer was attached");
         assert_eq!(world.get::<Skeleton>(child).map(|s| s.0.len()), Some(2));
+    }
+
+    #[test]
+    fn unnamed_textures_register_as_distinct_assets() {
+        // A glTF whose textures are unnamed (all called "texture"), each in a
+        // different material slot. They must not collapse into one asset, or every
+        // map would sample whichever image last won the name.
+        let loaded = LoadedGltf {
+            textures: vec![
+                Texture::solid("texture", [255, 0, 0, 255], TextureFormat::Rgba8Unorm),
+                Texture::solid("texture", [0, 255, 0, 255], TextureFormat::Rgba8Unorm),
+            ],
+            materials: vec![
+                Material {
+                    name: "A".into(),
+                    base_color_texture: AssetHandle::from_raw(1),
+                    ..Material::default()
+                },
+                Material {
+                    name: "B".into(),
+                    normal_texture: AssetHandle::from_raw(2),
+                    ..Material::default()
+                },
+            ],
+            ..LoadedGltf::default()
+        };
+
+        let mut registry = AssetRegistry::new();
+        let handles = loaded.register(&mut registry);
+
+        assert_eq!(handles.textures.len(), 2);
+        assert_ne!(handles.textures[0].id(), handles.textures[1].id());
+        assert_eq!(registry.textures.len(), 2);
+
+        // Each material's map resolves to the texture it named, not the other's.
+        let a = registry.materials.get(handles.materials[0]).expect("A");
+        let b = registry.materials.get(handles.materials[1]).expect("B");
+        assert_eq!(a.base_color_texture.id(), handles.textures[0].id());
+        assert_eq!(b.normal_texture.id(), handles.textures[1].id());
     }
 
     /// A triangle whose material carries `KHR_materials_unlit`.
