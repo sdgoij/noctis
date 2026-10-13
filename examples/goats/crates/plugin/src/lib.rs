@@ -82,6 +82,43 @@ mod tests {
     }
 
     #[test]
+    fn the_sky_animates_with_time() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        let material = app
+            .context
+            .assets
+            .shader_materials
+            .handle("sky/meadow")
+            .expect("the sky material");
+        let first = app
+            .context
+            .assets
+            .shader_materials
+            .get(material)
+            .unwrap()
+            .uniforms
+            .clone();
+
+        // A second of play: the sun arcs, so the sky's user block moves.
+        for _ in 0..60 {
+            app.tick(1.0 / 60.0);
+        }
+        let later = app
+            .context
+            .assets
+            .shader_materials
+            .get(material)
+            .unwrap()
+            .uniforms
+            .clone();
+
+        assert_eq!(later.len(), 16, "the sky's user block is four vec4s");
+        assert_ne!(first, later, "the sun moved");
+    }
+
+    #[test]
     fn holding_w_walks_the_goat_forward() {
         let mut app = App::new("test");
         Goats.build(&mut app);

@@ -195,7 +195,8 @@ Single-player sandbox first; each milestone is playable.
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** *(Shipped: the sky — a `ScreenShaderMaterial` over the
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
-   material's `user` block; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
+   material's `user` block and animated there: the sun arcs and the colour drains
+   toward grey in rain; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
    Day/night lighting and audio follow, and the terrain and water — vertex
    colours and a translucent surface — are the seam's next consumers.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the

@@ -73,14 +73,6 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The sky's `user` block: zenith, horizon, sun direction, then sun colour and power.
-const SKY_UNIFORMS: [f32; 16] = [
-    0.05, 0.13, 0.32, 1.0, // zenith
-    0.55, 0.66, 0.80, 1.0, // horizon
-    0.35, 0.55, -0.75, 0.0, // sun direction (normalized in the shader)
-    1.00, 0.96, 0.85, 1.0, // sun colour, then power
-];
-
 /// The ground's colour: the original's `T_GRASS` (`98,150,84` sRGB) in linear.
 const GRASS: [f32; 4] = [0.122, 0.311, 0.087, 1.0];
 
@@ -638,6 +630,10 @@ pub struct World {
     orbit: Orbit,
     /// Whether the orbit has been seeded from the scene's own camera yet.
     seeded: bool,
+    /// The sky's material, whose `user` block is animated each frame.
+    sky: AssetHandle<ShaderMaterial>,
+    /// Seconds since the world was built, for the sky's slow sun arc.
+    sky_time: f32,
 }
 
 /// Advance the whole world one frame: the weather and the water, the goat, the
@@ -647,6 +643,12 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     let dt = ctx.time.delta();
     world.weather.update(dt);
     world.water.update(dt, world.weather.rain());
+    // The sky follows the clock and the rain: the sun arcs and the colour drains
+    // toward grey. The renderer writes it into the material's user buffer, no rebuild.
+    world.sky_time += dt;
+    if let Some(material) = ctx.assets.shader_materials.get_mut(world.sky) {
+        material.uniforms = sky_uniforms(world.sky_time, world.weather.rain());
+    }
     let ate = drive_goat(
         ctx,
         &mut world.goat,
@@ -958,7 +960,7 @@ fn drive_camera(
 
 /// Spawn the sky: a full-screen shader pass over the engine's prelude
 /// (`.notes/shaders.md`), the seam's first consumer.
-fn spawn_sky(ctx: &mut EngineContext) {
+fn spawn_sky(ctx: &mut EngineContext) -> AssetHandle<ShaderMaterial> {
     let shader = ctx
         .assets
         .shaders
@@ -968,7 +970,7 @@ fn spawn_sky(ctx: &mut EngineContext) {
         ShaderMaterial {
             name: "goats sky".into(),
             shader,
-            uniforms: SKY_UNIFORMS.to_vec(),
+            uniforms: sky_uniforms(0.0, 0.0),
             ..ShaderMaterial::default()
         },
     );
@@ -977,6 +979,49 @@ fn spawn_sky(ctx: &mut EngineContext) {
     ctx.scene
         .world
         .insert(sky, ScreenShaderMaterial { material });
+    material
+}
+
+/// The sky's animated `user` block: a slowly arcing sun, and colours drained toward
+/// grey by the rain. Recomputed each frame it is cheap — the renderer writes it into
+/// the material's user buffer without rebuilding anything.
+fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
+    let angle = time * 0.08;
+    let sun = math::normalize(math::vec3(
+        angle.cos() * 0.7,
+        0.30 + 0.45 * (0.5 + 0.5 * (angle * 0.5).sin()),
+        angle.sin() * 0.7,
+    ));
+    let mix = |a: Vec3, b: Vec3, t: f32| a + (b - a) * t;
+    let zenith = mix(
+        math::vec3(0.05, 0.13, 0.32),
+        math::vec3(0.20, 0.21, 0.24),
+        rain,
+    );
+    let horizon = mix(
+        math::vec3(0.55, 0.66, 0.80),
+        math::vec3(0.34, 0.35, 0.38),
+        rain,
+    );
+    let sun_color = math::vec3(1.0, 0.96, 0.85) * (1.0 - 0.8 * rain);
+    vec![
+        zenith.x,
+        zenith.y,
+        zenith.z,
+        1.0, //
+        horizon.x,
+        horizon.y,
+        horizon.z,
+        1.0, //
+        sun.x,
+        sun.y,
+        sun.z,
+        0.0, //
+        sun_color.x,
+        sun_color.y,
+        sun_color.z,
+        1.0 - 0.7 * rain,
+    ]
 }
 
 /// Build the whole world: the ground, the meadow, the sky, then the goat. Called
@@ -990,7 +1035,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let water_level = water.level();
     let meadow = grass::Meadow::default();
     spawn_grass(ctx, &meadow, &water, &craters);
-    spawn_sky(ctx);
+    let sky = spawn_sky(ctx);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1004,6 +1049,8 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         water_level,
         orbit: Orbit::default(),
         seeded: false,
+        sky,
+        sky_time: 0.0,
     })
 }
 

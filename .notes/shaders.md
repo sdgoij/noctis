@@ -19,9 +19,10 @@ components (`ShaderMeshRenderer` / `ScreenShaderMaterial`) with their scene
 serialization, the WGSL prelude generator (`render::shader`), the extraction
 stages (`render::draw_list`), and the GPU pipelines and bind groups drawn by the
 frame (`render::gpu::shader_seam`) — validated by a GPU test that renders a screen
-pass. The seam's first consumer is the goats sky (`examples/goats`). **Not yet:**
-the terrain and water, and a per-frame uniform update (so a sky's sun and weather
-animate). The two components remain out of `ComponentKind::ALL` for now.
+pass. The seam's first consumer is the goats sky (`examples/goats`), whose sun and
+colour animate through the **dynamic user block** (written in place, no rebuild).
+**Not yet:** the terrain and water. The two components remain out of
+`ComponentKind::ALL` for now.
 
 ## What the seam is
 
