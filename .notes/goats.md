@@ -173,7 +173,9 @@ Single-player sandbox first; each milestone is playable.
    animation. The eat, flung and dead states arrive with the milestones that
    cause them (M2's food and energy, M3's blasts).
 3. **M2 — world sim.** Grass grazing, energy/health, weather state machine, water
-   pooling, food.
+   pooling, food. *(Started: the health/energy system — the stats, exhaustion,
+   death and restart — is shipped in `examples/goats`; grass, weather, water and
+   food are not built yet.)*
 4. **M3 — hazards.** Mines / traps / blasts / craters and the billboard FX.
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** Day/night sky and lighting, then audio. **Needs** the

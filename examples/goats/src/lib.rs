@@ -5,7 +5,10 @@
 //! under an orbit camera. This is M1 of the port (see `.notes/goats.md`): the
 //! goat's locomotion state machine — idle, its three gaits, a jump and sleep —
 //! driven from input, where each state plays a baked clip through the engine's
-//! `Animator` and the root moves at the state's authored speed.
+//! `Animator` and the root moves at the state's authored speed. On top sits the
+//! first slice of M2, the health and energy system: energy drains with effort,
+//! exhaustion caps the gait, and running out of health kills the goat until it
+//! is restarted.
 
 #![forbid(unsafe_code)]
 
@@ -30,6 +33,30 @@ const RUN_SPEED: f32 = 2.94;
 const BACK_SPEED: f32 = -0.9;
 /// Radians the goat turns per second on `A`/`D`.
 const TURN_RATE: f32 = 2.6;
+
+// The goat's health and energy, from the original's `TUNING.stats`. Both run
+// `0..=MAX_STATS`; energy drains with effort, and running it to zero exhausts
+// the goat, which then burns health until it dies (or sleeps it back).
+/// The ceiling for both stats.
+const MAX_STATS: f32 = 100.0;
+/// Energy spent per second at rest, walking, trotting and running.
+const ENERGY_DRAIN_IDLE: f32 = 0.4;
+const ENERGY_DRAIN_WALK: f32 = 1.0;
+const ENERGY_DRAIN_TROT: f32 = 2.0;
+const ENERGY_DRAIN_RUN: f32 = 4.0;
+/// Energy a jump costs at take-off.
+const JUMP_ENERGY_COST: f32 = 2.0;
+/// Energy and health recovered per second asleep.
+const SLEEP_ENERGY_RECOVER: f32 = 12.0;
+const SLEEP_HEALTH_RECOVER: f32 = 2.0;
+/// Health recovered per second while rested (energy above [`RESTED_ENERGY`]).
+const IDLE_HEALTH_RECOVER: f32 = 0.1;
+/// Health lost per second once exhausted.
+const EXHAUST_HEALTH_DRAIN: f32 = 3.0;
+/// Health only regenerates above this energy.
+const RESTED_ENERGY: f32 = 20.0;
+/// Seconds spent idle while exhausted before the goat drops off asleep.
+const AUTO_SLEEP_DELAY: f32 = 2.0;
 
 /// Height above the goat's feet that the camera orbits and looks at.
 const EYE_HEIGHT: f32 = 0.75;
@@ -100,9 +127,8 @@ impl Orbit {
 
 /// The goat's locomotion state — the original's `mode`.
 ///
-/// The original also has `flung`, `eat` and `dead`; those arrive with the
-/// milestones that cause them — the blasts, the food and the energy system
-/// (`.notes/goats.md` M2/M3).
+/// The original also has `flung` and `eat`; those arrive with the milestones that
+/// cause them — the blasts and the food (`.notes/goats.md` M2/M3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Idle,
@@ -111,13 +137,14 @@ enum Mode {
     Run,
     Jump,
     Sleep,
+    Dead,
 }
 
 impl Mode {
     /// Whether the state's clip is a cycle, or a one-shot the engine holds on
-    /// its last frame (a jump has to land).
+    /// its last frame (a jump lands, a death stays down).
     fn loops(self) -> bool {
-        self != Mode::Jump
+        !matches!(self, Mode::Jump | Mode::Dead)
     }
 
     /// A short label for the HUD.
@@ -129,6 +156,7 @@ impl Mode {
             Mode::Run => "running",
             Mode::Jump => "jumping",
             Mode::Sleep => "sleeping (Z to wake)",
+            Mode::Dead => "dead (R to restart)",
         }
     }
 }
@@ -144,6 +172,7 @@ struct Clips {
     run: AssetHandle<AnimationClip>,
     jump: Vec<AssetHandle<AnimationClip>>,
     sleep: Vec<AssetHandle<AnimationClip>>,
+    death: AssetHandle<AnimationClip>,
 }
 
 impl Clips {
@@ -158,6 +187,7 @@ impl Clips {
             Mode::Run => Some(self.run),
             Mode::Jump => at(&self.jump, variant),
             Mode::Sleep => at(&self.sleep, variant),
+            Mode::Dead => Some(self.death),
         }
         .unwrap_or(self.walk)
     }
@@ -227,6 +257,14 @@ struct Goat {
     jump_dir: f32,
     /// The jump clip's length, so the state ends when its clip does.
     jump_duration: f32,
+    /// Health, `0..=MAX_STATS`; at zero the goat dies.
+    health: f32,
+    /// Energy, `0..=MAX_STATS`; at zero the goat is exhausted.
+    energy: f32,
+    /// Whether energy has run out — health is draining and the gait is capped.
+    exhausted: bool,
+    /// Seconds spent idle while exhausted, towards the auto-sleep.
+    idle_timer: f32,
 }
 
 impl Goat {
@@ -278,12 +316,64 @@ impl Goat {
             Mode::Trot => TROT_SPEED,
             _ => WALK_SPEED,
         };
+        self.energy = (self.energy - JUMP_ENERGY_COST).max(0.0);
         let (clip, _) = self.animation();
         self.jump_duration = assets
             .animations
             .get(clip)
             .map(|clip| clip.duration)
             .unwrap_or(0.0);
+    }
+
+    /// Fall dead (the original's `die`).
+    fn die(&mut self) {
+        self.enter(Mode::Dead);
+    }
+
+    /// Start a new life: full stats, back at the origin (the original's
+    /// `restart`).
+    fn restart(&mut self) {
+        self.health = MAX_STATS;
+        self.energy = MAX_STATS;
+        self.exhausted = false;
+        self.idle_timer = 0.0;
+        self.x = 0.0;
+        self.z = 0.0;
+        self.yaw = 0.0;
+        self.enter(Mode::Idle);
+    }
+
+    /// Advance health and energy for the state, once a frame; returns `true` once
+    /// health has run out, so the caller switches to [`Mode::Dead`]. The
+    /// original's `updateStats`, minus the night and weather multipliers that
+    /// arrive with their systems.
+    fn update_stats(&mut self, dt: f32) -> bool {
+        if self.mode == Mode::Dead {
+            return false;
+        }
+        if self.mode == Mode::Sleep {
+            self.energy = (self.energy + SLEEP_ENERGY_RECOVER * dt).min(MAX_STATS);
+            self.health = (self.health + SLEEP_HEALTH_RECOVER * dt).min(MAX_STATS);
+            return false;
+        }
+
+        let drain = match self.mode {
+            Mode::Run => ENERGY_DRAIN_RUN,
+            Mode::Trot => ENERGY_DRAIN_TROT,
+            Mode::Walk => ENERGY_DRAIN_WALK,
+            _ => ENERGY_DRAIN_IDLE,
+        };
+        self.energy = (self.energy - drain * dt).max(0.0);
+        if self.energy <= 0.0 {
+            self.exhausted = true;
+            self.health = (self.health - EXHAUST_HEALTH_DRAIN * dt).max(0.0);
+        } else {
+            self.exhausted = false;
+            if self.mode == Mode::Idle && self.energy > RESTED_ENERGY {
+                self.health = (self.health + IDLE_HEALTH_RECOVER * dt).min(MAX_STATS);
+            }
+        }
+        self.health <= 0.0
     }
 }
 
@@ -337,10 +427,15 @@ impl Plugin for Goats {
 
             let dt = ctx.time.delta();
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            let state = goats.as_ref().map_or("standing", |goat| goat.mode.label());
+            let (state, health, energy) = goats
+                .as_ref()
+                .map_or(("standing", MAX_STATS, MAX_STATS), |goat| {
+                    (goat.mode.label(), goat.health, goat.energy)
+                });
             ctx.screen_text = vec![format!(
                 "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
-                 W walk, Ctrl trot, Shift run, Space jump, Z sleep",
+                 health {health:.0}  energy {energy:.0}  |  \
+                 W walk, Ctrl trot, Shift run, Space jump, Z sleep, R restart",
                 dt * 1000.0
             )];
         });
@@ -355,15 +450,18 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
     let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
     let pressed = |c: char| Key::letter(c).is_some_and(|key| input.key_pressed(key));
 
-    // Turning is locked while asleep; every other state may steer, even a jump.
-    // `A` turns left (it increases `yaw`, the original's `turn += 1` for `A`).
-    if goat.mode != Mode::Sleep {
+    // Turning is locked while asleep or dead; every other state may steer, even
+    // a jump. `A` turns left (it increases `yaw`, the original's `turn += 1`).
+    if !matches!(goat.mode, Mode::Sleep | Mode::Dead) {
         goat.yaw += axis(down('A'), down('D')) * TURN_RATE * dt;
     }
 
-    // The movement intent, and the gait the modifiers ask for.
+    // The movement intent, and the gait the modifiers ask for. An exhausted goat
+    // cannot run or trot.
     let move_axis = axis(down('W'), down('S'));
-    let gait = if input.key_down(Key::ShiftLeft) || input.key_down(Key::ShiftRight) {
+    let gait = if goat.exhausted {
+        Mode::Walk
+    } else if input.key_down(Key::ShiftLeft) || input.key_down(Key::ShiftRight) {
         Mode::Run
     } else if input.key_down(Key::ControlLeft) || input.key_down(Key::ControlRight) {
         Mode::Trot
@@ -372,11 +470,16 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
     };
 
     // The state machine (the original's `sceneFrame`): a locked state runs to its
-    // end, a free one follows input. Jump and sleep take their key on the press
-    // edge, so one tap is one action.
+    // end, a free one follows input. Jump, sleep and restart take their key on the
+    // press edge, so one tap is one action.
     match goat.mode {
+        Mode::Dead => {
+            if pressed('R') {
+                goat.restart();
+            }
+        }
         Mode::Sleep => {
-            if pressed('Z') || move_axis != 0.0 {
+            if pressed('Z') || move_axis != 0.0 || goat.energy >= MAX_STATS {
                 goat.enter(Mode::Idle);
             }
         }
@@ -393,8 +496,22 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
                 goat.start_jump(&ctx.assets, gait, move_axis);
             } else {
                 goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
+                // A goat exhausted and stood still drops off where it stands.
+                if goat.exhausted && move_axis == 0.0 {
+                    goat.idle_timer += dt;
+                    if goat.idle_timer >= AUTO_SLEEP_DELAY {
+                        goat.enter(Mode::Sleep);
+                    }
+                } else {
+                    goat.idle_timer = 0.0;
+                }
             }
         }
+    }
+
+    // Health and energy for the frame; at zero health the goat dies.
+    if goat.update_stats(dt) {
+        goat.die();
     }
 
     // Step the root. A jump travels at the speed and direction frozen at
@@ -418,6 +535,7 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
     }
 
     // Play the state's clip; a reversing gait runs its clip backwards.
+    let reversing = move_axis < 0.0 && matches!(goat.mode, Mode::Walk | Mode::Trot | Mode::Run);
     let (clip, looped) = goat.animation();
     if let Some(animator) = ctx.scene.world.get_mut::<Animator>(goat.skinned) {
         if animator.clip != clip {
@@ -426,11 +544,7 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
             animator.playing = true;
         }
         animator.looped = looped;
-        animator.speed = if goat.mode == Mode::Jump || move_axis >= 0.0 {
-            1.0
-        } else {
-            BACK_SPEED
-        };
+        animator.speed = if reversing { BACK_SPEED } else { 1.0 };
     }
 }
 
@@ -562,6 +676,7 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         run: first(role("run")),
         jump: role("jump"),
         sleep: role("sleep"),
+        death: first(role("death")),
     };
     ctx.scene
         .world
@@ -588,6 +703,10 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         jump_speed: 0.0,
         jump_dir: 0.0,
         jump_duration: 0.0,
+        health: MAX_STATS,
+        energy: MAX_STATS,
+        exhausted: false,
+        idle_timer: 0.0,
     })
 }
 
@@ -976,5 +1095,89 @@ mod tests {
             app.tick(1.0 / 60.0);
         }
         assert!(forward_z(&app) > 0.1, "D turned right: {}", forward_z(&app));
+    }
+
+    #[test]
+    fn running_to_empty_exhausts_the_goat_to_a_walk() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        app.context.input.press_key(key('W'));
+        app.context.input.press_key(Key::ShiftLeft);
+        for _ in 0..1600 {
+            app.tick(1.0 / 60.0);
+        }
+        // Energy ran out, so the gait is capped to a walk even with Shift held.
+        assert!(
+            is_role(&app, playing(&app), "walk"),
+            "the exhausted goat walks: {:?}",
+            playing(&app)
+        );
+    }
+
+    #[test]
+    fn exhaustion_kills_the_goat_and_r_starts_a_new_life() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        let root = goat_root(&app);
+
+        app.context.input.press_key(key('W'));
+        app.context.input.press_key(Key::ShiftLeft);
+        for _ in 0..3600 {
+            app.tick(1.0 / 60.0);
+        }
+        assert!(
+            is_role(&app, playing(&app), "death"),
+            "the goat died: {:?}",
+            playing(&app)
+        );
+
+        // `R` starts a new life back at the origin.
+        app.context.input.release_key(key('W'));
+        app.context.input.release_key(Key::ShiftLeft);
+        app.context.input.press_key(key('R'));
+        app.tick(1.0 / 60.0);
+        assert!(
+            is_role(&app, playing(&app), "idle"),
+            "restarted: {:?}",
+            playing(&app)
+        );
+        let at = app
+            .context
+            .scene
+            .world
+            .get::<LocalTransform>(root)
+            .expect("a transform")
+            .translation;
+        assert!(
+            at.x.abs() < 1e-3 && at.z.abs() < 1e-3,
+            "back at the origin: {at:?}"
+        );
+    }
+
+    #[test]
+    fn an_exhausted_idle_goat_drops_off_to_sleep() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        app.context.input.press_key(key('W'));
+        app.context.input.press_key(Key::ShiftLeft);
+        for _ in 0..1600 {
+            app.tick(1.0 / 60.0);
+        }
+        // Stop; exhausted and still, it falls asleep after the delay.
+        app.context.input.release_key(key('W'));
+        app.context.input.release_key(Key::ShiftLeft);
+        for _ in 0..140 {
+            app.tick(1.0 / 60.0);
+        }
+        assert!(
+            is_role(&app, playing(&app), "sleep"),
+            "dropped off: {:?}",
+            playing(&app)
+        );
     }
 }
