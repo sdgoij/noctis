@@ -24,6 +24,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 mod fx;
 mod grass;
 mod hazards;
@@ -221,6 +222,16 @@ fn fs_main(in: GrassOut) -> @location(0) vec4<f32> {
 /// The grass's sun strength (a shade under the terrain's, so the tufts read green
 /// rather than blown out).
 const GRASS_SUN: f32 = 0.9;
+
+/// A sound the simulation asked for this frame; the plugin plays it ([`audio::Audio`])
+/// on the engine's audio, so the simulation itself never touches a device.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Sound {
+    /// A goat bleat, scaled by `gain` (a jump, a sleep, a hit).
+    Bleat { gain: f32 },
+    /// A bang at `(x, z)`, which the plugin falls off with distance.
+    Blast { x: f32, z: f32 },
+}
 
 /// How far the goat may walk from the origin before the mesh ends, in units.
 const FIELD: f32 = 44.0;
@@ -929,6 +940,8 @@ pub struct World {
     reflection: terrain::ReflectionMap,
     /// The bot goats (M4).
     herd: herd::Herd,
+    /// The sounds the simulation asked for this frame, for the plugin to play.
+    sounds: Vec<Sound>,
     /// The bang's fire, smoke and grit (M5).
     fx: fx::Fx,
     /// The generated fx atlases (a texture handle for the "tell").
@@ -960,6 +973,7 @@ pub struct World {
 /// the plugin drives — and, once it exists, the harness (`.notes/harness.md`).
 pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     let dt = ctx.time.delta();
+    world.sounds.clear();
     world.weather.update(dt);
     world.water.update(dt, world.weather.rain());
     // The sky follows the clock and the rain: the sun arcs and the colour drains
@@ -1002,6 +1016,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &mut world.weather,
         &mut world.water,
         &world.craters,
+        &mut world.sounds,
     );
     // The hazards own the ground too: a bang dishes a crater, and the ground heals
     // on its own clock whatever else is happening. Each bang that lands this frame
@@ -1024,6 +1039,14 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         let ground = world.craters.surface(bang.x, bang.z);
         world.fx.blast(bang.x, bang.z, ground, bang.seed);
         world.pulse.hit(bang.impact * bang.impact * PULSE_GAIN);
+        // The bang, and — if it reached the goat — its bleat.
+        world.sounds.push(Sound::Blast {
+            x: bang.x,
+            z: bang.z,
+        });
+        if bang.impact > 0.0 {
+            world.sounds.push(Sound::Bleat { gain: 1.0 });
+        }
     }
     world.fx.update(dt);
     world.pulse.update(dt);
@@ -1101,6 +1124,30 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     ];
 }
 
+/// The world's state the plugin reads: the sounds a frame asked for, where the goat
+/// is, and the weather the beds follow.
+impl World {
+    /// The sounds the last frame asked for, for the plugin to play ([`audio`]).
+    pub fn sounds(&self) -> &[Sound] {
+        &self.sounds
+    }
+
+    /// The goat's world `(x, z)`, so a sound falls off with the distance to it.
+    pub fn goat_position(&self) -> (f32, f32) {
+        (self.goat.x, self.goat.z)
+    }
+
+    /// The eased rain, `0..=1` — the rain bed's volume.
+    pub fn rain(&self) -> f32 {
+        self.weather.rain()
+    }
+
+    /// The wind's sway, which the wind bed's volume follows.
+    pub fn wind_sway(&self) -> f32 {
+        self.weather.sway()
+    }
+}
+
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
 /// root and play the state's clip. The `water` table it stands in slows it, burns its
 /// energy and gates its sleep; `craters` is the ground it stands on and, after a
@@ -1112,6 +1159,7 @@ fn drive_goat(
     weather: &mut weather::Weather,
     water: &mut water::Water,
     craters: &terrain::Craters,
+    sounds: &mut Vec<Sound>,
 ) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
@@ -1179,6 +1227,7 @@ fn drive_goat(
                 || water.in_water(goat.x, goat.z)
             {
                 goat.enter(Mode::Idle);
+                sounds.push(Sound::Bleat { gain: 0.7 });
             }
         }
         Mode::Jump => {
@@ -1207,9 +1256,11 @@ fn drive_goat(
                 // A goat does not sleep in the water (the original's `startSleep`).
                 if !water.in_water(goat.x, goat.z) {
                     goat.enter(Mode::Sleep);
+                    sounds.push(Sound::Bleat { gain: 0.45 });
                 }
             } else if input.key_pressed(Key::Space) {
                 goat.start_jump(&ctx.assets, gait, move_axis, speed_factor);
+                sounds.push(Sound::Bleat { gain: 0.9 });
             } else {
                 goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
                 // A goat exhausted and stood still drops off where it stands.
@@ -1217,6 +1268,7 @@ fn drive_goat(
                     goat.idle_timer += dt;
                     if goat.idle_timer >= AUTO_SLEEP_DELAY && !water.in_water(goat.x, goat.z) {
                         goat.enter(Mode::Sleep);
+                        sounds.push(Sound::Bleat { gain: 0.45 });
                     }
                 } else {
                     goat.idle_timer = 0.0;
@@ -1230,6 +1282,7 @@ fn drive_goat(
     let drain = weather.drain() * water.drain_factor(goat.x, goat.z);
     if goat.update_stats(dt, drain) {
         goat.die();
+        sounds.push(Sound::Bleat { gain: 1.0 });
     }
 
     // Step the root. A jump travels at the speed and direction frozen at
@@ -1812,6 +1865,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         water_material,
         reflection,
         herd,
+        sounds: Vec::new(),
         fx: fx::Fx::new(fx_textures),
         fx_textures,
         fx_entities,

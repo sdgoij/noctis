@@ -22,13 +22,44 @@ pub struct Goats;
 impl Plugin for Goats {
     fn build(&self, app: &mut App) {
         let mut world: Option<goats::World> = None;
+        // The audio device (or the silent fallback) is opened once. The plugin's own
+        // tests must not touch a device, so it is skipped there; the harness never
+        // builds it at all.
+        let mut audio: Option<goats::audio::Audio> = None;
         app.on_update("goats.frame", move |ctx| {
             // The world is built on the first tick, so the closure owns it.
             if world.is_none() {
                 world = goats::spawn_world(ctx);
+                if !cfg!(test) {
+                    audio = Some(goats::audio::Audio::new());
+                }
             }
-            if let Some(world) = world.as_mut() {
-                goats::apply_frame(ctx, world);
+            let Some(world) = world.as_mut() else {
+                return;
+            };
+            goats::apply_frame(ctx, world);
+
+            // Play the sounds the frame asked for, and tie the beds to the weather.
+            if let Some(audio) = audio.as_mut() {
+                let goat = world.goat_position();
+                for &sound in world.sounds() {
+                    audio.play_sound(sound, goat);
+                }
+                audio.update(ctx.time.delta(), world.rain(), world.wind_sway());
+
+                // Volume keys: `M` mutes, `8`/`9` (the original's number pad) trim.
+                let pressed =
+                    |ch: char| Key::letter(ch).is_some_and(|key| ctx.input.key_pressed(key));
+                let digit = |ch: char| Key::digit(ch).is_some_and(|key| ctx.input.key_pressed(key));
+                if pressed('M') {
+                    audio.toggle_mute();
+                }
+                if digit('8') {
+                    audio.adjust_volume(-5);
+                }
+                if digit('9') {
+                    audio.adjust_volume(5);
+                }
             }
         });
     }

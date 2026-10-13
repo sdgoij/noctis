@@ -208,7 +208,11 @@ Single-player sandbox first; each milestone is playable.
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
    material's `user` block and animated there: the sun arcs and the colour drains
    toward grey in rain; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
-   Day/night lighting and audio follow; the **terrain** carries per-vertex
+   **Audio** has since shipped — the engine's `AudioEngine` (rodio on native, the
+   browser's WebAudio on `wasm32`) plays the original's own samples: looping
+   music, the rain and wind beds tied to the weather, goat bleats, and blasts
+   attenuated by distance from the goat. Day/night lighting still follows; the
+   **terrain** carries per-vertex
    grass / sand / rock through the engine's vertex colour, and the **water** is a
    translucent surface drawn through the seam's mesh form. The **bang** has its
    flash — one shadowless point light that flares at a blast and decays — a camera
