@@ -49,7 +49,7 @@ pub fn plugin_project(args: &[String]) -> Option<Project> {
     }
     let dir = project_arg(args)?;
     let project = Project::open(dir).ok()?;
-    project.rust_crate_dir().is_some().then_some(project)
+    project.carries_rust().then_some(project)
 }
 
 /// Build the project's plugin-aware tool and run it with `args`, returning the

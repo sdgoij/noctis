@@ -8,7 +8,8 @@ is the contract for that port; the engine features it depends on are designed in
 [`.notes/animation.md`](animation.md) (skeletal animation) and, once built, their
 own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike), M1
 (locomotion), M2 (the world sim) and M3 (hazards) are shipped** as `examples/goats`;
-the rest is not built yet.
+the rest is not built yet. The port's test harness — the headless driver and its
+seed/observe seams — is designed in [`.notes/harness.md`](harness.md).
 
 Background: a Noctis *project* carries Rust as a plugin
 ([`.notes/embedding.md`](embedding.md)); its manifest and asset model are
@@ -146,8 +147,9 @@ ground too. rapier stays for shoving the herd if a body is wanted.
 
 ```mermaid
 graph TD
-    A["examples/goats (Noctis project)"] --> B["Cargo.toml + src/lib.rs"]
-    B --> C["plugin: components + systems"]
+    A["examples/goats (Noctis project)"] --> B["Cargo.toml (workspace) + crates/plugin"]
+    B --> B2["crates/goats: the simulation"]
+    B2 --> C["plugin: components + systems"]
     C --> D["sim: terrain, grass, water, weather"]
     C --> E["sim: goat, energy/health, herd"]
     C --> F["sim: mines, traps, blasts, craters"]
@@ -155,7 +157,7 @@ graph TD
     C --> H["ui: menus, settings, console (egui seam)"]
     B --> I["scenes: world (3d) + menu (2d)"]
     C --> J["crates: mods / proto / session / pull"]
-    A --> K["assets: goat_animated.glb, sfx/, tex/"]
+    B2 --> K["assets: goat_animated.glb, sfx/, tex/"]
 ```
 
 ## Milestones

@@ -242,22 +242,79 @@ impl Project {
         self.root.join(relative)
     }
 
-    /// The plugin crate directory, when the project carries Rust.
-    ///
-    /// A project carries Rust when its root holds a `Cargo.toml`; the crate *is*
-    /// the plugin, so this is the project root.
-    pub fn rust_crate_dir(&self) -> Option<PathBuf> {
-        self.cargo_toml().ok().flatten().map(|_| self.root.clone())
+    /// Whether the project carries Rust: its root holds a `Cargo.toml`.
+    pub fn carries_rust(&self) -> bool {
+        self.cargo_toml().ok().flatten().is_some()
     }
 
-    /// The plugin crate's `[package].name`, when the project root has a
-    /// `Cargo.toml`.
+    /// The plugin crate, relative to the project root, when the project carries
+    /// Rust.
     ///
-    /// A `Cargo.toml` with no `[package]` (a virtual workspace root) is an error:
-    /// a project's Rust must be a library crate at the root.
-    pub fn rust_package_name(&self) -> Result<Option<String>, ProjectError> {
+    /// A root `Cargo.toml` is what makes a project carry Rust. If it is a
+    /// *package*, the root is the plugin crate (`""`). If it is a *virtual
+    /// workspace*, the plugin is its first `default-members` (or, failing that,
+    /// its first `members`) — so a project can keep its simulation in sibling
+    /// crates and let a member be the plugin (`.notes/embedding.md`).
+    fn rust_crate_relative(&self) -> Result<Option<String>, ProjectError> {
         let Some(text) = self.cargo_toml()? else {
             return Ok(None);
+        };
+        let value: toml::Value =
+            toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
+        if value.get("package").is_some() {
+            return Ok(Some(String::new()));
+        }
+        let member = value
+            .get("workspace")
+            .and_then(|workspace| {
+                workspace
+                    .get("default-members")
+                    .or_else(|| workspace.get("members"))
+            })
+            .and_then(toml::Value::as_array)
+            .and_then(|members| members.first())
+            .and_then(toml::Value::as_str);
+        let Some(member) = member else {
+            return Err(ProjectError::Manifest(
+                "Cargo.toml: a workspace project must name its plugin crate in [workspace] \
+                 default-members"
+                    .to_string(),
+            ));
+        };
+        if member.contains(['*', '?', '[', ']']) {
+            return Err(ProjectError::Manifest(format!(
+                "Cargo.toml: the plugin crate {member:?} must be a path, not a glob"
+            )));
+        }
+        Ok(Some(member.trim_matches('/').replace('\\', "/")))
+    }
+
+    /// The plugin crate's directory, when the project carries Rust: the project
+    /// root, or the workspace member that is the plugin.
+    pub fn rust_crate_dir(&self) -> Option<PathBuf> {
+        let relative = self.rust_crate_relative().ok().flatten()?;
+        if relative.is_empty() {
+            Some(self.root.clone())
+        } else {
+            Some(self.root.join(relative))
+        }
+    }
+
+    /// The plugin crate's `[package].name`, when the project carries Rust.
+    ///
+    /// A workspace member with no `[package]` (a nested virtual workspace) is an
+    /// error: the plugin must be a library crate.
+    pub fn rust_package_name(&self) -> Result<Option<String>, ProjectError> {
+        let Some(relative) = self.rust_crate_relative()? else {
+            return Ok(None);
+        };
+        let manifest = if relative.is_empty() {
+            "Cargo.toml".to_string()
+        } else {
+            format!("{relative}/Cargo.toml")
+        };
+        let Some(text) = self.read_document(&manifest)? else {
+            return Err(ProjectError::Manifest(format!("{manifest}: not found")));
         };
         let value: toml::Value =
             toml::from_str(&text).map_err(|error| ProjectError::Manifest(error.to_string()))?;
@@ -267,18 +324,18 @@ impl Project {
             .and_then(|name| name.as_str());
         match name {
             Some(name) => Ok(Some(name.to_string())),
-            None => Err(ProjectError::Manifest(
-                "Cargo.toml: missing [package].name (a virtual workspace is not a plugin crate)"
-                    .to_string(),
-            )),
+            None => Err(ProjectError::Manifest(format!(
+                "{manifest}: missing [package].name"
+            ))),
         }
     }
 
-    /// The conventional plugin function's Rust path, `<package>::noctis_plugin`.
+    /// The plugin crate's Rust path, `<package>::noctis_plugin`.
     ///
     /// `#[noctis::plugin]` exports the `noctis_plugin` symbol; the crate name is
-    /// the root `Cargo.toml`'s `[package].name`, with `-` normalized to `_`. `None`
-    /// when the project has no root `Cargo.toml`.
+    /// the plugin crate's `[package].name` (the project root, or its workspace
+    /// default member), with `-` normalized to `_`. `None` when the project has
+    /// no root `Cargo.toml`.
     pub fn plugin_path(&self) -> Result<Option<String>, ProjectError> {
         let Some(package) = self.rust_package_name()? else {
             return Ok(None);
@@ -624,10 +681,48 @@ mod tests {
             Some("my_game::noctis_plugin")
         );
 
-        // A virtual workspace root (no [package]) is an error, not a silent default.
-        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = [\"a\"]\n")
-            .expect("crate manifest");
+        // A virtual workspace root names its plugin crate as the first default
+        // member, so the simulation can live in sibling crates.
+        std::fs::create_dir_all(dir.join("crates/plugin")).expect("plugin dir");
+        std::fs::create_dir_all(dir.join("crates/sim")).expect("sim dir");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/sim\", \"crates/plugin\"]\n\
+             default-members = [\"crates/plugin\"]\n",
+        )
+        .expect("workspace manifest");
+        std::fs::write(
+            dir.join("crates/plugin/Cargo.toml"),
+            "[package]\nname = \"my-game\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("plugin manifest");
         let project = Project::open(&dir).expect("open");
+        assert!(project.carries_rust());
+        assert_eq!(project.rust_crate_dir(), Some(dir.join("crates/plugin")));
+        assert_eq!(
+            project.rust_package_name().unwrap().as_deref(),
+            Some("my-game")
+        );
+        assert_eq!(
+            project.plugin_path().unwrap().as_deref(),
+            Some("my_game::noctis_plugin")
+        );
+
+        // With no `default-members`, the first `members` entry is the plugin.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/plugin\", \"crates/sim\"]\n",
+        )
+        .expect("workspace manifest");
+        let project = Project::open(&dir).expect("open");
+        assert_eq!(project.rust_crate_dir(), Some(dir.join("crates/plugin")));
+
+        // A workspace that names no member is an error, not a silent default.
+        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("workspace manifest");
+        let project = Project::open(&dir).expect("open");
+        assert!(project.carries_rust());
+        assert_eq!(project.rust_crate_dir(), None);
         assert!(matches!(
             project.rust_package_name(),
             Err(ProjectError::Manifest(_))

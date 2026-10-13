@@ -60,15 +60,18 @@ skinned draw and clip playback) are shipped.**
 
 Porting **Slag Goat** (`goats/`), a JavaScript-and-raylib goat sandbox, onto the
 engine — a Rust plugin for the simulation, scenes for the world and menus, egui
-for the screens — is planned in [`.notes/goats.md`](.notes/goats.md). **M0 (the
-render-path spike) and M1 (locomotion) are shipped** as `examples/goats`: the goat
-model loads as a skinned mesh, the ground is built from the original's noise, and
-the goat's idle/walk/trot/run/jump/sleep state machine drives it under an orbit
-camera. M2 has the health/energy system (exhaustion, death, restart), the meadow
-(the procedural grass field, and grazing it), and the weather state machine (rain
-and wind slow the goat and make it drain energy faster). The water table, the
-weather's clouds and rain, the rest of the food model and the world simulation are
-not built yet.
+for the screens — is planned in [`.notes/goats.md`](.notes/goats.md), and the
+port's test harness in [`.notes/harness.md`](.notes/harness.md). **M0 (the
+render-path spike), M1 (locomotion), M2 (the world sim) and M3 (hazards) are
+shipped** as `examples/goats`: the goat model loads as a skinned mesh, the ground
+is built from the original's noise, and its idle/walk/trot/run/jump/sleep state
+machine drives it under an orbit camera; M2 adds health/energy (exhaustion,
+death, restart), the meadow (procedural grass, and grazing it), the weather state
+machine, and the water table (rain-filled pools that slow a wading goat and hide
+the tufts they cover); M3 adds mines and trapped tufts, blasts, craters dished
+into the ground, and the ballistic flung arc. The weather's clouds and rain, the
+water's surface, the rest of the food model and the world, the herd,
+presentation and the UI are not built yet.
 
 ## Commands
 
@@ -220,7 +223,8 @@ needed.
   environments stay loose files, so packaging larger assets is still to come.
 - **Project Rust (a plugin)** is shipped (see
   [`.notes/embedding.md`](.notes/embedding.md)). A project carries Rust when its
-  root holds a `Cargo.toml` — a library crate whose type is marked
+  root holds a `Cargo.toml` — the plugin crate itself, or a virtual workspace that
+  names it as the first default member — a library crate whose type is marked
   `#[noctis::plugin]` (exporting the `noctis_plugin` symbol); there is no manifest
   table. `noctis run`/`editor` generate a per-project **tool** under the project's
   gitignored `.noctis/tool/` that links it and dispatches the same CLI, and
@@ -230,7 +234,8 @@ needed.
   derive and the `plugin` attribute both resolve their crate path for `ecs`
   consumers and `noctis`-only plugin crates, and `noctis`'s `editor` is a default
   feature so a shipped plugin game can drop it. A worked example (a custom `Spin`
-  component, a fly-camera system, and a simulated ball) is `examples/rustball`.
+  component, a fly-camera system, and a simulated ball) is `examples/rustball`;
+  `examples/goats` is a workspace whose plugin crate is a member.
   `noctis build --platform wasm` (or a `[[build]]` `platform = "wasm"` target)
   additionally builds a **browser** client: each project's plugin is linked into a
   generated `.noctis/web/` crate, compiled for `wasm32-unknown-unknown`, run

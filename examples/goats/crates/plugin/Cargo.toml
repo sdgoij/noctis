@@ -1,0 +1,14 @@
+# The Goats plugin: the project's `#[noctis::plugin]` crate. It owns the running
+# `World` and drives it one frame at a time by calling into the simulation crate,
+# `crates/goats`. See `../../README.md` and `../../.notes/goats.md`.
+[package]
+name = "goats-plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+goats = { path = "../goats" }
+noctis = { path = "../../../../crates/noctis", default-features = false }

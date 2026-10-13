@@ -1,0 +1,11 @@
+# The Goats simulation: the goat, the terrain, the meadow, the water, the weather
+# and the hazards — everything the plugin drives, and nothing Noctis-specific but
+# the ECS it reads. See `../../.notes/goats.md`.
+[package]
+name = "goats"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+noctis = { path = "../../../../crates/noctis", default-features = false }
+log = "0.4"

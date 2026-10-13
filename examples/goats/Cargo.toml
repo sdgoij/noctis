@@ -1,24 +1,12 @@
-# Goats — a Noctis port of the Slag Goat sandbox.
+# Goats — a Noctis port of the Slag Goat sandbox (`goats/`).
 #
-# The project root *is* the plugin library crate: a `Cargo.toml` here is what makes
-# `noctis` treat the project as carrying Rust, and `src/lib.rs` exports the plugin
-# with `#[noctis::plugin]`. M0 (the render-path spike, `.notes/goats.md`) loaded the
-# goat model as a skinned mesh and built the ground from the original's own noise;
-# M1 adds the locomotion state machine — idle, the gaits, a jump and sleep — over
-# the engine's skeletal animation. The world simulation comes later. `noctis` is
-# depended on without the `editor` feature — a shipped game must not carry it.
-[package]
-name = "goats"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-path = "src/lib.rs"
-
-[dependencies]
-noctis = { path = "../../crates/noctis", default-features = false }
-log = "0.4"
-
-# Detach from the engine workspace. The project builds in its own target directory
-# here, and is compiled into the generated `.noctis/` tool and client crates.
+# The project is a cargo workspace. `noctis` finds a project's Rust through the
+# root `Cargo.toml`, so a virtual workspace names its plugin crate as the first
+# default member: the plugin (`crates/plugin`, a `#[noctis::plugin]`) drives the
+# simulation (`crates/goats`). See README.md and .notes/goats.md for the design.
 [workspace]
+# Edition 2024's resolver ("3") is not understood by some rust-analyzer builds;
+# resolver 2 is universally supported and immaterial for this dependency graph.
+resolver = "2"
+members = ["crates/plugin", "crates/goats"]
+default-members = ["crates/plugin", "crates/goats"]

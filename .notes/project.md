@@ -83,7 +83,8 @@ dirs = ["tools/extensions"]       # extra search directories (project-relative)
 disabled = ["com.example.wip"]    # extension ids this project turns off
 
 # A project carries Rust when its root holds a `Cargo.toml` (a plugin library crate
-# whose type is `#[noctis::plugin]`); there is no manifest table for it. `noctis
+# whose type is `#[noctis::plugin]` — the root crate, or a workspace member the root
+# names as its first default member); there is no manifest table for it. `noctis
 # run`/`editor` link it into a per-project tool, and `noctis build` ships a
 # plugin-linked game client. See .notes/embedding.md.
 
@@ -327,9 +328,12 @@ at startup, so a scene's script paths resolve with no file on disk.
 
 ## Rust (project plugins)
 
-A project may carry Rust alongside its scripts: a **library crate at the project
-root**. A `Cargo.toml` there is what makes `noctis` treat the project as carrying
-Rust — there is no manifest table for it. The crate's plugin type is marked
+A project may carry Rust alongside its scripts: a **library crate reached from
+the project root**. A `Cargo.toml` there is what makes `noctis` treat the project
+as carrying Rust — there is no manifest table for it. The root manifest is either
+the plugin crate itself, or a virtual workspace whose first `default-members` (or
+first `members`) entry is the plugin crate, so a project can keep its simulation
+in sibling crates. The crate's plugin type is marked
 [`#[noctis::plugin]`](embedding.md) and defines **custom components** and
 **systems**:
 

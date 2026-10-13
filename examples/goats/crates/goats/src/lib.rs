@@ -1,29 +1,32 @@
-//! Goats — a Noctis port of the Slag Goat sandbox (`goats/`).
+//! Goats — the simulation of a Noctis port of the Slag Goat sandbox (`goats/`).
 //!
 //! The goat model loads as a skinned mesh, the ground is a mesh built from the
 //! original's own noise function ([`terrain`]), and a procedural meadow
-//! ([`grass`]) is grazed. This is M1 of the port (see `.notes/goats.md`): the
-//! goat's locomotion state machine — idle, its three gaits, a jump and sleep —
-//! driven from input, where each state plays a baked clip through the engine's
-//! `Animator` and the root moves at the state's authored speed. On top sits M2's
-//! health and energy system, its meadow and its weather: energy drains with
-//! effort, eating grass tops it up, exhaustion caps the gait, running out of
-//! health kills the goat until it is restarted, and a weather state machine
-//! (clear / cloudy / rain / clearing) slows the goat and sharpens its drain in
-//! rain and wind. The water table (M2) is the rain's other consequence: it pools in
-//! the hollows, slows a wading goat and burns its energy, hides the tufts it stands
-//! over, and refuses to let the goat sleep in a pool. M3 adds the world's hazards
-//! ([`hazards`]): mines and trapped tufts, derived from a per-cell hash, that trip
-//! when the goat reaches them, blow it on a ballistic arc that dishes a crater into
-//! the ground, and chain into their neighbours. The weather's clouds, rain streaks
-//! and sky tint, the water's surface, and the bang's fire and light, are the
-//! presentation layer's (M5).
+//! ([`grass`]) is grazed. M1 is the goat's locomotion state machine — idle, its
+//! three gaits, a jump and sleep — driven from input, where each state plays a
+//! baked clip through the engine's `Animator` and the root moves at the state's
+//! authored speed. On top sits M2's health and energy system, its meadow and its
+//! weather: energy drains with effort, eating grass tops it up, exhaustion caps the
+//! gait, running out of health kills the goat until it is restarted, and a weather
+//! state machine (clear / cloudy / rain / clearing) slows the goat and sharpens its
+//! drain in rain and wind. The water table (M2) is the rain's other consequence: it
+//! pools in the hollows, slows a wading goat and burns its energy, hides the tufts
+//! it stands over, and refuses to let the goat sleep in a pool. M3 adds the world's
+//! hazards ([`hazards`]): mines and trapped tufts, derived from a per-cell hash,
+//! that trip when the goat reaches them, blow it on a ballistic arc that dishes a
+//! crater into the ground, and chain into their neighbours. The weather's clouds,
+//! rain streaks and sky tint, the water's surface, and the bang's fire and light,
+//! are the presentation layer's (M5).
+//!
+//! This crate is the whole simulation. The `#[noctis::plugin]` that drives it one
+//! frame at a time is the `goats-plugin` crate in `crates/plugin`, which calls
+//! [`apply_frame`]; the design is `.notes/goats.md`.
 
 #![forbid(unsafe_code)]
 
 mod grass;
 mod hazards;
-mod terrain;
+pub mod terrain;
 mod water;
 mod weather;
 
@@ -102,7 +105,7 @@ const FLING_GRAVITY: f32 = -72.0;
 const FLING_MAX_FLIGHT: f32 = 2.5;
 
 /// Height above the goat's feet that the camera orbits and looks at.
-const EYE_HEIGHT: f32 = 0.75;
+pub const EYE_HEIGHT: f32 = 0.75;
 /// Radians the camera turns per logical point of drag.
 const LOOK_SPEED: f32 = 0.006;
 /// Radians per second the arrow keys turn the camera.
@@ -569,15 +572,9 @@ fn active_camera(ctx: &EngineContext) -> Option<Entity> {
         .map(|(entity, _)| entity)
 }
 
-/// The project's plugin. `#[noctis::plugin]` exports the `noctis_plugin` symbol
-/// the tool links — a `Cargo.toml` at the project root is all `noctis` needs to
-/// find it.
-#[noctis::plugin]
-#[derive(Default)]
-pub struct Goats;
-
-/// The running world: the goat, its meadow, and the ground's own state.
-struct World {
+/// The running world: the goat, its meadow, the ground's own state, and the orbit
+/// camera that follows it.
+pub struct World {
     goat: Goat,
     meadow: grass::Meadow,
     weather: weather::Weather,
@@ -592,108 +589,87 @@ struct World {
     grass_cell: (i32, i32),
     /// The water level the meadow was last built against, so a rise rebuilds it.
     water_level: f32,
+    /// The orbit camera about the goat.
+    orbit: Orbit,
+    /// Whether the orbit has been seeded from the scene's own camera yet.
+    seeded: bool,
 }
 
-impl Plugin for Goats {
-    fn build(&self, app: &mut App) {
-        let mut world: Option<World> = None;
-        let mut orbit = Orbit::default();
-        let mut seeded = false;
-
-        app.on_update("goats.frame", move |ctx| {
-            // The world is built on the first tick, so the closure owns it.
-            if world.is_none() {
-                world = spawn_world(ctx);
-            }
-            if let Some(world) = world.as_mut() {
-                world.weather.update(ctx.time.delta());
-                world.water.update(ctx.time.delta(), world.weather.rain());
-                let ate = drive_goat(
-                    ctx,
-                    &mut world.goat,
-                    &mut world.meadow,
-                    &mut world.weather,
-                    &mut world.water,
-                    &world.craters,
-                );
-                // The hazards own the ground too: a bang dishes a crater, and the
-                // ground heals on its own clock whatever else is happening.
-                world.hazards.update(
-                    ctx.time.delta(),
-                    &mut world.goat,
-                    &world.meadow,
-                    &mut world.craters,
-                );
-                // A crater — or its heal — moves the ground: rebuild the mesh, resample
-                // the water table, and re-derive the meadow from it.
-                let ground_changed = world.craters.revision() != world.crater_rev;
-                if ground_changed {
-                    world.crater_rev = world.craters.revision();
-                    rebuild_terrain(ctx, &world.craters);
-                    world.water.resample(&world.craters);
-                }
-                update_meadow(ctx, world, ate, ground_changed);
-            }
-
-            let target = world
-                .as_ref()
-                .map(|world| {
-                    let goat = &world.goat;
-                    math::vec3(
-                        goat.x,
-                        world.craters.surface(goat.x, goat.z) + goat.lift + EYE_HEIGHT,
-                        goat.z,
-                    )
-                })
-                .unwrap_or_else(|| math::vec3(0.0, EYE_HEIGHT, 0.0));
-            let craters = world.as_ref().map(|world| &world.craters);
-            drive_camera(ctx, &mut orbit, &mut seeded, target, craters);
-
-            let dt = ctx.time.delta();
-            let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            let (state, health, energy, belly, hint, weather) = world.as_ref().map_or(
-                ("standing", MAX_STATS, MAX_STATS, 0.0, "", String::new()),
-                |world| {
-                    let goat = &world.goat;
-                    let in_reach =
-                        !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
-                            && grass::nearest(
-                                goat.x,
-                                goat.z,
-                                grass::EAT_RANGE,
-                                &world.meadow,
-                                &world.craters,
-                            )
-                            .is_some();
-                    // The water the goat is standing in joins the weather line, and is
-                    // empty when it is dry (the original's `updateWeatherEffects`).
-                    let mut weather = world.weather.hud(goat.satiety);
-                    let water = world.water.hud(goat.x, goat.z);
-                    if !water.is_empty() {
-                        weather.push_str("   ");
-                        weather.push_str(&water);
-                    }
-                    (
-                        goat.mode.label(),
-                        goat.health,
-                        goat.energy,
-                        goat.satiety,
-                        if in_reach { "  |  eat (E)" } else { "" },
-                        weather,
-                    )
-                },
-            );
-            ctx.screen_text = vec![
-                format!(
-                    "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
-                     health {health:.0}  energy {energy:.0}  belly {:.0}%{hint}",
-                    dt * 1000.0,
-                    belly * 100.0,
-                ),
-                weather,
-            ];
-        });
+/// Advance the whole world one frame: the weather and the water, the goat, the
+/// hazards and the ground, the camera, and the HUD. This is the single entry point
+/// the plugin drives — and, once it exists, the harness (`.notes/harness.md`).
+pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
+    let dt = ctx.time.delta();
+    world.weather.update(dt);
+    world.water.update(dt, world.weather.rain());
+    let ate = drive_goat(
+        ctx,
+        &mut world.goat,
+        &mut world.meadow,
+        &mut world.weather,
+        &mut world.water,
+        &world.craters,
+    );
+    // The hazards own the ground too: a bang dishes a crater, and the ground heals
+    // on its own clock whatever else is happening.
+    world
+        .hazards
+        .update(dt, &mut world.goat, &world.meadow, &mut world.craters);
+    // A crater — or its heal — moves the ground: rebuild the mesh, resample the
+    // water table, and re-derive the meadow from it.
+    let ground_changed = world.craters.revision() != world.crater_rev;
+    if ground_changed {
+        world.crater_rev = world.craters.revision();
+        rebuild_terrain(ctx, &world.craters);
+        world.water.resample(&world.craters);
     }
+    update_meadow(ctx, world, ate, ground_changed);
+
+    let target = math::vec3(
+        world.goat.x,
+        world.craters.surface(world.goat.x, world.goat.z) + world.goat.lift + EYE_HEIGHT,
+        world.goat.z,
+    );
+    drive_camera(
+        ctx,
+        &mut world.orbit,
+        &mut world.seeded,
+        target,
+        &world.craters,
+    );
+
+    let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+    let goat = &world.goat;
+    let in_reach = !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
+        && grass::nearest(
+            goat.x,
+            goat.z,
+            grass::EAT_RANGE,
+            &world.meadow,
+            &world.craters,
+        )
+        .is_some();
+    // The water the goat is standing in joins the weather line, and is empty when
+    // it is dry (the original's `updateWeatherEffects`).
+    let mut weather = world.weather.hud(goat.satiety);
+    let water = world.water.hud(goat.x, goat.z);
+    if !water.is_empty() {
+        weather.push_str("   ");
+        weather.push_str(&water);
+    }
+    ctx.screen_text = vec![
+        format!(
+            "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {}  |  \
+             health {:.0}  energy {:.0}  belly {:.0}%{}",
+            dt * 1000.0,
+            goat.mode.label(),
+            goat.health,
+            goat.energy,
+            goat.satiety * 100.0,
+            if in_reach { "  |  eat (E)" } else { "" },
+        ),
+        weather,
+    ];
 }
 
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
@@ -896,7 +872,7 @@ fn drive_camera(
     orbit: &mut Orbit,
     seeded: &mut bool,
     target: Vec3,
-    craters: Option<&terrain::Craters>,
+    craters: &terrain::Craters,
 ) {
     let Some(camera) = active_camera(ctx) else {
         return;
@@ -927,10 +903,7 @@ fn drive_camera(
 
     let (position, rotation) = orbit.view(target);
     // Never let the camera sit in the ground it is looking across.
-    let floor = match craters {
-        Some(craters) => craters.surface(position.x, position.z),
-        None => terrain::height(position.x, position.z),
-    } + CAMERA_CLEARANCE;
+    let floor = craters.surface(position.x, position.z) + CAMERA_CLEARANCE;
     let position = math::vec3(position.x, position.y.max(floor), position.z);
     if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(camera) {
         transform.translation = position;
@@ -938,8 +911,9 @@ fn drive_camera(
     }
 }
 
-/// Build the whole world: the ground, the meadow, then the goat.
-fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
+/// Build the whole world: the ground, the meadow, then the goat. Called by the
+/// plugin's frame system on the first tick, and by the harness directly.
+pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let craters = terrain::Craters::default();
     spawn_terrain(ctx, &craters);
     // The water table samples the ground, so it is built once the terrain is up and
@@ -959,6 +933,8 @@ fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         craters,
         grass_cell: (0, 0),
         water_level,
+        orbit: Orbit::default(),
+        seeded: false,
     })
 }
 
@@ -1304,378 +1280,6 @@ mod tests {
         assert!(goat.fling_vx > vx, "the impulses stack");
     }
 
-    #[test]
-    fn the_plugin_spawns_the_goat_and_the_terrain() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        let world = &app.context.scene.world;
-        assert!(
-            world
-                .query::<Name>()
-                .any(|(_, name)| name.as_str() == "Terrain"),
-            "the terrain entity was spawned"
-        );
-        // The terrain is a plain mesh; the goat is skinned and plays a clip.
-        assert!(world.count::<MeshRenderer>() >= 1);
-        assert!(world.count::<SkinnedMeshRenderer>() >= 1);
-        assert!(world.count::<Animator>() >= 1, "the goat plays a clip");
-        assert!(app.context.assets.meshes.handle("terrain/meadow").is_some());
-    }
-
-    #[test]
-    fn holding_w_walks_the_goat_forward() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0); // build the world
-
-        let root = app
-            .context
-            .scene
-            .world
-            .query::<Name>()
-            .find(|(_, name)| name.as_str() == "Goat Root")
-            .map(|(entity, _)| entity)
-            .expect("the goat root");
-        let before = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(root)
-            .expect("a transform")
-            .translation;
-        let idle = app
-            .context
-            .scene
-            .world
-            .query::<Animator>()
-            .map(|(_, animator)| animator.clip)
-            .next()
-            .expect("an animator");
-
-        app.context
-            .input
-            .press_key(Key::letter('W').expect("W is a letter key"));
-        for _ in 0..30 {
-            app.tick(1.0 / 60.0);
-        }
-
-        let after = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(root)
-            .expect("a transform")
-            .translation;
-        assert!(
-            after.x > before.x + 0.1,
-            "the goat walked forward: {before:?} -> {after:?}"
-        );
-        // The gait switched off idle and is playing forwards. (The engine's
-        // sampler, which advances `time`, is the runtime's, not this bare `App`.)
-        let animator = app
-            .context
-            .scene
-            .world
-            .query::<Animator>()
-            .map(|(_, animator)| *animator)
-            .next()
-            .expect("an animator");
-        assert!(animator.clip != idle, "the gait left idle: {animator:?}");
-        assert!(
-            animator.speed.abs() > 0.0,
-            "a gait is playing: {animator:?}"
-        );
-    }
-
-    /// The goat's root entity.
-    fn goat_root(app: &App) -> Entity {
-        app.context
-            .scene
-            .world
-            .query::<Name>()
-            .find(|(_, name)| name.as_str() == "Goat Root")
-            .map(|(entity, _)| entity)
-            .expect("the goat root")
-    }
-
-    /// The clip the goat's animator is playing.
-    fn playing(app: &App) -> AssetHandle<AnimationClip> {
-        app.context
-            .scene
-            .world
-            .query::<Animator>()
-            .map(|(_, animator)| animator.clip)
-            .next()
-            .expect("an animator")
-    }
-
-    /// `true` when `clip` is one of the clips whose name contains `needle`.
-    fn is_role(app: &App, clip: AssetHandle<AnimationClip>, needle: &str) -> bool {
-        app.context
-            .assets
-            .animations
-            .get(clip)
-            .is_some_and(|clip| clip.name.to_ascii_lowercase().contains(needle))
-    }
-
-    fn key(c: char) -> Key {
-        Key::letter(c).expect("a letter key")
-    }
-
-    #[test]
-    fn pressing_space_jumps_then_lands_back_in_the_gait() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-        let root = goat_root(&app);
-
-        app.context.input.press_key(key('W'));
-        app.tick(1.0 / 60.0);
-        let before = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(root)
-            .expect("a transform")
-            .translation;
-
-        app.context.input.press_key(Key::Space);
-        app.tick(1.0 / 60.0);
-        assert!(
-            is_role(&app, playing(&app), "jump"),
-            "the jump clip plays: {:?}",
-            playing(&app)
-        );
-        let duration = app
-            .context
-            .assets
-            .animations
-            .get(playing(&app))
-            .expect("the jump clip")
-            .duration;
-
-        // The goat keeps travelling while it is airborne.
-        for _ in 0..8 {
-            app.tick(1.0 / 60.0);
-        }
-        let mid = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(root)
-            .expect("a transform")
-            .translation;
-        assert!(
-            mid.x > before.x + 0.05,
-            "airborne travel: {before:?} -> {mid:?}"
-        );
-
-        // It lands, and with `W` still held it takes up the walk again.
-        for _ in 0..(duration * 60.0).ceil() as u32 + 2 {
-            app.tick(1.0 / 60.0);
-        }
-        assert!(
-            is_role(&app, playing(&app), "walk"),
-            "the walk resumed: {:?}",
-            playing(&app)
-        );
-    }
-
-    #[test]
-    fn z_sleeps_and_wakes_the_goat() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        app.context.input.press_key(key('Z'));
-        app.tick(1.0 / 60.0);
-        assert!(
-            is_role(&app, playing(&app), "sleep"),
-            "asleep: {:?}",
-            playing(&app)
-        );
-
-        // A second, fresh press wakes it.
-        app.context.input.release_key(key('Z'));
-        app.context.input.press_key(key('Z'));
-        app.tick(1.0 / 60.0);
-        assert!(
-            is_role(&app, playing(&app), "idle"),
-            "awake: {:?}",
-            playing(&app)
-        );
-    }
-
-    #[test]
-    fn moving_wakes_a_sleeping_goat() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        app.context.input.press_key(key('Z'));
-        app.tick(1.0 / 60.0);
-        assert!(is_role(&app, playing(&app), "sleep"));
-
-        app.context.input.press_key(key('W'));
-        app.tick(1.0 / 60.0);
-        // Waking returns to idle for the one frame (the original's `wakeUp`),
-        // then the free state follows the held key into a walk.
-        assert!(
-            is_role(&app, playing(&app), "idle"),
-            "woke to idle: {:?}",
-            playing(&app)
-        );
-        app.tick(1.0 / 60.0);
-        assert!(
-            is_role(&app, playing(&app), "walk"),
-            "then walked: {:?}",
-            playing(&app)
-        );
-    }
-
-    #[test]
-    fn the_idle_take_cycles_on_each_entry() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        // The model's first idle take, on the frame the world is built.
-        let first = playing(&app);
-        assert!(is_role(&app, first, "idle"), "{first:?}");
-
-        // Walk a step, then stop: re-entering idle takes the next take.
-        app.context.input.press_key(key('W'));
-        app.tick(1.0 / 60.0);
-        app.context.input.release_key(key('W'));
-        app.tick(1.0 / 60.0);
-        let second = playing(&app);
-        assert!(is_role(&app, second, "idle"), "{second:?}");
-        assert_ne!(
-            first, second,
-            "the idle take advanced: {first:?} then {second:?}"
-        );
-    }
-
-    #[test]
-    fn a_turns_left_and_d_turns_right() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-        let root = goat_root(&app);
-
-        // The goat's world forward (it faces its local `+X`). Turning left
-        // swings it toward `-Z`, turning right toward `+Z`.
-        let forward_z = |app: &App| {
-            app.context
-                .scene
-                .world
-                .get::<LocalTransform>(root)
-                .expect("a transform")
-                .rotation
-                .rotate_vec3(math::vec3(1.0, 0.0, 0.0))
-                .z
-        };
-
-        app.context.input.press_key(key('A'));
-        for _ in 0..10 {
-            app.tick(1.0 / 60.0);
-        }
-        assert!(forward_z(&app) < -0.1, "A turned left: {}", forward_z(&app));
-
-        app.context.input.release_key(key('A'));
-        app.context.input.press_key(key('D'));
-        for _ in 0..20 {
-            app.tick(1.0 / 60.0);
-        }
-        assert!(forward_z(&app) > 0.1, "D turned right: {}", forward_z(&app));
-    }
-
-    #[test]
-    fn running_to_empty_exhausts_the_goat_to_a_walk() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        app.context.input.press_key(key('W'));
-        app.context.input.press_key(Key::ShiftLeft);
-        for _ in 0..1600 {
-            app.tick(1.0 / 60.0);
-        }
-        // Energy ran out, so the gait is capped to a walk even with Shift held.
-        assert!(
-            is_role(&app, playing(&app), "walk"),
-            "the exhausted goat walks: {:?}",
-            playing(&app)
-        );
-    }
-
-    #[test]
-    fn exhaustion_kills_the_goat_and_r_starts_a_new_life() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-        let root = goat_root(&app);
-
-        app.context.input.press_key(key('W'));
-        app.context.input.press_key(Key::ShiftLeft);
-        for _ in 0..3600 {
-            app.tick(1.0 / 60.0);
-        }
-        assert!(
-            is_role(&app, playing(&app), "death"),
-            "the goat died: {:?}",
-            playing(&app)
-        );
-
-        // `R` starts a new life back at the origin.
-        app.context.input.release_key(key('W'));
-        app.context.input.release_key(Key::ShiftLeft);
-        app.context.input.press_key(key('R'));
-        app.tick(1.0 / 60.0);
-        assert!(
-            is_role(&app, playing(&app), "idle"),
-            "restarted: {:?}",
-            playing(&app)
-        );
-        let at = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(root)
-            .expect("a transform")
-            .translation;
-        assert!(
-            at.x.abs() < 1e-3 && at.z.abs() < 1e-3,
-            "back at the origin: {at:?}"
-        );
-    }
-
-    #[test]
-    fn an_exhausted_idle_goat_drops_off_to_sleep() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        app.context.input.press_key(key('W'));
-        app.context.input.press_key(Key::ShiftLeft);
-        for _ in 0..1600 {
-            app.tick(1.0 / 60.0);
-        }
-        // Stop; exhausted and still, it falls asleep after the delay.
-        app.context.input.release_key(key('W'));
-        app.context.input.release_key(Key::ShiftLeft);
-        for _ in 0..140 {
-            app.tick(1.0 / 60.0);
-        }
-        assert!(
-            is_role(&app, playing(&app), "sleep"),
-            "dropped off: {:?}",
-            playing(&app)
-        );
-    }
-
     /// A bare goat for exercising the eat logic without a world.
     fn lone_goat() -> Goat {
         Goat {
@@ -1756,31 +1360,6 @@ mod tests {
     }
 
     #[test]
-    fn the_plugin_spawns_the_meadow() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-
-        assert!(
-            app.context
-                .scene
-                .world
-                .query::<Name>()
-                .any(|(_, name)| name.as_str() == "Meadow"),
-            "the meadow entity was spawned"
-        );
-        assert!(app.context.assets.materials.handle("grass/tuft").is_some());
-        let mesh = app
-            .context
-            .assets
-            .meshes
-            .handle("grass/meadow")
-            .and_then(|handle| app.context.assets.meshes.get(handle))
-            .expect("the meadow mesh");
-        assert!(!mesh.vertices.is_empty(), "the meadow has tufts at spawn");
-    }
-
-    #[test]
     fn the_goat_materials_carry_distinct_textures() {
         let loaded = load_gltf_bytes(GOAT_GLB).expect("import");
         let mut assets = AssetRegistry::with_defaults();
@@ -1807,179 +1386,5 @@ mod tests {
         // handle that names nothing would silently bind the white fallback).
         assert!(assets.textures.get(fur.base_color_texture).is_some());
         assert!(assets.textures.get(fur.normal_texture).is_some());
-    }
-
-    #[test]
-    fn the_environment_asset_is_a_usable_sky() {
-        // The project's `[render] environment`. The engine's fallback is a fully
-        // white, fully-lit environment, which overexposes anything pale (the goat
-        // went flat white); a real sky gives a moderate ambient instead.
-        let bytes = std::fs::read("assets/hdris/meadow.hdr").expect("the environment file");
-        let hdr = load_hdr_bytes("meadow", &bytes).expect("a decodable Radiance HDR");
-
-        assert!(
-            hdr.width >= 64 && hdr.height >= 32,
-            "a usable sky resolution"
-        );
-        assert_eq!(
-            hdr.data.len(),
-            (hdr.width * hdr.height * 3) as usize,
-            "linear RGB samples"
-        );
-        let avg = hdr.data.iter().sum::<f32>() / hdr.data.len() as f32;
-        assert!(
-            (0.1..0.8).contains(&avg),
-            "a moderate sky radiance: bright enough to light, dim enough not to clip ({avg})"
-        );
-    }
-
-    /// The distance from the active camera to the goat (the orbit's target).
-    fn camera_distance(app: &App) -> f32 {
-        let scene = &app.context.scene.world;
-        let cam = scene
-            .query::<Camera>()
-            .find(|(_, camera)| camera.is_active)
-            .map(|(entity, _)| entity)
-            .expect("an active camera");
-        let pos = scene
-            .get::<LocalTransform>(cam)
-            .expect("a camera transform")
-            .translation;
-        let root_y = scene
-            .get::<LocalTransform>(goat_root(app))
-            .expect("a goat transform")
-            .translation
-            .y;
-        math::length(pos - math::vec3(0.0, root_y + EYE_HEIGHT, 0.0))
-    }
-
-    #[test]
-    fn the_wheel_dollies_the_camera_a_fraction_of_a_unit() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        // Tests build no scene, so give the plugin a camera to orbit about.
-        let cam = app.context.scene.world.spawn_with(Camera {
-            is_active: true,
-            ..Camera::default()
-        });
-        app.context.scene.world.insert(
-            cam,
-            LocalTransform::from_translation(math::vec3(0.0, 4.5, 9.0)),
-        );
-        app.tick(1.0 / 60.0); // build the world and seed the orbit
-        let before = camera_distance(&app);
-
-        // One wheel notch is 40 scroll points; the camera should creep ~0.4 units
-        // closer rather than slam to the near limit.
-        app.context.input.add_scroll(40.0);
-        app.tick(1.0 / 60.0);
-        let after = camera_distance(&app);
-        assert!(
-            (before - after - 0.4).abs() < 0.05,
-            "one notch dollies ~0.4 units: {before} -> {after}"
-        );
-    }
-
-    #[test]
-    fn the_camera_stays_above_the_ground() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        let cam = app.context.scene.world.spawn_with(Camera {
-            is_active: true,
-            ..Camera::default()
-        });
-        app.context.scene.world.insert(
-            cam,
-            LocalTransform::from_translation(math::vec3(0.0, 4.5, 9.0)),
-        );
-        app.tick(1.0 / 60.0);
-
-        // Drag to swing the camera under the goat, and dolly well out.
-        app.context.input.press_mouse(MouseButton::Left);
-        app.context.input.add_mouse_motion(0.0, -4000.0);
-        app.context.input.add_scroll(400.0);
-        app.tick(1.0 / 60.0);
-
-        let pos = app
-            .context
-            .scene
-            .world
-            .get::<LocalTransform>(cam)
-            .expect("a camera transform")
-            .translation;
-        assert!(
-            pos.y > terrain::height(pos.x, pos.z),
-            "the camera is above the ground: y {} vs {}",
-            pos.y,
-            terrain::height(pos.x, pos.z)
-        );
-    }
-
-    /// The vertex count of the meadow mesh currently registered.
-    fn meadow_vertices(app: &App) -> usize {
-        let handle = app
-            .context
-            .assets
-            .meshes
-            .handle("grass/meadow")
-            .expect("the meadow mesh");
-        app.context
-            .assets
-            .meshes
-            .get(handle)
-            .expect("the meadow mesh is registered")
-            .vertices
-            .len()
-    }
-
-    /// The weather line the plugin published this frame.
-    fn weather_line(app: &App) -> String {
-        app.context.screen_text.get(1).cloned().unwrap_or_default()
-    }
-
-    #[test]
-    fn rain_raises_the_water_and_hides_the_tufts_it_reaches() {
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0); // build the world on a clear day
-        let dry = meadow_vertices(&app);
-
-        // Force the weather through to rain (Clear -> Cloudy -> Rain)...
-        app.context.input.press_key(key('C'));
-        app.tick(1.0 / 60.0);
-        app.context.input.release_key(key('C'));
-        app.context.input.press_key(key('C'));
-        // ...and let the rain ease up and fill the table.
-        for _ in 0..(8 * 60) {
-            app.tick(1.0 / 60.0);
-        }
-
-        let wet = meadow_vertices(&app);
-        assert!(
-            wet < dry,
-            "the water hid the tufts it reached: {dry} -> {wet}"
-        );
-    }
-
-    #[test]
-    fn the_spawn_bowl_stays_dry_under_the_heaviest_rain() {
-        // The bowl the goat spawns in sits at the table's own ceiling, so even a
-        // downpour leaves the goat's feet dry — the HUD never reports water there.
-        let mut app = App::new("test");
-        Goats.build(&mut app);
-        app.tick(1.0 / 60.0);
-        app.context.input.press_key(key('C'));
-        app.tick(1.0 / 60.0);
-        app.context.input.release_key(key('C'));
-        app.context.input.press_key(key('C'));
-        for _ in 0..(8 * 60) {
-            app.tick(1.0 / 60.0);
-        }
-
-        assert!(
-            !weather_line(&app).contains("water"),
-            "the spawn bowl is dry: {}",
-            weather_line(&app)
-        );
     }
 }

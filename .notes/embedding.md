@@ -18,19 +18,24 @@ is and [`.notes/core-api.md`](core-api.md) for the frozen `math`/`ecs` contract.
 2. **Scripts read and write custom components.** JavaScript reaches any registered
    component by name, through one generic, data-driven API, not a per-type binding.
 3. **Shape B: the tool owns `main`; the project supplies a plugin.** A project with
-   Rust is a library crate at its root (a `Cargo.toml` there is the signal) whose
-   type is marked `#[noctis::plugin]`; the tool builds a per-project binary that
-   links the crate and registers the plugin before loading the scene. Dynamic
-   libraries (`cdylib`) are rejected: they need `unsafe` and a stable ABI, which the
-   engine forbids.
+   Rust is a library crate reached from its root (a `Cargo.toml` there is the
+   signal — the root crate itself, or a workspace member the root names as its
+   first default member) whose type is marked `#[noctis::plugin]`; the tool builds
+   a per-project binary that links the crate and registers the plugin before
+   loading the scene. Dynamic libraries (`cdylib`) are rejected: they need
+   `unsafe` and a stable ABI, which the engine forbids.
 4. **The component registry is a first-class engine object.** Component types are
    registered (name, default, serialize, deserialize, editor schema), and the scene
    loader/saver, the editor, the bundler, and the script bridge all consult it.
 
 ## The plugin
 
-A project's Rust lives at the **project root**: a `Cargo.toml` there is what makes
-`noctis` treat the project as carrying Rust — no manifest table is needed. The
+A project's Rust is a **library crate reached from the project root**: a
+`Cargo.toml` there is what makes `noctis` treat the project as carrying Rust — no
+manifest table is needed. The root manifest is either the plugin crate itself, or
+a **virtual workspace** whose first `default-members` (or, failing that, first
+`members`) entry is the plugin crate — so a project can keep its simulation in
+sibling crates and let one member be the plugin (as `examples/goats` does). The
 crate is a **library** that depends on `noctis` **without the `editor` feature**
 and exports one value. The feature matters: the exported game links this crate, so
 `default-features = false` keeps the editor and its authoring UI out of a shipped
@@ -101,11 +106,13 @@ generated `main` (under the project's gitignored `.noctis/tool/`) that depends o
 `noctis` and the plugin crate and calls
 `noctis::dispatch_with_plugin(<crate>::noctis_plugin())` — then runs it as a
 subprocess with the same arguments, so the subcommand behaves exactly as the stock
-tool but with the plugin registered. The plugin's crate name is the root
-`Cargo.toml`'s `[package].name` (`-` normalized to `_`). The binary is cached and
+tool but with the plugin registered. The plugin's crate name is the plugin crate's
+`[package].name` (the root crate, or the workspace default member), with `-`
+normalized to `_`. The binary is cached and
 rebuilt only when the plugin crate or the engine changes, the same way `game_client`
 builds the client on demand today. The generated crate carries an empty `[workspace]`
-table and path dependencies on the plugin (the project root) and on `crates/noctis`,
+table and path dependencies on the plugin (the plugin crate's directory) and on
+`crates/noctis`,
 so it compiles the plugin's component types in.
 
 A `run` wants a playable frame rate, so its tool is built **optimized** whenever

@@ -1,8 +1,9 @@
 # Goats — a Noctis port of the Slag Goat sandbox (`goats/`).
 #
-# The project root is its plugin crate (a `Cargo.toml` and `src/lib.rs`, whose type
-# is marked `#[noctis::plugin]`). M0 loads the goat model and the terrain and drives
-# an orbit camera; see README.md and .notes/goats.md for the design.
+# The project root is its plugin crate: a `Cargo.toml` here (whose `[lib]` points
+# at `crates/plugin`) is what makes `noctis` treat the project as carrying Rust.
+# The simulation it drives is the `goats` crate in `crates/goats`. See README.md
+# and .notes/goats.md for the design.
 
 [project]
 name = "Goats"
