@@ -24,6 +24,7 @@
 
 #![forbid(unsafe_code)]
 
+mod fx;
 mod grass;
 mod hazards;
 pub mod terrain;
@@ -221,6 +222,12 @@ const SHAKE_POS: f32 = 0.28;
 const SHAKE_ANGLE: f32 = 0.05;
 /// The shove's upward share, so a knock rocks the view as well as shifting it.
 const SHAKE_LIFT: f32 = 0.45;
+
+/// Billboard entities reserved for the bang's sprites (a bang uses four, up to
+/// twenty with the grit).
+const FX_ENTITIES: usize = 64;
+/// Billboard entities reserved for the mine "tell" (a handful at most).
+const TELL_ENTITIES: usize = 8;
 
 /// The orbit camera's state, about the goat.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -763,6 +770,14 @@ pub struct World {
     sky_time: f32,
     /// The water surface entity, moved to the table's level each frame.
     water_surface: Entity,
+    /// The bang's fire, smoke and grit (M5).
+    fx: fx::Fx,
+    /// The generated fx atlases (a texture handle for the "tell").
+    fx_textures: fx::FxTextures,
+    /// Pooled billboard entities the fx sprites are written onto.
+    fx_entities: Vec<Entity>,
+    /// Pooled billboard entities for the mine "tell".
+    tell_entities: Vec<Entity>,
     /// The bang's flash light (M5).
     flash: Flash,
     /// The camera's knock from nearby bangs (M5).
@@ -813,6 +828,14 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &world.craters,
         dt,
     );
+    // ...and its fire, smoke and grit: a burst per bang, then the pool advanced and
+    // the sprites written onto the pooled billboard entities.
+    for bang in &bangs {
+        let ground = world.craters.surface(bang.x, bang.z);
+        world.fx.blast(bang.x, bang.z, ground, bang.seed);
+    }
+    world.fx.update(dt);
+    sync_fx(ctx, world);
     // A crater — or its heal — moves the ground: rebuild the mesh, resample the
     // water table, and re-derive the meadow from it.
     let ground_changed = world.craters.revision() != world.crater_rev;
@@ -1095,6 +1118,85 @@ fn present_bangs(
     }
 }
 
+/// Write the fx pool's sprites onto the pooled billboard entities, and the mine
+/// "tell" for the armed mines in reach. A pool entity with no sprite is hidden, so
+/// a quiet frame draws no sprites at all.
+fn sync_fx(ctx: &mut EngineContext, world: &mut World) {
+    let visuals = world.fx.visuals();
+    for (i, entity) in world.fx_entities.iter().copied().enumerate() {
+        match visuals.get(i) {
+            Some(visual) => {
+                ctx.scene.world.insert(entity, visual.billboard);
+                if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(entity) {
+                    transform.translation = visual.position;
+                }
+                ctx.scene.world.insert(entity, Visible(true));
+            }
+            None => {
+                ctx.scene.world.insert(entity, Visible(false));
+            }
+        }
+    }
+
+    let tells = tell_positions(world.goat.x, world.goat.z, &world.hazards, &world.craters);
+    for (i, entity) in world.tell_entities.iter().copied().enumerate() {
+        match tells.get(i) {
+            Some(position) => {
+                ctx.scene.world.insert(
+                    entity,
+                    Billboard {
+                        texture: world.fx_textures.dust,
+                        size: math::vec2(fx::TELL_SIZE, fx::TELL_SIZE),
+                        color: fx::TELL_TINT,
+                        blend: BillboardBlend::Alpha,
+                        depth_test: true,
+                        ..Billboard::default()
+                    },
+                );
+                if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(entity) {
+                    transform.translation = *position;
+                }
+                ctx.scene.world.insert(entity, Visible(true));
+            }
+            None => {
+                ctx.scene.world.insert(entity, Visible(false));
+            }
+        }
+    }
+}
+
+/// The world points of the armed mines within [`fx::TELL`] of the goat — a faint
+/// disturbed-earth patch so a minefield is not wholly invisible (`scanMineTells`).
+fn tell_positions(
+    goat_x: f32,
+    goat_z: f32,
+    hazards: &hazards::Hazards,
+    craters: &terrain::Craters,
+) -> Vec<Vec3> {
+    let mut out = Vec::new();
+    let limit = fx::TELL * fx::TELL;
+    let cx0 = ((goat_x - fx::TELL) * 0.5).floor() as i32;
+    let cx1 = ((goat_x + fx::TELL) * 0.5).floor() as i32;
+    let cz0 = ((goat_z - fx::TELL) * 0.5).floor() as i32;
+    let cz1 = ((goat_z + fx::TELL) * 0.5).floor() as i32;
+    for cx in cx0..=cx1 {
+        for cz in cz0..=cz1 {
+            if !hazards.mine_armed(cx, cz) {
+                continue;
+            }
+            let mx = (cx * 2 + 1) as f32;
+            let mz = (cz * 2 + 1) as f32;
+            let dx = mx - goat_x;
+            let dz = mz - goat_z;
+            if dx * dx + dz * dz > limit {
+                continue;
+            }
+            out.push(math::vec3(mx, craters.surface(mx, mz) + 0.04, mz));
+        }
+    }
+    out
+}
+
 /// Advance the orbit camera about `target` from player input.
 fn drive_camera(
     ctx: &mut EngineContext,
@@ -1323,6 +1425,23 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let sky = spawn_sky(ctx);
     let water_surface = spawn_water(ctx);
     let flash = spawn_flash(ctx);
+    // The bang's look (M5): the generated atlases and the sprite pools.
+    let fx_textures = fx::FxTextures {
+        fire: ctx
+            .assets
+            .textures
+            .insert_named("fx/blast", fx::fire_atlas()),
+        smoke: ctx
+            .assets
+            .textures
+            .insert_named("fx/smoke", fx::smoke_atlas()),
+        dust: ctx
+            .assets
+            .textures
+            .insert_named("fx/dust", fx::dust_atlas()),
+    };
+    let fx_entities = spawn_billboard_pool(ctx, "Fx", FX_ENTITIES);
+    let tell_entities = spawn_billboard_pool(ctx, "Tell", TELL_ENTITIES);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1339,12 +1458,34 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         sky,
         sky_time: 0.0,
         water_surface,
+        fx: fx::Fx::new(fx_textures),
+        fx_textures,
+        fx_entities,
+        tell_entities,
         flash: Flash {
             light: flash,
             left: 0.0,
         },
         shake: Shake::default(),
     })
+}
+
+/// A pool of hidden billboard entities the simulation writes sprites onto each
+/// frame (`sync_fx`). Spawning them once avoids per-burst entity churn; a pool
+/// entity with no sprite is `Visible(false)`, so it draws nothing.
+fn spawn_billboard_pool(ctx: &mut EngineContext, name: &str, count: usize) -> Vec<Entity> {
+    (0..count)
+        .map(|i| {
+            let entity = ctx.scene.world.spawn();
+            ctx.scene
+                .world
+                .insert(entity, Name::new(format!("{name} {i}")));
+            ctx.scene.world.insert(entity, LocalTransform::default());
+            ctx.scene.world.insert(entity, Visible(false));
+            ctx.scene.world.insert(entity, Billboard::default());
+            entity
+        })
+        .collect()
 }
 
 /// Build the ground mesh and put it in the scene under one entity.

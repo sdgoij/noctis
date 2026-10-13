@@ -103,6 +103,9 @@ pub struct Bang {
     pub x: f32,
     /// World Z of the blast centre.
     pub z: f32,
+    /// The blast's own variation stream, so its look is the same for everyone who
+    /// sees it (the original's `seed`).
+    pub seed: f32,
     /// The blast's reach at the goat: `1.0` at its feet, falling to `0.0` at the
     /// rim and `0.0` out of reach — the same falloff the damage and the fling use.
     pub impact: f32,
@@ -190,6 +193,7 @@ impl Hazards {
         let mut bang = Bang {
             x,
             z,
+            seed,
             impact: 0.0,
             shove: (0.0, 0.0),
         };

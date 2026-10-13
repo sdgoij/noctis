@@ -206,3 +206,78 @@ fn a_bang_flares_the_flash_and_knocks_the_camera() {
     checks.check("and the camera settles", sim.shake() == 0.0, sim.shake());
     checks.finish();
 }
+
+#[test]
+fn a_bang_shows_fire_smoke_and_grit() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+    checks.check(
+        "the fx pool starts quiet",
+        sim.fx_live() == 0,
+        sim.fx_live(),
+    );
+
+    let Some((mx, mz)) = sim.first_armed_mine() else {
+        panic!("the derived field has an armed mine in the near field");
+    };
+    sim.place_goat(mx, mz);
+    let mut banged = false;
+    for _ in 0..40 {
+        sim.run(1);
+        if sim.craters().dip_at(mx, mz) < 0.0 {
+            banged = true;
+            break;
+        }
+    }
+    checks.check("the mine banged", banged, sim.craters().dip_at(mx, mz));
+    let at_bang = sim.fx_live();
+    checks.check("the bang threw fire, smoke and grit", at_bang >= 4, at_bang);
+    checks.check(
+        "and drew their sprites",
+        sim.visible_sprites() > 0,
+        sim.visible_sprites(),
+    );
+
+    // The fireball burns out first. The goat is airborne for the whole window (the
+    // fling is ~0.9 s), so no second bang can land and throw more.
+    sim.run(35);
+    checks.check(
+        "the fireball burns out first",
+        sim.fx_live() < at_bang,
+        (at_bang, sim.fx_live()),
+    );
+    checks.finish();
+}
+
+#[test]
+fn an_armed_mine_shows_its_tell() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+    let Some((mx, mz)) = sim.first_armed_mine() else {
+        panic!("the derived field has an armed mine in the near field");
+    };
+
+    // Within the tell (3 m) but clear of the trigger (0.6 m), asleep so nothing trips.
+    sim.place_goat_asleep(mx + 1.5, mz + 1.5);
+    sim.run(1);
+    checks.check("the fx pool stays quiet", sim.fx_live() == 0, sim.fx_live());
+    checks.check(
+        "an armed mine in reach shows its tell",
+        sim.visible_sprites() >= 1,
+        sim.visible_sprites(),
+    );
+
+    // The spawn's safe disc holds no mines, so out of range the tell is gone.
+    sim.place_goat_asleep(0.0, 0.0);
+    sim.run(1);
+    checks.check(
+        "and hides out of range",
+        sim.visible_sprites() == 0,
+        sim.visible_sprites(),
+    );
+    checks.finish();
+}

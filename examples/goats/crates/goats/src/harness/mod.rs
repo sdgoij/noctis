@@ -86,6 +86,13 @@ impl Sim {
         self.world.goat.z = z;
     }
 
+    /// Stand the goat at `(x, z)` asleep, so a case about the world's *look* (a
+    /// tell, the fx pool) cannot trip a device under it.
+    pub fn place_goat_asleep(&mut self, x: f32, z: f32) {
+        self.place_goat(x, z);
+        self.world.goat.mode = crate::Mode::Sleep;
+    }
+
     /// Set the weather's rain, holding the state it belongs to so `update` does
     /// not ease it away (the original's `rainAmount`).
     pub fn set_rain(&mut self, rain: f32) {
@@ -204,6 +211,24 @@ impl Sim {
     /// The camera knock's strength now (`0` when steady).
     pub fn shake(&self) -> f32 {
         self.world.shake.strength()
+    }
+
+    /// How many fx instances (fire, smoke, grit) are live.
+    pub fn fx_live(&self) -> usize {
+        self.world.fx.live()
+    }
+
+    /// How many pooled billboard sprites are visible this frame (the fx pool and the
+    /// mine "tell").
+    pub fn visible_sprites(&self) -> usize {
+        self.ctx
+            .scene
+            .world
+            .query::<Visible>()
+            .filter(|(entity, visible)| {
+                visible.0 && self.ctx.scene.world.get::<Billboard>(*entity).is_some()
+            })
+            .count()
     }
 
     /// The goat root's world height (the drawn `y`).
