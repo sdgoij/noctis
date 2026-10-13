@@ -279,6 +279,15 @@ pub struct RenderSettings {
     /// neutral, fully-lit environment.
     #[serde(default)]
     pub environment: Option<String>,
+    /// The tonemap exposure: a master brightness for the whole image. `1.0` leaves
+    /// the linear radiance as-is; lower dims it, higher brightens it.
+    #[serde(default = "default_exposure")]
+    pub exposure: f32,
+}
+
+/// The default `[render] exposure` — unchanged linear radiance.
+fn default_exposure() -> f32 {
+    1.0
 }
 
 impl Default for RenderSettings {
@@ -287,6 +296,7 @@ impl Default for RenderSettings {
             hdr: true,
             sample_count: 1,
             environment: None,
+            exposure: 1.0,
         }
     }
 }
@@ -538,6 +548,17 @@ platform = "linux"
 
         let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
         assert_eq!(none.render.environment, None);
+    }
+
+    #[test]
+    fn parses_a_render_exposure() {
+        let manifest =
+            ProjectManifest::from_toml("[project]\nname = \"T\"\n[render]\nexposure = 0.4\n")
+                .expect("a numeric exposure parses");
+        assert!((manifest.render.exposure - 0.4).abs() < 1e-9);
+        // Absent, it defaults to the identity exposure.
+        let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        assert!((none.render.exposure - 1.0).abs() < 1e-9);
     }
 
     #[test]

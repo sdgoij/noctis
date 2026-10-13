@@ -31,7 +31,7 @@ impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
     /// Apply the project's `[render] environment` to the window host's renderer,
     /// so a windowed run gets the same image-based lighting as a headless one.
     fn configure_renderer(&self, renderer: &mut render::Renderer) {
-        self.apply_environment(renderer);
+        self.apply_render_settings(renderer);
     }
 
     fn update(&mut self, dt: f32) {

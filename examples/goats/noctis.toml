@@ -29,3 +29,6 @@ height = 720
 hdr = true
 sample_count = 4
 environment = "assets/hdris/meadow.hdr"
+# The Sun (intensity 2.6) and the meadow IBL together are hot at exposure 1.0, so
+# the whole image is dimmed to sit in range.
+exposure = 0.5

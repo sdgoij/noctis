@@ -62,13 +62,13 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
     let sun_power = user[3].a;
 
     let up = clamp(dir.y, 0.0, 1.0);
-    var col = mix(horizon, zenith, pow(up, 0.55));
+    var col = mix(horizon, zenith, pow(up, 0.30));
     // Below the horizon, darken toward the ground so the terrain seam is soft.
     col = mix(col, horizon * 0.35, clamp(-dir.y * 3.0, 0.0, 1.0));
 
     let sun = max(dot(dir, sun_dir), 0.0);
-    col = col + sun_col * pow(sun, 6.0) * 0.25 * sun_power;
-    col = col + sun_col * smoothstep(0.9995, 0.9999, sun) * 8.0 * sun_power;
+    col = col + sun_col * pow(sun, 8.0) * 0.08 * sun_power;
+    col = col + sun_col * smoothstep(0.9995, 0.9999, sun) * 2.5 * sun_power;
     return vec4<f32>(col, 1.0);
 }
 "#;
@@ -1037,16 +1037,16 @@ fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
     ));
     let mix = |a: Vec3, b: Vec3, t: f32| a + (b - a) * t;
     let zenith = mix(
-        math::vec3(0.05, 0.13, 0.32),
-        math::vec3(0.20, 0.21, 0.24),
+        math::vec3(0.015, 0.05, 0.15),
+        math::vec3(0.10, 0.11, 0.14),
         rain,
     );
     let horizon = mix(
-        math::vec3(0.55, 0.66, 0.80),
-        math::vec3(0.34, 0.35, 0.38),
+        math::vec3(0.18, 0.25, 0.36),
+        math::vec3(0.17, 0.18, 0.21),
         rain,
     );
-    let sun_color = math::vec3(1.0, 0.96, 0.85) * (1.0 - 0.8 * rain);
+    let sun_color = math::vec3(1.0, 0.95, 0.82) * (1.0 - 0.8 * rain);
     vec![
         zenith.x,
         zenith.y,

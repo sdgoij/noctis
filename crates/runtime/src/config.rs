@@ -36,6 +36,9 @@ pub struct RuntimeConfig {
     /// from (the project's `[render] environment`). `None` uses the renderer's
     /// neutral, fully-lit fallback.
     pub environment: Option<AssetHandle<HdrTexture>>,
+    /// The tonemap exposure (the project's `[render] exposure`): a master brightness
+    /// for the whole image.
+    pub exposure: f32,
 }
 
 impl Default for RuntimeConfig {
@@ -46,6 +49,7 @@ impl Default for RuntimeConfig {
             gravity: vec3(0.0, -9.81, 0.0),
             timestep: 1.0 / 60.0,
             environment: None,
+            exposure: 1.0,
         }
     }
 }
@@ -85,6 +89,12 @@ impl RuntimeConfig {
         self
     }
 
+    /// Builder: set the tonemap exposure (a master brightness).
+    pub fn with_exposure(mut self, exposure: f32) -> Self {
+        self.exposure = exposure.max(0.0);
+        self
+    }
+
     /// Apply the settings a project's manifest implies: gravity from
     /// `[project.settings]` and the IBL environment from `[render] environment`
     /// (looked up in `assets`, which must already hold the imported HDRIs).
@@ -100,6 +110,7 @@ impl RuntimeConfig {
     ) -> Result<(), String> {
         let gravity = project.manifest().project.settings.gravity;
         self.gravity = vec3(gravity[0], gravity[1], gravity[2]);
+        self.exposure = project.manifest().render.exposure.max(0.0);
         if let Some(path) = project.manifest().render.environment.as_deref() {
             let handle = assets.hdr.handle(path).ok_or_else(|| {
                 format!(
@@ -123,6 +134,10 @@ mod tests {
         assert!(config.audio);
         assert!(vec3_approx_eq(config.gravity, vec3(0.0, -9.81, 0.0), 1e-6));
         assert!((config.timestep - 1.0 / 60.0).abs() < 1e-9);
+        assert!(
+            (config.exposure - 1.0).abs() < 1e-9,
+            "exposure defaults to 1.0"
+        );
         assert!(config.environment.is_none(), "no environment by default");
     }
 
@@ -153,7 +168,7 @@ mod tests {
 
         let manifest = project::ProjectManifest::from_toml(
             "[project]\nname = \"P\"\n[project.settings]\ngravity = [0.0, -3.0, 0.0]\n\
-             [render]\nenvironment = \"assets/sky.hdr\"\n",
+             [render]\nenvironment = \"assets/sky.hdr\"\nexposure = 0.5\n",
         )
         .unwrap();
         let project = project::Project::from_manifest("/tmp/game", manifest);
@@ -173,6 +188,10 @@ mod tests {
         config.apply_project(&project, &assets).expect("apply");
         assert!(vec3_approx_eq(config.gravity, vec3(0.0, -3.0, 0.0), 1e-6));
         assert_eq!(config.environment, Some(handle));
+        assert!(
+            (config.exposure - 0.5).abs() < 1e-9,
+            "the exposure is taken"
+        );
 
         // A named environment that did not import is an error, not a silent
         // fallback to the white neutral IBL.

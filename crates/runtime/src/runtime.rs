@@ -32,7 +32,7 @@ use ecs::assets::ScriptAsset;
 use ecs::components::{LocalTransform, RigidBody};
 use ecs::scene::{Scene, instantiate_into_with, propagate_transforms};
 use physics::PhysicsWorld;
-use render::{Frame, IblConfig, Renderer};
+use render::{Frame, IblConfig, Renderer, Tonemap};
 #[cfg(not(target_arch = "wasm32"))]
 use render::{RenderError, RendererConfig};
 use script::{NoopHost, PhysicsView, ScriptCommand, ScriptHost, ScriptRuntime};
@@ -620,7 +620,7 @@ impl<H: ScriptHost + 'static> Runtime<H> {
     pub fn enable_renderer(&mut self, config: RendererConfig) -> Result<(), RenderError> {
         match Renderer::headless(config) {
             Ok(mut renderer) => {
-                self.apply_environment(&mut renderer);
+                self.apply_render_settings(&mut renderer);
                 self.renderer = Some(renderer);
                 Ok(())
             }
@@ -635,16 +635,18 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         }
     }
 
-    /// Precompute and upload the configured IBL environment into `renderer`.
+    /// Apply the project's render settings to `renderer`: the tonemap exposure and
+    /// the IBL environment.
     ///
     /// Called from both renderer paths — the headless one here, and the
-    /// windowed host through [`AppDriver::configure_renderer`] — so a project's
-    /// `[render] environment` applies however the game is run. A configured but
-    /// unloaded environment is a warning, not a failure: the renderer keeps its
-    /// neutral fallback so a game still runs.
+    /// windowed host through [`AppDriver::configure_renderer`] — so the settings
+    /// apply however the game is run. A configured but unloaded environment is a
+    /// warning, not a failure: the renderer keeps its neutral fallback so a game
+    /// still runs.
     ///
     /// [`AppDriver::configure_renderer`]: platform::AppDriver::configure_renderer
-    pub(crate) fn apply_environment(&self, renderer: &mut Renderer) {
+    pub(crate) fn apply_render_settings(&self, renderer: &mut Renderer) {
+        renderer.set_tonemap(self.config.exposure, Tonemap::Aces);
         let Some(handle) = self.config.environment else {
             return;
         };
