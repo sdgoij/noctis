@@ -2,9 +2,10 @@
 //!
 //! The goat model loads as a skinned mesh, the ground is a mesh built from the
 //! original's own noise function ([`terrain`]), and the goat walks the meadow
-//! under an orbit camera. Locomotion is the first slice of M1 (see
-//! `.notes/goats.md`): a gait chosen from input drives a baked clip through the
-//! engine's `Animator`, and the root moves at that gait's authored speed.
+//! under an orbit camera. This is M1 of the port (see `.notes/goats.md`): the
+//! goat's locomotion state machine — idle, its three gaits, a jump and sleep —
+//! driven from input, where each state plays a baked clip through the engine's
+//! `Animator` and the root moves at the state's authored speed.
 
 #![forbid(unsafe_code)]
 
@@ -97,7 +98,109 @@ impl Orbit {
     }
 }
 
-/// The spawned goat: its root, its resting height offset, and its gait clips.
+/// The goat's locomotion state — the original's `mode`.
+///
+/// The original also has `flung`, `eat` and `dead`; those arrive with the
+/// milestones that cause them — the blasts, the food and the energy system
+/// (`.notes/goats.md` M2/M3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Idle,
+    Walk,
+    Trot,
+    Run,
+    Jump,
+    Sleep,
+}
+
+impl Mode {
+    /// Whether the state's clip is a cycle, or a one-shot the engine holds on
+    /// its last frame (a jump has to land).
+    fn loops(self) -> bool {
+        self != Mode::Jump
+    }
+
+    /// A short label for the HUD.
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Idle => "standing",
+            Mode::Walk => "walking",
+            Mode::Trot => "trotting",
+            Mode::Run => "running",
+            Mode::Jump => "jumping",
+            Mode::Sleep => "sleeping (Z to wake)",
+        }
+    }
+}
+
+/// The goat's clips by role. The gaits are one clip each; idle, jump and sleep
+/// have several takes the goat cycles through, exactly as the original's
+/// `VARIANTS` do.
+#[derive(Default)]
+struct Clips {
+    idle: Vec<AssetHandle<AnimationClip>>,
+    walk: AssetHandle<AnimationClip>,
+    trot: AssetHandle<AnimationClip>,
+    run: AssetHandle<AnimationClip>,
+    jump: Vec<AssetHandle<AnimationClip>>,
+    sleep: Vec<AssetHandle<AnimationClip>>,
+}
+
+impl Clips {
+    /// The clip for `mode`, choosing `variant` among a role's takes and falling
+    /// back to the walk for any role the model lacks (the original's `clipRole`
+    /// falls back the same way).
+    fn pick(&self, mode: Mode, variant: i32) -> AssetHandle<AnimationClip> {
+        match mode {
+            Mode::Idle => at(&self.idle, variant),
+            Mode::Walk => Some(self.walk),
+            Mode::Trot => Some(self.trot),
+            Mode::Run => Some(self.run),
+            Mode::Jump => at(&self.jump, variant),
+            Mode::Sleep => at(&self.sleep, variant),
+        }
+        .unwrap_or(self.walk)
+    }
+}
+
+/// The `variant`-th handle in `list`, wrapping negatives like the original's
+/// `clipAt` (`((v % n) + n) % n`), or `None` when the list is empty.
+fn at(list: &[AssetHandle<AnimationClip>], variant: i32) -> Option<AssetHandle<AnimationClip>> {
+    let n = list.len() as i32;
+    (n > 0).then(|| list[((variant % n + n) % n) as usize])
+}
+
+/// The next take after `current` among `count`, or `current` when there is
+/// nothing to cycle (the original only advances a role with more than one clip).
+fn advance(current: i32, count: usize) -> i32 {
+    if count > 1 {
+        (current + 1).rem_euclid(count as i32)
+    } else {
+        current
+    }
+}
+
+/// Which take of each multi-variant role plays next. `idle` starts at `0` and
+/// the others at `-1`, so the first *re-*entered idle is the second take while
+/// the first jump and sleep are the first — the original's `playerVariant`.
+#[derive(Clone, Copy)]
+struct Variants {
+    idle: i32,
+    jump: i32,
+    sleep: i32,
+}
+
+impl Default for Variants {
+    fn default() -> Self {
+        Self {
+            idle: 0,
+            jump: -1,
+            sleep: -1,
+        }
+    }
+}
+
+/// The spawned goat: its root, its resting height offset, and its locomotion.
 struct Goat {
     /// The entity that carries the whole imported model.
     root: Entity,
@@ -110,30 +213,77 @@ struct Goat {
     z: f32,
     /// Facing, radians about `+Y`.
     yaw: f32,
-    /// The gait clips, by intent.
-    idle: AssetHandle<AnimationClip>,
-    walk: AssetHandle<AnimationClip>,
-    trot: AssetHandle<AnimationClip>,
-    run: AssetHandle<AnimationClip>,
+    /// The clips, by role.
+    clips: Clips,
+    /// Which take of a multi-variant role plays next.
+    variant: Variants,
+    /// The locomotion state.
+    mode: Mode,
+    /// Seconds into the current jump.
+    jump_time: f32,
+    /// Ground speed frozen at take-off.
+    jump_speed: f32,
+    /// Travel direction (`-1`/`0`/`1`) frozen at take-off.
+    jump_dir: f32,
+    /// The jump clip's length, so the state ends when its clip does.
+    jump_duration: f32,
 }
 
 impl Goat {
-    /// The clip to play, the ground speed, and whether the goat is reversing.
-    fn gait(&self, input: &InputState) -> (AssetHandle<AnimationClip>, f32, bool) {
-        let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
-        let reversing = down('S');
-        if !down('W') && !reversing {
-            return (self.idle, 0.0, false);
+    /// Enter `mode`, cycling the take of a multi-variant role — the original's
+    /// `cyclePlayerVariant`, called as it enters idle, jump or sleep.
+    fn enter(&mut self, mode: Mode) {
+        if self.mode == mode {
+            return;
         }
-        // `Shift` runs, `Ctrl` trots, otherwise a walk (the original's modifiers).
-        let (clip, speed) = if input.key_down(Key::ShiftLeft) || input.key_down(Key::ShiftRight) {
-            (self.run, RUN_SPEED)
-        } else if input.key_down(Key::ControlLeft) || input.key_down(Key::ControlRight) {
-            (self.trot, TROT_SPEED)
-        } else {
-            (self.walk, WALK_SPEED)
+        self.mode = mode;
+        match mode {
+            Mode::Idle => self.variant.idle = advance(self.variant.idle, self.clips.idle.len()),
+            Mode::Jump => self.variant.jump = advance(self.variant.jump, self.clips.jump.len()),
+            Mode::Sleep => self.variant.sleep = advance(self.variant.sleep, self.clips.sleep.len()),
+            _ => {}
+        }
+    }
+
+    /// The clip playing now, and whether it loops.
+    fn animation(&self) -> (AssetHandle<AnimationClip>, bool) {
+        let variant = match self.mode {
+            Mode::Idle => self.variant.idle,
+            Mode::Jump => self.variant.jump,
+            Mode::Sleep => self.variant.sleep,
+            _ => 0,
         };
-        (clip, speed, reversing)
+        (self.clips.pick(self.mode, variant), self.mode.loops())
+    }
+
+    /// The ground speed of the state — the gaits only; a jump carries its own
+    /// take-off speed and idle and sleep stand still.
+    fn speed(&self) -> f32 {
+        match self.mode {
+            Mode::Walk => WALK_SPEED,
+            Mode::Trot => TROT_SPEED,
+            Mode::Run => RUN_SPEED,
+            _ => 0.0,
+        }
+    }
+
+    /// Take off into a jump at the gait's speed and the given travel direction,
+    /// and note how long the jump clip runs (the original's `startJump`).
+    fn start_jump(&mut self, assets: &AssetRegistry, gait: Mode, direction: f32) {
+        self.enter(Mode::Jump);
+        self.jump_time = 0.0;
+        self.jump_dir = direction;
+        self.jump_speed = match gait {
+            Mode::Run => RUN_SPEED,
+            Mode::Trot => TROT_SPEED,
+            _ => WALK_SPEED,
+        };
+        let (clip, _) = self.animation();
+        self.jump_duration = assets
+            .animations
+            .get(clip)
+            .map(|clip| clip.duration)
+            .unwrap_or(0.0);
     }
 }
 
@@ -187,30 +337,77 @@ impl Plugin for Goats {
 
             let dt = ctx.time.delta();
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+            let state = goats.as_ref().map_or("standing", |goat| goat.mode.label());
             ctx.screen_text = vec![format!(
-                "Goats  |  {fps:.0} fps  |  {:.2} ms  |  W walk, Ctrl trot, Shift run, A/D turn",
+                "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
+                 W walk, Ctrl trot, Shift run, Space jump, Z sleep",
                 dt * 1000.0
             )];
         });
     }
 }
 
-/// Move the goat one frame: turn, choose a gait, step the root and play the clip.
+/// Advance the goat one frame: turn, run the locomotion state machine, step the
+/// root and play the state's clip.
 fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
     let dt = ctx.time.delta();
-    let turn = axis(
-        ctx.input
-            .key_down(Key::letter('D').expect("D is a letter key")),
-        ctx.input
-            .key_down(Key::letter('A').expect("A is a letter key")),
-    );
-    goat.yaw += turn * TURN_RATE * dt;
+    let input = &ctx.input;
+    let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
+    let pressed = |c: char| Key::letter(c).is_some_and(|key| input.key_pressed(key));
 
-    let (clip, speed, reversing) = goat.gait(&ctx.input);
-    let direction = if reversing { -1.0 } else { 1.0 };
-    // The model faces its local `+X`, rotated about `+Y` by yaw.
+    // Turning is locked while asleep; every other state may steer, even a jump.
+    // `A` turns left (it increases `yaw`, the original's `turn += 1` for `A`).
+    if goat.mode != Mode::Sleep {
+        goat.yaw += axis(down('A'), down('D')) * TURN_RATE * dt;
+    }
+
+    // The movement intent, and the gait the modifiers ask for.
+    let move_axis = axis(down('W'), down('S'));
+    let gait = if input.key_down(Key::ShiftLeft) || input.key_down(Key::ShiftRight) {
+        Mode::Run
+    } else if input.key_down(Key::ControlLeft) || input.key_down(Key::ControlRight) {
+        Mode::Trot
+    } else {
+        Mode::Walk
+    };
+
+    // The state machine (the original's `sceneFrame`): a locked state runs to its
+    // end, a free one follows input. Jump and sleep take their key on the press
+    // edge, so one tap is one action.
+    match goat.mode {
+        Mode::Sleep => {
+            if pressed('Z') || move_axis != 0.0 {
+                goat.enter(Mode::Idle);
+            }
+        }
+        Mode::Jump => {
+            goat.jump_time += dt;
+            if goat.jump_time >= goat.jump_duration {
+                goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
+            }
+        }
+        _ => {
+            if pressed('Z') {
+                goat.enter(Mode::Sleep);
+            } else if input.key_pressed(Key::Space) {
+                goat.start_jump(&ctx.assets, gait, move_axis);
+            } else {
+                goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
+            }
+        }
+    }
+
+    // Step the root. A jump travels at the speed and direction frozen at
+    // take-off — its vertical arc is the clip's own root motion — a gait travels
+    // at its ground speed along the goat's heading, and idle and sleep stand
+    // still. The heading is the model's local `+X` rotated about `+Y` by yaw.
     let forward_x = goat.yaw.cos();
     let forward_z = -goat.yaw.sin();
+    let (speed, direction) = match goat.mode {
+        Mode::Jump => (goat.jump_speed, goat.jump_dir),
+        Mode::Sleep => (0.0, 0.0),
+        _ => (goat.speed(), move_axis),
+    };
     goat.x = (goat.x + forward_x * speed * direction * dt).clamp(-FIELD, FIELD);
     goat.z = (goat.z + forward_z * speed * direction * dt).clamp(-FIELD, FIELD);
     let y = terrain::height(goat.x, goat.z) + goat.lift;
@@ -219,12 +416,21 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat) {
         transform.translation = math::vec3(goat.x, y, goat.z);
         transform.rotation = Quat::from_rotation_y(goat.yaw);
     }
+
+    // Play the state's clip; a reversing gait runs its clip backwards.
+    let (clip, looped) = goat.animation();
     if let Some(animator) = ctx.scene.world.get_mut::<Animator>(goat.skinned) {
         if animator.clip != clip {
             animator.clip = clip;
             animator.time = 0.0;
+            animator.playing = true;
         }
-        animator.speed = if reversing { BACK_SPEED } else { 1.0 };
+        animator.looped = looped;
+        animator.speed = if goat.mode == Mode::Jump || move_axis >= 0.0 {
+            1.0
+        } else {
+            BACK_SPEED
+        };
     }
 }
 
@@ -244,9 +450,10 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
         orbit.yaw -= dx * LOOK_SPEED;
         orbit.pitch = (orbit.pitch - dy * LOOK_SPEED).clamp(MIN_PITCH, MAX_PITCH);
     }
+    // `Left` increases the camera's yaw, as the original's `KEY_LEFT` does.
     let turn = axis(
-        ctx.input.key_down(Key::ArrowRight),
         ctx.input.key_down(Key::ArrowLeft),
+        ctx.input.key_down(Key::ArrowRight),
     );
     let tilt = axis(
         ctx.input.key_down(Key::ArrowDown),
@@ -345,17 +552,27 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         return None;
     };
 
-    let idle = clip(&ctx.assets, "GoatIdle");
-    let walk = clip(&ctx.assets, "GoatWalk");
-    let trot = clip(&ctx.assets, "GoatTrot");
-    let run = clip(&ctx.assets, "GoatRun");
-    ctx.scene.world.insert(skinned, Animator::new(idle));
+    // The clips, by role: the gaits are single takes, and idle, jump and sleep
+    // carry every take the model gives them (the original's `VARIANTS`).
+    let role = |needle: &str| variants(&loaded.animations, &handles.animations, needle);
+    let clips = Clips {
+        idle: role("idle"),
+        walk: first(role("walk")),
+        trot: first(role("trot")),
+        run: first(role("run")),
+        jump: role("jump"),
+        sleep: role("sleep"),
+    };
+    ctx.scene
+        .world
+        .insert(skinned, Animator::new(clips.pick(Mode::Idle, 0)));
 
     log::info!(
-        "goat: {} mesh(es), {} node(s), {} triangle(s), lifted {lift:.3}",
+        "goat: {} mesh(es), {} node(s), {} triangle(s), {} clip(s), lifted {lift:.3}",
         loaded.meshes.len(),
         loaded.nodes.len(),
         loaded.triangle_count(),
+        loaded.animations.len(),
     );
     Some(Goat {
         root,
@@ -364,16 +581,35 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         x: 0.0,
         z: 0.0,
         yaw: 0.0,
-        idle,
-        walk,
-        trot,
-        run,
+        clips,
+        variant: Variants::default(),
+        mode: Mode::Idle,
+        jump_time: 0.0,
+        jump_speed: 0.0,
+        jump_dir: 0.0,
+        jump_duration: 0.0,
     })
 }
 
-/// The clip registered under `name`, or the empty handle.
-fn clip(assets: &AssetRegistry, name: &str) -> AssetHandle<AnimationClip> {
-    assets.animations.handle(name).unwrap_or_default()
+/// The handles of every clip whose name contains `needle` (case-insensitively),
+/// in model order — the original's `findClips` over a role's takes (`GoatIdle`,
+/// `GoatIdle2`, `GoatIdle3`, …). `animations` and `handles` are parallel.
+fn variants(
+    animations: &[AnimationClip],
+    handles: &[AssetHandle<AnimationClip>],
+    needle: &str,
+) -> Vec<AssetHandle<AnimationClip>> {
+    animations
+        .iter()
+        .zip(handles)
+        .filter(|(clip, _)| clip.name.to_ascii_lowercase().contains(needle))
+        .map(|(_, &handle)| handle)
+        .collect()
+}
+
+/// The first of a role's clips, or the empty handle.
+fn first(clips: Vec<AssetHandle<AnimationClip>>) -> AssetHandle<AnimationClip> {
+    clips.first().copied().unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -537,5 +773,208 @@ mod tests {
             animator.speed.abs() > 0.0,
             "a gait is playing: {animator:?}"
         );
+    }
+
+    /// The goat's root entity.
+    fn goat_root(app: &App) -> Entity {
+        app.context
+            .scene
+            .world
+            .query::<Name>()
+            .find(|(_, name)| name.as_str() == "Goat Root")
+            .map(|(entity, _)| entity)
+            .expect("the goat root")
+    }
+
+    /// The clip the goat's animator is playing.
+    fn playing(app: &App) -> AssetHandle<AnimationClip> {
+        app.context
+            .scene
+            .world
+            .query::<Animator>()
+            .map(|(_, animator)| animator.clip)
+            .next()
+            .expect("an animator")
+    }
+
+    /// `true` when `clip` is one of the clips whose name contains `needle`.
+    fn is_role(app: &App, clip: AssetHandle<AnimationClip>, needle: &str) -> bool {
+        app.context
+            .assets
+            .animations
+            .get(clip)
+            .is_some_and(|clip| clip.name.to_ascii_lowercase().contains(needle))
+    }
+
+    fn key(c: char) -> Key {
+        Key::letter(c).expect("a letter key")
+    }
+
+    #[test]
+    fn pressing_space_jumps_then_lands_back_in_the_gait() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        let root = goat_root(&app);
+
+        app.context.input.press_key(key('W'));
+        app.tick(1.0 / 60.0);
+        let before = app
+            .context
+            .scene
+            .world
+            .get::<LocalTransform>(root)
+            .expect("a transform")
+            .translation;
+
+        app.context.input.press_key(Key::Space);
+        app.tick(1.0 / 60.0);
+        assert!(
+            is_role(&app, playing(&app), "jump"),
+            "the jump clip plays: {:?}",
+            playing(&app)
+        );
+        let duration = app
+            .context
+            .assets
+            .animations
+            .get(playing(&app))
+            .expect("the jump clip")
+            .duration;
+
+        // The goat keeps travelling while it is airborne.
+        for _ in 0..8 {
+            app.tick(1.0 / 60.0);
+        }
+        let mid = app
+            .context
+            .scene
+            .world
+            .get::<LocalTransform>(root)
+            .expect("a transform")
+            .translation;
+        assert!(
+            mid.x > before.x + 0.05,
+            "airborne travel: {before:?} -> {mid:?}"
+        );
+
+        // It lands, and with `W` still held it takes up the walk again.
+        for _ in 0..(duration * 60.0).ceil() as u32 + 2 {
+            app.tick(1.0 / 60.0);
+        }
+        assert!(
+            is_role(&app, playing(&app), "walk"),
+            "the walk resumed: {:?}",
+            playing(&app)
+        );
+    }
+
+    #[test]
+    fn z_sleeps_and_wakes_the_goat() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        app.context.input.press_key(key('Z'));
+        app.tick(1.0 / 60.0);
+        assert!(
+            is_role(&app, playing(&app), "sleep"),
+            "asleep: {:?}",
+            playing(&app)
+        );
+
+        // A second, fresh press wakes it.
+        app.context.input.release_key(key('Z'));
+        app.context.input.press_key(key('Z'));
+        app.tick(1.0 / 60.0);
+        assert!(
+            is_role(&app, playing(&app), "idle"),
+            "awake: {:?}",
+            playing(&app)
+        );
+    }
+
+    #[test]
+    fn moving_wakes_a_sleeping_goat() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        app.context.input.press_key(key('Z'));
+        app.tick(1.0 / 60.0);
+        assert!(is_role(&app, playing(&app), "sleep"));
+
+        app.context.input.press_key(key('W'));
+        app.tick(1.0 / 60.0);
+        // Waking returns to idle for the one frame (the original's `wakeUp`),
+        // then the free state follows the held key into a walk.
+        assert!(
+            is_role(&app, playing(&app), "idle"),
+            "woke to idle: {:?}",
+            playing(&app)
+        );
+        app.tick(1.0 / 60.0);
+        assert!(
+            is_role(&app, playing(&app), "walk"),
+            "then walked: {:?}",
+            playing(&app)
+        );
+    }
+
+    #[test]
+    fn the_idle_take_cycles_on_each_entry() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        // The model's first idle take, on the frame the world is built.
+        let first = playing(&app);
+        assert!(is_role(&app, first, "idle"), "{first:?}");
+
+        // Walk a step, then stop: re-entering idle takes the next take.
+        app.context.input.press_key(key('W'));
+        app.tick(1.0 / 60.0);
+        app.context.input.release_key(key('W'));
+        app.tick(1.0 / 60.0);
+        let second = playing(&app);
+        assert!(is_role(&app, second, "idle"), "{second:?}");
+        assert_ne!(
+            first, second,
+            "the idle take advanced: {first:?} then {second:?}"
+        );
+    }
+
+    #[test]
+    fn a_turns_left_and_d_turns_right() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        let root = goat_root(&app);
+
+        // The goat's world forward (it faces its local `+X`). Turning left
+        // swings it toward `-Z`, turning right toward `+Z`.
+        let forward_z = |app: &App| {
+            app.context
+                .scene
+                .world
+                .get::<LocalTransform>(root)
+                .expect("a transform")
+                .rotation
+                .rotate_vec3(math::vec3(1.0, 0.0, 0.0))
+                .z
+        };
+
+        app.context.input.press_key(key('A'));
+        for _ in 0..10 {
+            app.tick(1.0 / 60.0);
+        }
+        assert!(forward_z(&app) < -0.1, "A turned left: {}", forward_z(&app));
+
+        app.context.input.release_key(key('A'));
+        app.context.input.press_key(key('D'));
+        for _ in 0..20 {
+            app.tick(1.0 / 60.0);
+        }
+        assert!(forward_z(&app) > 0.1, "D turned right: {}", forward_z(&app));
     }
 }

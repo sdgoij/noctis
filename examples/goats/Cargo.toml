@@ -2,10 +2,11 @@
 #
 # The project root *is* the plugin library crate: a `Cargo.toml` here is what makes
 # `noctis` treat the project as carrying Rust, and `src/lib.rs` exports the plugin
-# with `#[noctis::plugin]`. M0 (the render-path spike, `.notes/goats.md`) loads the
-# goat model as a static mesh and builds the ground from the original's own noise;
-# the simulation and the animation come later. `noctis` is depended on without the
-# `editor` feature — a shipped game must not carry it.
+# with `#[noctis::plugin]`. M0 (the render-path spike, `.notes/goats.md`) loaded the
+# goat model as a skinned mesh and built the ground from the original's own noise;
+# M1 adds the locomotion state machine — idle, the gaits, a jump and sleep — over
+# the engine's skeletal animation. The world simulation comes later. `noctis` is
+# depended on without the `editor` feature — a shipped game must not carry it.
 [package]
 name = "goats"
 version = "0.1.0"

@@ -6,9 +6,9 @@ scenes for the world, and the game's own assets. The goal is the same game — o
 one close enough to read as the same — running in a Noctis window. This document
 is the contract for that port; the engine features it depends on are designed in
 [`.notes/animation.md`](animation.md) (skeletal animation) and, once built, their
-own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike) is
-shipped** as `examples/goats`; the simulation, the animation and the rest are not
-built yet.
+own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike) and
+M1 (locomotion) are shipped** as `examples/goats`; the world simulation and the
+rest are not built yet.
 
 Background: a Noctis *project* carries Rust as a plugin
 ([`.notes/embedding.md`](embedding.md)); its manifest and asset model are
@@ -168,8 +168,10 @@ Single-player sandbox first; each milestone is playable.
    addition: the importer now accepts and applies a glTF material's
    `KHR_texture_transform` (the goat's fleece is atlas-packed at 6×), which is
    where the single-UV limitation is recorded.
-2. **M1 — locomotion.** Goat state machine and gaits. **Needs**
-   [`animation.md`](animation.md) phases 1–3.
+2. **M1 — locomotion.** *(Shipped in `examples/goats`.)* The goat's state machine
+   — idle, the three gaits, a jump and sleep — over the engine's skeletal
+   animation. The eat, flung and dead states arrive with the milestones that
+   cause them (M2's food and energy, M3's blasts).
 3. **M2 — world sim.** Grass grazing, energy/health, weather state machine, water
    pooling, food.
 4. **M3 — hazards.** Mines / traps / blasts / craters and the billboard FX.

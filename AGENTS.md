@@ -61,9 +61,10 @@ skinned draw and clip playback) are shipped.**
 Porting **Slag Goat** (`goats/`), a JavaScript-and-raylib goat sandbox, onto the
 engine — a Rust plugin for the simulation, scenes for the world and menus, egui
 for the screens — is planned in [`.notes/goats.md`](.notes/goats.md). **M0 (the
-render-path spike) is shipped** as `examples/goats`: the goat model loads as a
-static mesh, the ground is built from the original's noise, and an orbit camera
-frames it. The simulation, the animation and the rest are not built yet.
+render-path spike) and M1 (locomotion) are shipped** as `examples/goats`: the goat
+model loads as a skinned mesh, the ground is built from the original's noise, and
+the goat's idle/walk/trot/run/jump/sleep state machine drives it under an orbit
+camera. The world simulation and the rest are not built yet.
 
 ## Commands
 
