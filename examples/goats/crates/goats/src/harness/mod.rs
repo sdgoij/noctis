@@ -16,6 +16,7 @@
 
 mod explosions;
 mod goat;
+mod herd;
 mod water;
 mod weather;
 
@@ -221,6 +222,23 @@ impl Sim {
     /// How many fx instances (fire, smoke, grit) are live.
     pub fn fx_live(&self) -> usize {
         self.world.fx.live()
+    }
+
+    /// How many bot goats are in the herd.
+    pub fn herd(&self) -> usize {
+        self.world.herd.count()
+    }
+
+    /// How many bots are on the move right now.
+    pub fn herd_moving(&self) -> usize {
+        self.world.herd.moving()
+    }
+
+    /// The smallest gap between any two goats (negative is an overlap).
+    pub fn herd_min_gap(&self) -> f32 {
+        self.world
+            .herd
+            .min_gap((self.world.goat.x, self.world.goat.z))
     }
 
     /// How many of the fx pool's billboards (fire, smoke, grit) are visible.

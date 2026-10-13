@@ -27,6 +27,7 @@
 mod fx;
 mod grass;
 mod hazards;
+mod herd;
 pub mod terrain;
 mod water;
 mod weather;
@@ -334,6 +335,9 @@ const SHAKE_ANGLE: f32 = 0.05;
 /// The shove's upward share, so a knock rocks the view as well as shifting it.
 const SHAKE_LIFT: f32 = 0.45;
 
+/// The bot goats in the meadow (`TUNING.herd.count`).
+const HERD_COUNT: usize = 7;
+
 /// Billboard entities reserved for the bang's sprites (a bang uses four, up to
 /// twenty with the grit).
 const FX_ENTITIES: usize = 64;
@@ -538,7 +542,7 @@ impl Mode {
 /// The goat's clips by role. The gaits are one clip each; idle, jump, sleep and
 /// eat have several takes the goat cycles through, exactly as the original's
 /// `VARIANTS` do. `flung` is one clip; the model that lacks it poses its jump.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Clips {
     idle: Vec<AssetHandle<AnimationClip>>,
     walk: AssetHandle<AnimationClip>,
@@ -923,6 +927,8 @@ pub struct World {
     water_material: AssetHandle<ShaderMaterial>,
     /// The ground's reflection bake bounds ([`.notes\/reflections.md`](reflections.md)).
     reflection: terrain::ReflectionMap,
+    /// The bot goats (M4).
+    herd: herd::Herd,
     /// The bang's fire, smoke and grit (M5).
     fx: fx::Fx,
     /// The generated fx atlases (a texture handle for the "tell").
@@ -1030,6 +1036,19 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         world.water.resample(&world.craters);
     }
     update_meadow(ctx, world, ate, ground_changed);
+
+    // The herd (M4): the bots roam, graze and keep each other apart.
+    let herd_at = (world.goat.x, world.goat.z);
+    world.herd.update(
+        ctx,
+        &world.goat.clips,
+        herd_at,
+        dt,
+        &mut world.meadow,
+        &world.craters,
+        &world.weather,
+        &world.water,
+    );
 
     let target = math::vec3(
         world.goat.x,
@@ -1725,6 +1744,9 @@ fn spawn_flash(ctx: &mut EngineContext) -> Entity {
 /// Build the whole world: the ground, the meadow, the sky, then the goat. Called
 /// by the plugin's frame system on the first tick, and by the harness directly.
 pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
+    // Load the goat model once: the player and the herd share its assets.
+    let (loaded, handles, lift) = load_goat(ctx)?;
+    let clips = goat_clips(&loaded, &handles);
     let craters = terrain::Craters::default();
     let reflection = spawn_terrain(ctx, &craters);
     // The water table samples the ground, so it is built once the terrain is up and
@@ -1761,7 +1783,16 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let cloud_entities = spawn_billboard_pool(ctx, "Cloud", weather_fx::CLOUD_COUNT);
     let rain_entities = spawn_billboard_pool(ctx, "Rain", weather_fx::RAIN_COUNT);
     let pulse_entities = spawn_billboard_pool(ctx, "Pulse", 1);
-    let goat = spawn_goat(ctx)?;
+    let goat = spawn_goat(ctx, &loaded, &handles, &clips, lift)?;
+    let herd = herd::Herd::spawn(
+        ctx,
+        &loaded,
+        &handles,
+        &clips,
+        lift,
+        HERD_COUNT,
+        (goat.x, goat.z),
+    );
     Some(World {
         goat,
         meadow,
@@ -1780,6 +1811,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         water_surface,
         water_material,
         reflection,
+        herd,
         fx: fx::Fx::new(fx_textures),
         fx_textures,
         fx_entities,
@@ -1943,7 +1975,9 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool, ground_c
 }
 
 /// Import the goat model, stand it on the ground, and give it its gait clips.
-fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
+/// Load and register the goat model, and the lift its root needs to rest on the
+/// ground. The loaded model and its handles are shared by the player and the herd.
+fn load_goat(ctx: &mut EngineContext) -> Option<(LoadedGltf, RegisteredGltf, f32)> {
     let loaded = match load_gltf_bytes(GOAT_GLB) {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -1952,8 +1986,6 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         }
     };
     let handles = loaded.register(&mut ctx.assets);
-    let nodes = loaded.instantiate(&mut ctx.scene.world, &handles);
-
     // The model's lowest vertex, so the root can be lifted to rest on the ground.
     let min_y = loaded
         .meshes
@@ -1962,35 +1994,14 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         .map(|bounds| bounds.min.y)
         .fold(f32::INFINITY, f32::min);
     let lift = if min_y.is_finite() { -min_y } else { 0.0 };
+    Some((loaded, handles, lift))
+}
 
-    // A root entity carries the whole imported hierarchy, so the goat moves as one.
-    let root = ctx.scene.world.spawn();
-    ctx.scene.world.insert(root, Name::new("Goat Root"));
-    ctx.scene.world.insert(
-        root,
-        LocalTransform::from_translation(math::vec3(0.0, terrain::height(0.0, 0.0) + lift, 0.0)),
-    );
-    for &node in &loaded.roots {
-        if let Some(&entity) = nodes.get(node) {
-            set_parent(&mut ctx.scene.world, entity, Some(root));
-        }
-    }
-
-    let skinned = ctx
-        .scene
-        .world
-        .query::<SkinnedMeshRenderer>()
-        .map(|(entity, _)| entity)
-        .next();
-    let Some(skinned) = skinned else {
-        log::warn!("the goat model has no skinned mesh; it will not animate");
-        return None;
-    };
-
-    // The clips, by role: the gaits are single takes, and idle, jump and sleep
-    // carry every take the model gives them (the original's `VARIANTS`).
+/// The goat's clips by role: the gaits are single takes, and idle, jump and sleep
+/// carry every take the model gives them (the original's `VARIANTS`).
+fn goat_clips(loaded: &LoadedGltf, handles: &RegisteredGltf) -> Clips {
     let role = |needle: &str| variants(&loaded.animations, &handles.animations, needle);
-    let clips = Clips {
+    Clips {
         idle: role("idle"),
         walk: first(role("walk")),
         trot: first(role("trot")),
@@ -2000,7 +2011,59 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         sleep: role("sleep"),
         eat: role("eat"),
         death: first(role("death")),
-    };
+    }
+}
+
+/// Instantiate one goat model under a root entity, and return `(root, skinned)` —
+/// the skinned child that carries its animator. Used by the player and the herd.
+fn spawn_goat_tree(
+    ctx: &mut EngineContext,
+    loaded: &LoadedGltf,
+    handles: &RegisteredGltf,
+    lift: f32,
+    name: &str,
+) -> Option<(Entity, Entity)> {
+    let nodes = loaded.instantiate(&mut ctx.scene.world, handles);
+    let root = ctx.scene.world.spawn();
+    ctx.scene.world.insert(root, Name::new(name));
+    ctx.scene.world.insert(
+        root,
+        LocalTransform::from_translation(math::vec3(0.0, terrain::height(0.0, 0.0) + lift, 0.0)),
+    );
+    for &node in &loaded.roots {
+        if let Some(&entity) = nodes.get(node) {
+            set_parent(&mut ctx.scene.world, entity, Some(root));
+        }
+    }
+    match skinned_in(&ctx.scene.world, &nodes) {
+        Some(skinned) => Some((root, skinned)),
+        None => {
+            log::warn!("the goat model has no skinned mesh; it will not animate");
+            None
+        }
+    }
+}
+
+/// The first skinned child among `nodes`' children — a goat's animator carrier.
+fn skinned_in(world: &noctis::prelude::World, nodes: &[Entity]) -> Option<Entity> {
+    for &node in nodes {
+        for child in children_of(world, node) {
+            if world.get::<SkinnedMeshRenderer>(child).is_some() {
+                return Some(child);
+            }
+        }
+    }
+    None
+}
+
+fn spawn_goat(
+    ctx: &mut EngineContext,
+    loaded: &LoadedGltf,
+    handles: &RegisteredGltf,
+    clips: &Clips,
+    lift: f32,
+) -> Option<Goat> {
+    let (root, skinned) = spawn_goat_tree(ctx, loaded, handles, lift, "Goat Root")?;
     ctx.scene
         .world
         .insert(skinned, Animator::new(clips.pick(Mode::Idle, 0)));
@@ -2019,7 +2082,7 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         x: 0.0,
         z: 0.0,
         yaw: 0.0,
-        clips,
+        clips: clips.clone(),
         variant: Variants::default(),
         mode: Mode::Idle,
         jump_time: 0.0,

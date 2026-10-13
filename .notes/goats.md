@@ -196,7 +196,14 @@ Single-player sandbox first; each milestone is playable.
    flash light, the camera's knock and the red damage pulse — is the presentation
    layer (M5). *(The flash light, the camera's knock and the fire / smoke / grit
    have since shipped, M5; the red damage pulse remains.)*
-5. **M4 — herd.** Bot AI and collision.
+5. **M4 — herd.** *(Shipped in `examples/goats`.)* Seven bot goats (`TUNING.herd.count`)
+   roam around the player on the original's state machine — graze, stroll, trot,
+   occasionally sprint and hop, rarely doze — each with its own size, temperament
+   (`TUNING.herd.spec`) and coat-tinted materials, its own node hierarchy and
+   animator, but sharing the goat's meshes, skin and clips. They eat the meadow,
+   are slowed by the rain, are steered home when they stray and pushed apart so no
+   two goats overlap. (Bot blast damage and the death/respawn the original adds are
+   not ported yet.)
 6. **M5 — presentation.** *(Shipped: the sky — a `ScreenShaderMaterial` over the
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
    material's `user` block and animated there: the sun arcs and the colour drains
