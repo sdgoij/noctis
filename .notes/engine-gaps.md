@@ -18,7 +18,8 @@ no reflections.
 *Designed:* [`.notes/reflections.md`](reflections.md) — a **planar reflection
 pass** (`PlanarReflection` component, a mirrored scene pass into an offscreen
 texture, and the seam's fourth bind group the receiver samples). Tiers 0 (sky) and
-1 (a baked ground texture) need no engine change and ship first.
+1 (a baked ground texture) are **shipped** in the goats water, needing no engine
+change; tier 2 (the pass) remains.
 
 ### Scene depth in the shader contract
 

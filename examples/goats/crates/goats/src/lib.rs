@@ -41,9 +41,26 @@ use noctis::prelude::*;
 /// too, so the game needs no files on disk.
 const GOAT_GLB: &[u8] = include_bytes!("../content/goat_animated.glb");
 
+/// The sky's colour from a view (or reflection) direction — the function the sky
+/// pass and the water's reflection share, so the two can never disagree. The sky
+/// body and the water both include this.
+const SKY_COLOUR_WGSL: &str = r#"
+fn sky_colour(dir: vec3<f32>, zenith: vec3<f32>, horizon: vec3<f32>,
+              sun_dir: vec3<f32>, sun_col: vec3<f32>, sun_power: f32) -> vec3<f32> {
+    let up = clamp(dir.y, 0.0, 1.0);
+    var col = mix(horizon, zenith, pow(up, 0.30));
+    // Below the horizon, darken toward the ground so the terrain seam is soft.
+    col = mix(col, horizon * 0.35, clamp(-dir.y * 3.0, 0.0, 1.0));
+    let sun = max(dot(dir, sun_dir), 0.0);
+    col = col + sun_col * pow(sun, 8.0) * 0.08 * sun_power;
+    col = col + sun_col * smoothstep(0.9995, 0.9999, sun) * 2.5 * sun_power;
+    return col;
+}
+"#;
+
 /// The sky, as a full-screen shader over the engine's prelude (`.notes/shaders.md`):
-/// a view ray from the engine's inverse view-projection, a vertical gradient, and a
-/// sun disc and glow. Its colours and sun are the material's `user` block, so it is
+/// a view ray from the engine's inverse view-projection, then the shared
+/// [`SKY_COLOUR_WGSL`]. Its colours and sun are the material's `user` block, so it is
 /// retuned without any engine change. The prelude supplies `ScreenOut` and
 /// `vs_fullscreen`; the body provides only `fs_main`.
 const SKY_WGSL: &str = r#"
@@ -57,20 +74,8 @@ fn sky_ray(uv: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
     let dir = sky_ray(in.uv);
-    let zenith = user[0].rgb;
-    let horizon = user[1].rgb;
-    let sun_dir = normalize(user[2].xyz);
-    let sun_col = user[3].rgb;
-    let sun_power = user[3].a;
-
-    let up = clamp(dir.y, 0.0, 1.0);
-    var col = mix(horizon, zenith, pow(up, 0.30));
-    // Below the horizon, darken toward the ground so the terrain seam is soft.
-    col = mix(col, horizon * 0.35, clamp(-dir.y * 3.0, 0.0, 1.0));
-
-    let sun = max(dot(dir, sun_dir), 0.0);
-    col = col + sun_col * pow(sun, 8.0) * 0.08 * sun_power;
-    col = col + sun_col * smoothstep(0.9995, 0.9999, sun) * 2.5 * sun_power;
+    let col = sky_colour(dir, user[0].rgb, user[1].rgb,
+        normalize(user[2].xyz), user[3].rgb, user[3].a);
     return vec4<f32>(col, 1.0);
 }
 "#;
@@ -78,7 +83,9 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
 /// The water surface (`.notes/shaders.md`, mesh form): a flat quad at the table's
 /// level, translucent, deeper toward the far edge. The terrain's depth test keeps it
 /// to the pools — over higher ground it fails and is not drawn. Its `user` block is
-/// the colours, the view distance and the alpha.
+/// the colours, the view distance and alpha, the sky (which its reflection samples)
+/// and the wind; the reflection tier is [`.notes/reflections.md`](reflections.md)
+/// tier 0 — a fresnel mixing in the sky the reflected ray sees.
 const WATER_WGSL: &str = r#"
 struct WaterOut {
     @builtin(position) clip: vec4<f32>,
@@ -99,17 +106,75 @@ fn fs_main(in: WaterOut) -> @location(0) vec4<f32> {
     let deep = user[0].rgb;
     let shallow = user[1].rgb;
     let d = clamp(length(in.world - frame.camera_pos.xyz) / user[2].x, 0.0, 1.0);
-    let col = mix(shallow, deep, d);
+    var col = mix(shallow, deep, d);
+
+    // A ripple normal from the wave field, tilted along the wind, so the fresnel and
+    // the reflection vary across the surface rather than sitting flat.
+    let time = user[7].x;
+    let wind = vec2<f32>(user[7].y, user[7].z);
+    let wave = user[7].w;
+    let crest = sin(in.world.x * 2.1 + time * 1.2) + sin(in.world.z * 1.7 - time * 0.9);
+    let n = normalize(vec3<f32>(wind.x * crest * wave, 1.0, wind.y * crest * wave));
+
+    // The fresnel (`water.fresnel`): nearly transparent seen from above, nearly a
+    // mirror seen along it — the biggest "wet" cue there is.
+    let view_dir = normalize(frame.camera_pos.xyz - in.world);
+    let ndv = max(dot(n, view_dir), 0.0);
+    let fres = user[2].z + (1.0 - user[2].z) * pow(1.0 - ndv, 5.0);
+    // What the reflection sees: the sky, plus (tier 1) the baked ground wherever the
+    // reflected ray meets it before it escapes the field.
+    let refl = reflect(-view_dir, n);
+    var reflection = sky_colour(refl, user[3].rgb, user[4].rgb,
+        normalize(user[5].xyz), user[6].rgb, user[5].a);
+    if (user[9].z > 0.5 && refl.y > 0.01) {
+        let hit = ground_reflect(in.world, refl);
+        if (hit.r >= 0.0) {
+            reflection = hit;
+        }
+    }
+    col = mix(col, reflection, fres);
+
     return vec4<f32>(col, user[2].y);
+}
+
+// March `refl` from `origin` against the baked ground (`texture_0`), returning the
+// ground colour at the first crossing, or a negative marker where the ray escapes
+// the field (`waterMapA`/`waterMapB` in the original).
+fn ground_reflect(origin: vec3<f32>, refl: vec3<f32>) -> vec3<f32> {
+    let map = user[8];
+    let bounds = user[9];
+    let width = map.z;
+    let step = width * 0.01;
+    var p = origin;
+    for (var i = 0u; i < 48u; i = i + 1u) {
+        p = p + refl * step;
+        let uv = (p.xz - map.xy) / width;
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+            return vec3<f32>(-1.0, 0.0, 0.0);
+        }
+        let t = textureSampleLevel(texture_0, texture_sampler, uv, 0.0);
+        if (p.y <= bounds.x + t.a * bounds.y) {
+            return t.rgb;
+        }
+    }
+    return vec3<f32>(-1.0, 0.0, 0.0);
 }
 "#;
 
-/// The water's `user` block: deep colour, shallow colour, then view distance and alpha.
-const WATER_UNIFORMS: [f32; 12] = [
-    0.03, 0.12, 0.20, 1.0, // deep
-    0.10, 0.28, 0.34, 1.0, // shallow
-    40.0, 0.62, 0.0, 0.0, // view distance, alpha
-];
+// The water's colours and reflectance, from the original's `TUNING.water`.
+const WATER_DEEP: [f32; 3] = [0.03, 0.12, 0.20];
+const WATER_SHALLOW: [f32; 3] = [0.10, 0.28, 0.34];
+/// Metres over which the surface shades from shallow to deep.
+const WATER_VIEW_DIST: f32 = 40.0;
+/// The surface's base alpha (`waterDeep.a` in the original).
+const WATER_ALPHA: f32 = 0.62;
+/// The reflectance at normal incidence (`water.fresnel`).
+const WATER_FRESNEL: f32 = 0.02;
+/// How hard the ripple tilts the normal (the wave's own strength).
+const WATER_WAVE: f32 = 0.06;
+/// The reflection tier the water uses ([`.notes/reflections.md`](reflections.md)):
+/// `0` is the sky alone, `1` marches the baked ground. The original's default is 1.
+const WATER_REFLECT: f32 = 1.0;
 
 /// The meadow's wind sway (`.notes/shaders.md`, mesh form). The field is a rebuilt
 /// mesh, so it cannot lean by rebuilding without paying a per-frame upload; instead
@@ -854,6 +919,10 @@ pub struct World {
     sky_time: f32,
     /// The water surface entity, moved to the table's level each frame.
     water_surface: Entity,
+    /// The water's shader material, whose `user` block drives the reflection.
+    water_material: AssetHandle<ShaderMaterial>,
+    /// The ground's reflection bake bounds ([`.notes\/reflections.md`](reflections.md)).
+    reflection: terrain::ReflectionMap,
     /// The bang's fire, smoke and grit (M5).
     fx: fx::Fx,
     /// The generated fx atlases (a texture handle for the "tell").
@@ -903,13 +972,22 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
             world.weather.rain(),
         );
     }
-    // The water surface follows the table.
+    // The water surface follows the table, and its reflection follows the sky, the
+    // wind and the clock.
     if let Some(transform) = ctx
         .scene
         .world
         .get_mut::<LocalTransform>(world.water_surface)
     {
         transform.translation.y = world.water.level();
+    }
+    if let Some(material) = ctx.assets.shader_materials.get_mut(world.water_material) {
+        material.uniforms = water_uniforms(
+            world.sky_time,
+            world.weather.rain(),
+            world.weather.wind(),
+            world.reflection,
+        );
     }
     let ate = drive_goat(
         ctx,
@@ -948,7 +1026,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     let ground_changed = world.craters.revision() != world.crater_rev;
     if ground_changed {
         world.crater_rev = world.craters.revision();
-        rebuild_terrain(ctx, &world.craters);
+        rebuild_terrain(ctx, world);
         world.water.resample(&world.craters);
     }
     update_meadow(ctx, world, ate, ground_changed);
@@ -1404,10 +1482,10 @@ fn drive_camera(
 /// Spawn the sky: a full-screen shader pass over the engine's prelude
 /// (`.notes/shaders.md`), the seam's first consumer.
 fn spawn_sky(ctx: &mut EngineContext) -> AssetHandle<ShaderMaterial> {
-    let shader = ctx
-        .assets
-        .shaders
-        .insert_named("sky/meadow", Shader::new("goats sky", SKY_WGSL));
+    let shader = ctx.assets.shaders.insert_named(
+        "sky/meadow",
+        Shader::new("goats sky", format!("{SKY_COLOUR_WGSL}\n{SKY_WGSL}")),
+    );
     let material = ctx.assets.shader_materials.insert_named(
         "sky/meadow",
         ShaderMaterial {
@@ -1454,22 +1532,81 @@ fn grass_uniforms(time: f32, sway: f32, sun: Vec3, rain: f32) -> Vec<f32> {
     ]
 }
 
+/// The sky's zenith and horizon colours, drained toward grey by the rain — shared by
+/// the sky pass and the water's reflection.
+fn sky_palette(rain: f32) -> (Vec3, Vec3) {
+    let mix = |a: Vec3, b: Vec3, t: f32| a + (b - a) * t;
+    (
+        mix(
+            math::vec3(0.015, 0.05, 0.15),
+            math::vec3(0.10, 0.11, 0.14),
+            rain,
+        ),
+        mix(
+            math::vec3(0.18, 0.25, 0.36),
+            math::vec3(0.17, 0.18, 0.21),
+            rain,
+        ),
+    )
+}
+
+/// The water's `user` block: its colours, the view distance / alpha / fresnel, the sky
+/// its reflection samples (zenith, horizon, sun), and the wind and clock for the
+/// ripple. Recomputed each frame; the renderer writes it in place.
+fn water_uniforms(time: f32, rain: f32, wind: (f32, f32), map: terrain::ReflectionMap) -> Vec<f32> {
+    let (zenith, horizon) = sky_palette(rain);
+    let sun = sun_direction(time);
+    let colour = sun_colour(rain);
+    vec![
+        WATER_DEEP[0],
+        WATER_DEEP[1],
+        WATER_DEEP[2],
+        1.0, // deep
+        WATER_SHALLOW[0],
+        WATER_SHALLOW[1],
+        WATER_SHALLOW[2],
+        0.0, // shallow
+        WATER_VIEW_DIST,
+        WATER_ALPHA,
+        WATER_FRESNEL,
+        0.0, // view distance, alpha, fresnel
+        zenith.x,
+        zenith.y,
+        zenith.z,
+        0.0, //
+        horizon.x,
+        horizon.y,
+        horizon.z,
+        0.0, //
+        sun.x,
+        sun.y,
+        sun.z,
+        1.0 - 0.7 * rain, // sun direction and power
+        colour.x,
+        colour.y,
+        colour.z,
+        0.0, // sun colour
+        time,
+        wind.0,
+        wind.1,
+        WATER_WAVE, // the ripple clock and wind
+        map.origin.0,
+        map.origin.1,
+        map.width,
+        map.texels, // the reflection map
+        map.floor,
+        map.range,
+        WATER_REFLECT,
+        0.0, // its height bounds and tier
+    ]
+}
+
 /// The sky's animated `user` block: a slowly arcing sun, and colours drained toward
 /// grey by the rain. Recomputed each frame it is cheap — the renderer writes it into
 /// the material's user buffer without rebuilding anything.
 fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
     let sun = sun_direction(time);
-    let mix = |a: Vec3, b: Vec3, t: f32| a + (b - a) * t;
-    let zenith = mix(
-        math::vec3(0.015, 0.05, 0.15),
-        math::vec3(0.10, 0.11, 0.14),
-        rain,
-    );
-    let horizon = mix(
-        math::vec3(0.18, 0.25, 0.36),
-        math::vec3(0.17, 0.18, 0.21),
-        rain,
-    );
+    let (zenith, horizon) = sky_palette(rain);
     let sun_col = sun_colour(rain);
     vec![
         zenith.x,
@@ -1516,21 +1653,27 @@ fn water_quad() -> Mesh {
 
 /// Spawn the water surface: a flat, translucent quad at the table's level, drawn by a
 /// custom shader through the seam (its mesh form — the seam's first mesh draw). The
-/// level is moved each frame in [`apply_frame`].
-fn spawn_water(ctx: &mut EngineContext) -> Entity {
-    let shader = ctx
-        .assets
-        .shaders
-        .insert_named("water/surface", Shader::new("goats water", WATER_WGSL));
+/// level is moved and the reflection uniforms are written each frame in
+/// [`apply_frame`]. Returns the entity and the material handle.
+fn spawn_water(
+    ctx: &mut EngineContext,
+    reflect: AssetHandle<Texture>,
+    map: terrain::ReflectionMap,
+) -> (Entity, AssetHandle<ShaderMaterial>) {
+    let shader = ctx.assets.shaders.insert_named(
+        "water/surface",
+        Shader::new("goats water", format!("{SKY_COLOUR_WGSL}\n{WATER_WGSL}")),
+    );
     let material = ctx.assets.shader_materials.insert_named(
         "water/surface",
         ShaderMaterial {
             name: "goats water".into(),
             shader,
-            uniforms: WATER_UNIFORMS.to_vec(),
+            // The baked ground the reflection marches (`texture_0`).
+            textures: vec![reflect],
+            uniforms: water_uniforms(0.0, 0.0, (0.0, 0.0), map),
             alpha_mode: AlphaMode::Blend,
             double_sided: true,
-            ..ShaderMaterial::default()
         },
     );
     let mesh = ctx
@@ -1556,7 +1699,7 @@ fn spawn_water(ctx: &mut EngineContext) -> Entity {
             receive_shadows: false,
         },
     );
-    water
+    (water, material)
 }
 
 /// Spawn the bang's flash: one shadowless point light at zero intensity, which
@@ -1583,7 +1726,7 @@ fn spawn_flash(ctx: &mut EngineContext) -> Entity {
 /// by the plugin's frame system on the first tick, and by the harness directly.
 pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let craters = terrain::Craters::default();
-    spawn_terrain(ctx, &craters);
+    let reflection = spawn_terrain(ctx, &craters);
     // The water table samples the ground, so it is built once the terrain is up and
     // before the meadow, which culls the tufts the table stands over.
     let water = water::Water::new(&craters);
@@ -1591,7 +1734,12 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let meadow = grass::Meadow::default();
     let grass_material = spawn_grass(ctx, &meadow, &water, &craters);
     let sky = spawn_sky(ctx);
-    let water_surface = spawn_water(ctx);
+    let reflect_texture = ctx
+        .assets
+        .textures
+        .handle("water/reflect")
+        .unwrap_or_default();
+    let (water_surface, water_material) = spawn_water(ctx, reflect_texture, reflection);
     let flash = spawn_flash(ctx);
     // The bang's look (M5): the generated atlases and the sprite pools.
     let fx_textures = fx::FxTextures {
@@ -1630,6 +1778,8 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         grass: grass_material,
         sky_time: 0.0,
         water_surface,
+        water_material,
+        reflection,
         fx: fx::Fx::new(fx_textures),
         fx_textures,
         fx_entities,
@@ -1667,11 +1817,14 @@ fn spawn_billboard_pool(ctx: &mut EngineContext, name: &str, count: usize) -> Ve
 }
 
 /// Build the ground mesh and put it in the scene under one entity.
-fn spawn_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
+fn spawn_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) -> terrain::ReflectionMap {
     let mesh = ctx
         .assets
         .meshes
         .insert_named("terrain/meadow", terrain::build_mesh(craters));
+    // Bake the ground the water's reflection marches, in the same pass.
+    let (bake, reflection) = terrain::bake_reflection(craters);
+    ctx.assets.textures.insert_named("water/reflect", bake);
     let material = ctx.assets.materials.insert_named(
         "terrain/grass",
         Material {
@@ -1698,15 +1851,20 @@ fn spawn_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
             receive_shadows: true,
         },
     );
+    reflection
 }
 
 /// Rebuild the ground mesh in place after a crater (or its heal) moved it. The
 /// path is unchanged, so the renderer re-uploads the same mesh with a new revision
 /// rather than drawing the ground the blast left.
-fn rebuild_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
+fn rebuild_terrain(ctx: &mut EngineContext, world: &mut World) {
     ctx.assets
         .meshes
-        .insert_named("terrain/meadow", terrain::build_mesh(craters));
+        .insert_named("terrain/meadow", terrain::build_mesh(&world.craters));
+    // The reflection bake follows the ground (a crater is a hole in it).
+    let (bake, reflection) = terrain::bake_reflection(&world.craters);
+    ctx.assets.textures.insert_named("water/reflect", bake);
+    world.reflection = reflection;
 }
 
 /// Build the meadow: its mesh and shader material, under one entity. The mesh leans
@@ -1908,6 +2066,32 @@ fn first(clips: Vec<AssetHandle<AnimationClip>>) -> AssetHandle<AnimationClip> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_water_carries_the_same_sky_it_reflects() {
+        let rain = 0.4;
+        let (zenith, horizon) = sky_palette(rain);
+        let map = terrain::bake_reflection(&terrain::Craters::default()).1;
+        let uniforms = water_uniforms(3.0, rain, (1.5, 0.25), map);
+
+        // The water's zenith and horizon are the sky pass's own, so the reflection it
+        // samples can never disagree with the sky drawn behind it.
+        assert_eq!(uniforms[12], zenith.x);
+        assert_eq!(uniforms[14], zenith.z);
+        assert_eq!(uniforms[16], horizon.x);
+        assert_eq!(uniforms[18], horizon.z);
+
+        // The fresnel, the ripple clock and wind, and the reflection map ride along.
+        assert_eq!(uniforms[10], WATER_FRESNEL);
+        assert_eq!(uniforms[28], 3.0);
+        assert_eq!(uniforms[29], 1.5);
+        assert_eq!(uniforms[32], map.origin.0);
+        assert_eq!(uniforms[34], map.width);
+        assert_eq!(uniforms[35], map.texels);
+        assert_eq!(uniforms[36], map.floor);
+        assert_eq!(uniforms[37], map.range);
+        assert_eq!(uniforms[38], WATER_REFLECT);
+    }
 
     #[test]
     fn the_orbit_round_trips_through_a_view() {

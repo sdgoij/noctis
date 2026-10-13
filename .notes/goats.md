@@ -74,7 +74,7 @@ Two-thirds of the Rust is reusable; essentially none of the JS is.
 | Runtime terrain / water / grass / FX meshes | `Mesh` / `Vertex` public, `AssetRegistry.meshes.insert` | works; a rebuild helper in the plugin |
 | Per-vertex terrain materials | `Vertex` has no colour | **Small add** — `Vertex::color`, `Material` opts in (see below) |
 | Volumetric sky, water, custom lit look | no shader seam | **Add** — "The shader seam" |
-| Water reflections (sky/ground/mirror) | engine has shadow maps, no user render targets | tiers 0/1 ship on the seam; tier 2 needs the planar pass — [`.notes/reflections.md`](reflections.md) |
+| Water reflections (sky/ground/mirror) | engine has shadow maps, no user render targets | tiers 0/1 shipped on the seam; tier 2 needs the planar pass — [`.notes/reflections.md`](reflections.md) |
 | Physics over the heightfield | rapier3d, `ColliderShape` is box/ball/capsule/cylinder | reimplement the original's `terrainHeight` sampling in a system; a heightfield collider only if rapier is actually wanted |
 | raygui menus / settings / mods / keymap / console | `AppDriver::ui` draws only `ctx.screen_text` | **Add** — "The screen-UI seam" (egui) |
 | HUD bars/text | `ctx.screen_text` + egui overlay | ships as `screen_text`, upgraded with the UI seam |
@@ -210,9 +210,9 @@ Single-player sandbox first; each milestone is playable.
    [`.notes/billboards.md`](billboards.md)); an armed mine in reach shows its
    "tell". The weather's clouds drift and its rain falls, both as billboards. The
    **meadow** leans on the wind through the shader seam (the sway weight rides in
-   the vertex colour). The water's **reflections** are a later tier, designed in
-   [`.notes/reflections.md`](reflections.md): the sky and a baked ground first, the
-   raised mirror when the engine's planar pass lands.
+   the vertex colour). The water **reflects** the sky and a baked ground (tiers 0
+   and 1 of [`.notes/reflections.md`](reflections.md)); tier 2, a planar mirror of
+   the whole scene, waits on the engine's pass.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.

@@ -328,6 +328,83 @@ pub fn build_mesh(craters: &Craters) -> Mesh {
     mesh
 }
 
+/// Where the reflection bake sits in the world, so the water shader can unwrap a
+/// texel back to a world point and a height
+/// ([`.notes/reflections.md`](reflections.md), tier 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionMap {
+    /// The field's `-x`/`-z` corner.
+    pub origin: (f32, f32),
+    /// The field's full width, in metres.
+    pub width: f32,
+    /// Texels per side.
+    pub texels: f32,
+    /// The height packed as `floor + a * range`.
+    pub floor: f32,
+    pub range: f32,
+}
+
+/// Bake the ground into the texture the water's reflection marches: the terrain's
+/// per-vertex colour in `rgb` and a packed height in `a`, one texel per grid vertex —
+/// the original's `M20e` tier-1 bake. Linear `Rgba8Unorm`; [`ReflectionMap`] says how
+/// to read it. Cost no pass and no state, so it is the reflection the default uses.
+pub fn bake_reflection(craters: &Craters) -> (Texture, ReflectionMap) {
+    let n = QUADS + 1;
+    let half = QUADS as f32 * CELL * 0.5;
+    let mut heights = vec![0.0f32; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let x = -half + i as f32 * CELL;
+            let z = -half + j as f32 * CELL;
+            heights[j * n + i] = craters.surface(x, z);
+        }
+    }
+    let grid = |i: usize, j: usize| heights[j * n + i];
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &y in &heights {
+        lo = lo.min(y);
+        hi = hi.max(y);
+    }
+    let range = (hi - lo).max(0.01);
+
+    let mut data = vec![0u8; n * n * 4];
+    for j in 0..n {
+        for i in 0..n {
+            let y = heights[j * n + i];
+            let dx = (grid((i + 1).min(n - 1), j) - grid(i.saturating_sub(1), j)) / (2.0 * CELL);
+            let dz = (grid(i, (j + 1).min(n - 1)) - grid(i, j.saturating_sub(1))) / (2.0 * CELL);
+            let inv = 1.0 / (dx * dx + dz * dz + 1.0).sqrt();
+            let colour = terrain_color(inv, y);
+            let k = (j * n + i) * 4;
+            data[k] = byte(colour[0]);
+            data[k + 1] = byte(colour[1]);
+            data[k + 2] = byte(colour[2]);
+            data[k + 3] = byte((y - lo) / range);
+        }
+    }
+
+    let texture = Texture {
+        name: "water/reflect".to_string(),
+        width: n as u32,
+        height: n as u32,
+        format: TextureFormat::Rgba8Unorm,
+        data,
+    };
+    let map = ReflectionMap {
+        origin: (-half, -half),
+        width: QUADS as f32 * CELL,
+        texels: n as f32,
+        floor: lo,
+        range,
+    };
+    (texture, map)
+}
+
+/// A linear colour channel as a byte.
+fn byte(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +415,28 @@ mod tests {
         assert_eq!(height(0.0, 0.0), 0.0);
         // And the relief only reaches full strength past the bowl's ramp.
         assert!(height(FLAT + RAMP, 0.0).abs() > 0.0);
+    }
+
+    #[test]
+    fn the_reflection_bake_covers_the_grid_and_packs_heights() {
+        let (texture, map) = bake_reflection(&Craters::default());
+        let n = QUADS + 1;
+        assert_eq!(texture.width, n as u32);
+        assert_eq!(texture.height, n as u32);
+        assert_eq!(texture.data.len(), n * n * 4);
+        assert!(map.range > 0.0);
+
+        // The centre texel unpacks back to the ground it was baked from.
+        let (i, j) = (n / 2, n / 2);
+        let a = texture.data[(j * n + i) * 4 + 3] as f32 / 255.0;
+        let y = map.floor + a * map.range;
+        let x = map.origin.0 + i as f32 * CELL;
+        let z = map.origin.1 + j as f32 * CELL;
+        assert!(
+            (y - height(x, z)).abs() < 0.05,
+            "the packed height round-trips: {y} vs {}",
+            height(x, z)
+        );
     }
 
     #[test]

@@ -10,6 +10,11 @@ reach without it.
 It is the sibling of [`shaders.md`](shaders.md): the engine owns the pass, the
 bind groups and the layouts; the game supplies a plane and samples the result.
 
+**Shipped:** tiers 0 and 1 in the goats water (`WATER_WGSL`): a fresnel, a ripple
+normal from the wave field, a reflection of the sky (the shared `sky_colour`), and
+a march against the ground baked from the terrain grid (`terrain::bake_reflection`,
+re-baked with the ground on a crater). **Not yet:** tier 2, the planar pass below.
+
 ## What the original does
 
 `lighting.js`'s water fragment shader computes a fresnel and a reflected ray,
@@ -136,13 +141,13 @@ extraction path.
 
 ## What the port does meanwhile
 
-1. **Tier 0 now** — fresnel + the sky reflection, in the water's seam shader.
-   The reflected ray is evaluated against the same sky the sky pass draws (the
-   body is shared), so no sampling and no engine change. This is the port's
-   current water plus the fresnel it lacks.
-2. **Tier 1 next** — bake the ground into a texture with the terrain and march
-   the reflected ray, as the original does. A `Texture` asset and shader work,
-   still no engine change.
+1. **Tier 0 — shipped.** The water's seam shader computes the fresnel and the
+   reflected ray, and evaluates the sky the ray leaves into (the shared
+   `sky_colour`, so the two can never disagree). No sampling and no engine change.
+2. **Tier 1 — shipped.** The ground is baked into a texture with the terrain
+   (`terrain::bake_reflection`, one texel per grid vertex, colour in `rgb`, a
+   packed height in `a`), and the fragment marches the reflected ray against it,
+   keeping the sky wherever the ray escapes.
 3. **Tier 2 when the pass lands** — the mirror, setting `PlanarReflection` on the
    water to the table's level.
 
