@@ -5,7 +5,14 @@
 //! too far and pushed apart when they overlap. Each owns its own node hierarchy and
 //! animator (so two goats can hold different poses) but shares the goat's meshes,
 //! skin and clips.
+//!
+//! The herd is mortal (M19a): a bang it walks into — a mine it steps on or a tuft
+//! it grazes that was trapped — damages it, and unlike the player a bot has no
+//! health floor, so a bang can kill it. A dead bot lies where it fell, plays the
+//! death clip, and gets up somewhere else seconds later. The bots also wear their
+//! own generated fleeces (`makeBotTextures`), one mottled coat each.
 
+use crate::hazards::{self, Hazards};
 use crate::terrain;
 use crate::{Clips, Mode, RUN_SPEED, TROT_SPEED, WALK_SPEED};
 use crate::{grass, water, weather};
@@ -23,6 +30,15 @@ const TURN: f32 = 1.8;
 const RADIUS: f32 = 0.45;
 /// A meal lasts this long when the clip's own duration is not known (`botStartEat`).
 const EAT_FALLBACK_TIME: f32 = 1.0;
+/// Seconds a killed bot lies there before it gets up (`herd.deathLinger`).
+const DEATH_LINGER: f32 = 8.0;
+/// Metres from the goat a respawning bot lands, at least and at most
+/// (`botRespawn`).
+const RESPAWN_MIN: f32 = 10.0;
+const RESPAWN_MAX: f32 = 16.0;
+/// Candidate spawns before a bot gives up and takes the last one — a dense field
+/// may leave no clean ground (`botRespawn`).
+const RESPAWN_TRIES: u32 = 8;
 
 /// One bot's coat (sRGB bytes), body scale and temperament (`TUNING.herd.spec`).
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +129,22 @@ struct Bot {
     eat_dur: f32,
     eat_cool: f32,
     satiety: f32,
+    /// Blast damage (M19a): `0..=MAX_STATS`, and unlike the player a bot has no
+    /// floor — a bang can kill it.
+    health: f32,
+    /// Seconds since it died, and the death clip's length the pose stretches over.
+    death_time: f32,
+    death_dur: f32,
+    /// The blast's arc (M19c): the height above the ground it is drawn at, the
+    /// absolute height the physics integrates, the world velocity, and the
+    /// ballistic time the pose is stretched over.
+    py: f32,
+    fly_time: f32,
+    fly_y: f32,
+    fly_flight: f32,
+    fly_vx: f32,
+    fly_vy: f32,
+    fly_vz: f32,
 }
 
 impl Bot {
@@ -130,11 +162,12 @@ impl Bot {
         meadow: &mut grass::Meadow,
         craters: &terrain::Craters,
         water: &water::Water,
+        hazards: &mut Hazards,
     ) {
         // Bots graze too: eat what is under the nose, else walk to the nearest tuft.
         if self.eat_cool <= 0.0 && rng.next() < 0.6 {
             if let Some(tuft) = grass::nearest(self.x, self.z, grass::EAT_RANGE, meadow, craters) {
-                self.start_eat(&tuft, meadow, None);
+                self.start_eat(&tuft, meadow, hazards, None);
                 return;
             }
             if let Some(tuft) = grass::nearest(self.x, self.z, GRAZE_SEEK_RANGE, meadow, craters) {
@@ -192,11 +225,29 @@ impl Bot {
     }
 
     /// Consume `tuft`: face it, fill the belly, play an eat clip, and take the clip's
-    /// own duration when given (`botStartEat`).
-    fn start_eat(&mut self, tuft: &grass::Tuft, meadow: &mut grass::Meadow, dur: Option<f32>) {
+    /// own duration when given (`botStartEat`). A trapped tuft is a bang for a bot
+    /// too: the tuft is gone whichever way this goes, but a trapped one trades the
+    /// meal for a device on its fuse.
+    fn start_eat(
+        &mut self,
+        tuft: &grass::Tuft,
+        meadow: &mut grass::Meadow,
+        hazards: &mut Hazards,
+        dur: Option<f32>,
+    ) {
         meadow.consume(tuft);
         self.yaw = (-(tuft.z - self.z)).atan2(tuft.x - self.x);
-        self.satiety = (self.satiety + crate::EAT_SATIETY).min(1.0);
+        if !hazards.trip_trap(tuft, meadow) {
+            // The herd's meals get the second helping too (`satedHeal`): a full belly
+            // heals a little, the only way back from a minefield's bruises.
+            let heal = if self.satiety >= crate::FULL_BELLY {
+                crate::FULL_BELLY_HEAL
+            } else {
+                0.0
+            };
+            self.satiety = (self.satiety + crate::EAT_SATIETY).min(1.0);
+            self.health = (self.health + heal).min(crate::MAX_STATS);
+        }
         self.mode = Mode::Eat;
         self.eat_time = 0.0;
         self.eat_dur = dur.filter(|d| *d > 0.0).unwrap_or(EAT_FALLBACK_TIME);
@@ -217,16 +268,126 @@ impl Bot {
         };
         base * (0.75 + 0.5 * self.spec.bold) * weather.speed(self.satiety)
     }
+
+    /// Whether the bot is over the ground rather than on it (`botAirborne`): a jump
+    /// is airborne by mode (the clip's root motion does the hop) and a flung bot
+    /// owns its own height. A landing is when this stops being true, which is what
+    /// lets a bot set off a mine it comes down on.
+    fn airborne(&self) -> bool {
+        matches!(self.mode, Mode::Jump | Mode::Flung)
+    }
+
+    /// Take a blast's impulse (`startBotFling`), the player's [`crate::Goat`]
+    /// `start_fling` in a bot's fields. A second bang mid-arc adds to the arc rather
+    /// than restarting it, so a chain reads as one continuous throw.
+    fn start_fling(&mut self, vx: f32, vz: f32, vy: f32, base_y: f32) {
+        if self.mode != Mode::Flung {
+            self.fly_y = base_y; // the arc starts where the bot is
+            self.fly_time = 0.0;
+            self.fly_vx = 0.0;
+            self.fly_vz = 0.0;
+            self.fly_vy = 0.0;
+            self.mode = Mode::Flung;
+            self.timer = 0.0;
+            self.graze = false;
+            self.zoom = 0.0;
+        }
+        self.fly_vx += vx;
+        self.fly_vz += vz;
+        self.fly_vy += vy;
+        let air = if self.fly_vy > 0.0 && crate::FLING_GRAVITY < 0.0 {
+            -2.0 * self.fly_vy / crate::FLING_GRAVITY
+        } else {
+            0.4
+        };
+        self.fly_flight = (self.fly_time + air).clamp(0.3, crate::FLING_MAX_FLIGHT);
+    }
+
+    /// The fraction through the arc the pose is stretched over (`botFlingProgress`).
+    fn fling_progress(&self) -> f32 {
+        (self.fly_time / self.fly_flight).min(1.0)
+    }
+
+    /// One frame of the arc, integrated in absolute height so a slope the bot
+    /// crosses mid-air cannot drag it. Returns whether the feet touched the ground,
+    /// which is the ground it actually meets (`advance_fling`).
+    fn fly(&mut self, dt: f32, craters: &terrain::Craters) -> bool {
+        self.x += self.fly_vx * dt;
+        self.z += self.fly_vz * dt;
+        self.fly_vy += crate::FLING_GRAVITY * dt;
+        self.fly_y += self.fly_vy * dt;
+        let ground = craters.surface(self.x, self.z) + self.lift;
+        if self.fly_vy <= 0.0 && self.fly_y - ground <= 0.0 {
+            self.fly_y = ground;
+            self.py = 0.0;
+            self.fly_vx = 0.0;
+            self.fly_vz = 0.0;
+            self.fly_vy = 0.0;
+            true
+        } else {
+            self.py = self.fly_y - ground;
+            false
+        }
+    }
+
+    /// Fall dead (`botDie`): the death clip plays and the body lies where it fell. A
+    /// lethal bang kills instead of throwing, so a corpse keeps the arc it already
+    /// had — the mode change does not clear `fly_*`.
+    fn die(&mut self, death_dur: f32) {
+        self.health = 0.0;
+        self.mode = Mode::Dead;
+        self.death_time = 0.0;
+        self.death_dur = death_dur;
+        self.graze = false;
+        self.zoom = 0.0;
+    }
+
+    /// Bring a dead bot back (`botRespawn`): somewhere else, facing the goat, whole.
+    /// Ground with no armed mine under it is preferred, so a bot does not respawn
+    /// onto one and blow up before it takes a step, but the search is bounded — a
+    /// dense field has no clean ground left to offer.
+    fn respawn(&mut self, rng: &mut Rng, goat: (f32, f32), hazards: &Hazards) {
+        let (mut x, mut z) = (self.x, self.z);
+        for _ in 0..RESPAWN_TRIES {
+            let a = rng.next() * std::f32::consts::TAU;
+            let r = RESPAWN_MIN + rng.next() * (RESPAWN_MAX - RESPAWN_MIN);
+            x = goat.0 + a.cos() * r;
+            z = goat.1 + a.sin() * r;
+            if !hazards.mine_armed((x / 2.0).floor() as i32, (z / 2.0).floor() as i32) {
+                break;
+            }
+        }
+        self.x = x;
+        self.z = z;
+        self.yaw = (z - goat.1).atan2(goat.0 - x);
+        self.health = crate::MAX_STATS;
+        self.death_time = 0.0;
+        self.py = 0.0;
+        self.fly_time = 0.0;
+        self.fly_flight = 1.0;
+        self.fly_vx = 0.0;
+        self.fly_vy = 0.0;
+        self.fly_vz = 0.0;
+        self.satiety = 0.0;
+        self.graze = false;
+        self.zoom = 0.0;
+        self.mode = Mode::Idle;
+        self.timer = 1.5 + rng.next() * 3.0;
+    }
 }
 
 /// The herd.
 pub struct Herd {
     bots: Vec<Bot>,
     rng: Rng,
+    /// The death clip's length, which a dying bot's pose is stretched over.
+    death_dur: f32,
 }
 
 impl Herd {
-    /// Spawn `count` bot goats around `goat`, sharing the loaded GLB's assets.
+    /// Spawn `count` bot goats around `goat`, sharing the loaded GLB's assets. The
+    /// fleeces are generated here too, one mottled texture per coat
+    /// (`makeBotTextures`), and registered once for the whole herd.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         ctx: &mut EngineContext,
@@ -237,14 +398,73 @@ impl Herd {
         count: usize,
         goat: (f32, f32),
     ) -> Herd {
+        let fleeces: Vec<AssetHandle<Texture>> = SPECS
+            .iter()
+            .enumerate()
+            .map(|(i, spec)| {
+                ctx.assets
+                    .textures
+                    .insert_named(format!("bot/fleece{i}"), fleece_texture(i, spec.coat))
+            })
+            .collect();
+        // The death clip drives the corpse's pose; with no clip the model rests at
+        // `1` (the player's own fallback), and the pose divides by it.
+        let death_dur = ctx
+            .assets
+            .animations
+            .get(clips.death)
+            .map(|clip| clip.duration)
+            .filter(|duration| *duration > 0.0)
+            .unwrap_or(1.0);
         let mut rng = Rng(0x2545_f491);
         let bots = (0..count)
             .filter_map(|i| {
                 let spec = bot_spec(i);
-                spawn_bot(ctx, loaded, handles, clips, lift, i, spec, goat, &mut rng)
+                let fleece = fleeces[i % fleeces.len()];
+                spawn_bot(
+                    ctx, loaded, handles, clips, lift, i, spec, fleece, goat, &mut rng,
+                )
             })
             .collect();
-        Herd { bots, rng }
+        Herd {
+            bots,
+            rng,
+            death_dur,
+        }
+    }
+
+    /// Apply a bang to the herd (`blast`): the player's own curve off the player's
+    /// radius and damage, but without the player's floor — a bot is not the promise
+    /// that a mine cannot end a run, so three bangs on the centre kill it and one at
+    /// the rim is a bruise. A lethal bang kills instead of throwing.
+    pub fn blast(&mut self, x: f32, z: f32, seed: f32, craters: &terrain::Craters) {
+        let death_dur = self.death_dur;
+        let r = hazards::BLAST_RADIUS;
+        for bot in &mut self.bots {
+            if bot.mode == Mode::Dead {
+                continue; // a corpse takes no second bang
+            }
+            let (bx, bz) = (bot.x - x, bot.z - z);
+            let bd2 = bx * bx + bz * bz;
+            if bd2 > r * r {
+                continue;
+            }
+            let bd = bd2.sqrt();
+            let falloff = 1.0 - bd / r;
+            bot.health = (bot.health - hazards::BLAST_DAMAGE * falloff * falloff).max(0.0);
+            if bot.health <= 0.0 {
+                bot.die(death_dur);
+                continue;
+            }
+            let (ux, uz) = hazards::fling_direction(bx, bz, bd, seed);
+            let base = craters.surface(bot.x, bot.z) + bot.lift;
+            bot.start_fling(
+                ux * hazards::BLAST_PUSH * falloff,
+                uz * hazards::BLAST_PUSH * falloff,
+                hazards::BLAST_LIFT * falloff,
+                base,
+            );
+        }
     }
 
     /// How many bots are alive.
@@ -294,12 +514,17 @@ impl Herd {
         craters: &terrain::Craters,
         weather: &weather::Weather,
         water: &water::Water,
+        hazards: &mut Hazards,
     ) {
         for i in 0..self.bots.len() {
-            self.step(i, goat, dt, meadow, craters, weather, water);
+            self.step(i, goat, dt, meadow, craters, weather, water, hazards);
         }
-        // The hard backstop.
+        // The hard backstop: a corpse lies where it fell (`updateBots` skips this for
+        // a dead bot), everyone else is pulled back in if it strays.
         for bot in &mut self.bots {
+            if bot.mode == Mode::Dead {
+                continue;
+            }
             let (px, pz) = (bot.x - goat.0, bot.z - goat.1);
             let far = (px * px + pz * pz).sqrt();
             if far > BACKSTOP {
@@ -309,21 +534,40 @@ impl Herd {
         }
         self.collide(goat);
 
-        // Write the transforms and the clip for this frame.
+        // Write the transforms and the clip for this frame. A thrown bot is drawn at
+        // its arc's height and *posed* from the fraction (speed 0), and a corpse is
+        // posed through the death clip the same way (the original's `pose`).
         for bot in &self.bots {
-            let y = craters.surface(bot.x, bot.z) + bot.lift;
+            let y = craters.surface(bot.x, bot.z) + bot.lift + bot.py;
             if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(bot.root) {
                 transform.translation = math::vec3(bot.x, y, bot.z);
                 transform.rotation = Quat::from_rotation_y(bot.yaw);
             }
             let clip = bot.clip(clips);
-            if let Some(animator) = ctx.scene.world.get_mut::<Animator>(bot.skinned)
-                && animator.clip != clip
-            {
-                animator.clip = clip;
-                animator.time = 0.0;
-                animator.playing = true;
+            let duration = ctx
+                .assets
+                .animations
+                .get(clip)
+                .map(|clip| clip.duration)
+                .unwrap_or(0.0);
+            if let Some(animator) = ctx.scene.world.get_mut::<Animator>(bot.skinned) {
+                if animator.clip != clip {
+                    animator.clip = clip;
+                    animator.time = 0.0;
+                    animator.playing = true;
+                }
                 animator.looped = bot.mode.loops();
+                match bot.mode {
+                    Mode::Flung => {
+                        animator.speed = 0.0;
+                        animator.time = bot.fling_progress() * duration;
+                    }
+                    Mode::Dead => {
+                        animator.speed = 0.0;
+                        animator.time = (bot.death_time / bot.death_dur).min(1.0) * duration;
+                    }
+                    _ => animator.speed = 1.0,
+                }
             }
         }
     }
@@ -339,10 +583,28 @@ impl Herd {
         craters: &terrain::Craters,
         weather: &weather::Weather,
         water: &water::Water,
+        hazards: &mut Hazards,
     ) {
         // Split the borrow: `rng` and the slot are separate fields of the vector/self.
         let (rng, bots) = (&mut self.rng, &mut self.bots);
         let bot = &mut bots[i];
+
+        // Dead (M19a): the body lies where it fell, playing the death clip, and
+        // nothing else happens to it — no AI, no grazing, and no devices, since a
+        // corpse does not set off a mine. The one thing a corpse still does is
+        // *fall* (a bot killed mid-arc keeps the arc it had), and `DEATH_LINGER`
+        // seconds later it gets up somewhere else.
+        if bot.mode == Mode::Dead {
+            bot.death_time += dt;
+            if bot.py > 0.0 {
+                bot.fly(dt, craters);
+            }
+            if bot.death_time >= DEATH_LINGER {
+                bot.respawn(rng, goat, hazards);
+            }
+            return;
+        }
+
         bot.timer -= dt;
         if bot.jump_cool > 0.0 {
             bot.jump_cool -= dt;
@@ -358,6 +620,17 @@ impl Herd {
         }
 
         match bot.mode {
+            Mode::Flung => {
+                // The arc (M19c), the player's exactly: an absolute height with `py`
+                // derived from it, so a slope a bot crosses mid-air cannot drag it,
+                // and the ground it actually meets that ends the flight. There is no
+                // AI while it flies; a bot that lands takes up its next idea.
+                bot.fly_time += dt;
+                if bot.fly(dt, craters) {
+                    bot.mode = Mode::Idle;
+                    bot.timer = 1.5 + rng.next() * 3.0;
+                }
+            }
             Mode::Jump => {
                 bot.jump_time += dt;
                 bot.x += bot.yaw.cos() * bot.jump_speed * dt;
@@ -381,7 +654,7 @@ impl Herd {
             }
             Mode::Idle | Mode::Sleep => {
                 if bot.timer <= 0.0 {
-                    bot.new_action(rng, goat, meadow, craters, water);
+                    bot.new_action(rng, goat, meadow, craters, water, hazards);
                 }
             }
             _ => {
@@ -394,7 +667,7 @@ impl Herd {
                         if bot.graze {
                             bot.graze = false;
                             match grass::nearest(bot.x, bot.z, grass::EAT_RANGE, meadow, craters) {
-                                Some(tuft) => bot.start_eat(&tuft, meadow, None),
+                                Some(tuft) => bot.start_eat(&tuft, meadow, hazards, None),
                                 None => {
                                     bot.mode = Mode::Idle;
                                     bot.timer = 1.5 + rng.next() * 3.0;
@@ -424,7 +697,7 @@ impl Herd {
                         bot.z += -bot.yaw.sin() * spd * dt;
                     }
                 } else if bot.timer <= 0.0 {
-                    bot.new_action(rng, goat, meadow, craters, water);
+                    bot.new_action(rng, goat, meadow, craters, water, hazards);
                 }
 
                 // Zoomies: while a run lasts, hop every second or so.
@@ -439,6 +712,13 @@ impl Herd {
                     }
                 }
             }
+        }
+
+        // A bot walking over a mine or a booby-trapped tuft trips it
+        // (`updateExplosions`). A sleeping bot is not moving, so it does not; a
+        // sleeping-or-airborne test is `check_triggers`'s own.
+        if bot.mode != Mode::Sleep {
+            hazards.check_triggers(bot.x, bot.z, bot.airborne(), meadow);
         }
     }
 
@@ -491,6 +771,47 @@ impl Herd {
     }
 }
 
+/// One bot's observable state, for the harness (`.notes/harness.md`).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub struct BotState {
+    pub x: f32,
+    pub z: f32,
+    pub health: f32,
+    pub dead: bool,
+    pub flung: bool,
+    pub py: f32,
+}
+
+#[cfg(test)]
+impl Herd {
+    /// Every bot's state, in spawn order.
+    pub fn states(&self) -> Vec<BotState> {
+        self.bots
+            .iter()
+            .map(|bot| BotState {
+                x: bot.x,
+                z: bot.z,
+                health: bot.health,
+                dead: bot.mode == Mode::Dead,
+                flung: bot.mode == Mode::Flung,
+                py: bot.py,
+            })
+            .collect()
+    }
+
+    /// Stand bot `index` at `(x, z)`, awake and rooted for a while, so a case can
+    /// put a bot where it needs one.
+    pub fn place(&mut self, index: usize, x: f32, z: f32) {
+        if let Some(bot) = self.bots.get_mut(index) {
+            bot.x = x;
+            bot.z = z;
+            bot.mode = Mode::Idle;
+            bot.timer = 100.0;
+        }
+    }
+}
+
 /// A bot `i`'s spec: the table, with the coats recycling past the sixth (`botSpec`).
 fn bot_spec(i: usize) -> Spec {
     let base = SPECS[i % SPECS.len()];
@@ -512,6 +833,7 @@ fn spawn_bot(
     lift: f32,
     index: usize,
     spec: Spec,
+    fleece: AssetHandle<Texture>,
     goat: (f32, f32),
     rng: &mut Rng,
 ) -> Option<Bot> {
@@ -541,8 +863,8 @@ fn spawn_bot(
         .world
         .insert(skinned, Animator::new(clips.pick(Mode::Idle, 0)));
 
-    // Tint the bot's own materials from its coat, so the herd reads as individuals.
-    tint_materials(ctx, &nodes, index, spec.coat);
+    // Dress the bot in its own fleece, so the herd reads as individuals.
+    coat_materials(ctx, &nodes, index, fleece);
 
     Some(Bot {
         root,
@@ -566,13 +888,28 @@ fn spawn_bot(
         eat_dur: 1.0,
         eat_cool: 0.0,
         satiety: 0.0,
+        health: crate::MAX_STATS,
+        death_time: 0.0,
+        death_dur: 1.0,
+        py: 0.0,
+        fly_time: 0.0,
+        fly_y: terrain::height(x, z) + lift,
+        fly_flight: 1.0,
+        fly_vx: 0.0,
+        fly_vy: 0.0,
+        fly_vz: 0.0,
     })
 }
 
-/// Give a bot its own copy of each material, tinted from `coat` (the original gives
-/// each bot its own fleece texture).
-fn tint_materials(ctx: &mut EngineContext, nodes: &[Entity], index: usize, coat: [f32; 3]) {
-    let tint = [coat[0] / 255.0, coat[1] / 255.0, coat[2] / 255.0, 1.0];
+/// Give a bot its own copy of each material, wearing its fleece texture (`botAdd`
+/// sets the model's texture 0, its diffuse): the model's own maps are kept for
+/// everything else, and only the base colour becomes the coat.
+fn coat_materials(
+    ctx: &mut EngineContext,
+    nodes: &[Entity],
+    index: usize,
+    fleece: AssetHandle<Texture>,
+) {
     for &node in nodes {
         for child in children_of(&ctx.scene.world, node) {
             let Some(material) = ctx
@@ -587,15 +924,68 @@ fn tint_materials(ctx: &mut EngineContext, nodes: &[Entity], index: usize, coat:
                 continue;
             };
             let name = format!("bot{index}/{}", original.name);
-            let mut tinted = original.clone();
-            tinted.name = name.clone();
-            tinted.base_color = tint;
-            let handle = ctx.assets.materials.insert_named(name, tinted);
+            let mut coated = original.clone();
+            coated.name = name.clone();
+            coated.base_color_texture = fleece;
+            // The fleece carries the coat colour, so the base is white (the original
+            // draws the bot with an untinted `rl.WHITE`).
+            coated.base_color = [1.0, 1.0, 1.0, 1.0];
+            let handle = ctx.assets.materials.insert_named(name, coated);
             if let Some(renderer) = ctx.scene.world.get_mut::<SkinnedMeshRenderer>(child) {
                 renderer.material = handle;
             }
         }
     }
+}
+
+/// One bot's mottled fleece texture, tinted from its coat (`makeBotTextures`): two
+/// octaves of value noise over the coat, in sRGB like the model's own maps.
+fn fleece_texture(index: usize, coat: [f32; 3]) -> Texture {
+    const N: u32 = 64;
+    let i = index as f32;
+    let mut data = vec![0u8; (N * N * 4) as usize];
+    for y in 0..N {
+        for x in 0..N {
+            let (xf, yf) = (x as f32, y as f32);
+            let n = 0.55 * vnoise2(xf * 0.17 + i * 13.7, yf * 0.17 + i * 5.1)
+                + 0.30 * vnoise2(xf * 0.39 + i * 3.3, yf * 0.39 + i * 9.9)
+                + 0.15 * vnoise2(xf * 0.86 + i, yf * 0.86 + i * 2.0);
+            let shade = 0.62 + 0.70 * (n - 0.5);
+            let px = ((y * N + x) * 4) as usize;
+            for c in 0..3 {
+                data[px + c] = (coat[c] * shade).clamp(0.0, 255.0).round() as u8;
+            }
+            data[px + 3] = 255;
+        }
+    }
+    Texture {
+        name: format!("bot/fleece{index}"),
+        width: N,
+        height: N,
+        format: TextureFormat::Rgba8Srgb,
+        data,
+    }
+}
+
+/// Value noise at `(x, y)` in `0..1` (the original's `vnoise2`).
+fn vnoise2(x: f32, y: f32) -> f32 {
+    let xi = x.floor();
+    let yi = y.floor();
+    let xf = x - xi;
+    let yf = y - yi;
+    let u = xf * xf * (3.0 - 2.0 * xf);
+    let v = yf * yf * (3.0 - 2.0 * yf);
+    let a = hash(xi * 57.0 + yi * 131.0);
+    let b = hash((xi + 1.0) * 57.0 + yi * 131.0);
+    let c = hash(xi * 57.0 + (yi + 1.0) * 131.0);
+    let d = hash((xi + 1.0) * 57.0 + (yi + 1.0) * 131.0);
+    (a * (1.0 - u) + b * u) * (1.0 - v) + (c * (1.0 - u) + d * u) * v
+}
+
+/// The original's cheap sin-hash, a value in `0..1` (`hash`).
+fn hash(n: f32) -> f32 {
+    let s = (n * 127.1).sin() * 43_758.547;
+    s - s.floor()
 }
 
 #[cfg(test)]
@@ -623,5 +1013,24 @@ mod tests {
             seen_high |= v >= 0.5;
         }
         assert!(seen_low && seen_high, "the stream varies");
+    }
+
+    #[test]
+    fn the_fleece_is_mottled_and_wears_the_coat() {
+        let coat = SPECS[0].coat;
+        let fleece = fleece_texture(0, coat);
+        assert_eq!((fleece.width, fleece.height), (64, 64));
+        assert_eq!(fleece.data.len(), 64 * 64 * 4);
+        assert!(
+            fleece.data.chunks(4).all(|px| px[3] == 255),
+            "the fleece is opaque"
+        );
+        // The noise mottles the coat rather than painting one flat colour...
+        let r_min = fleece.data.chunks(4).map(|px| px[0]).min().unwrap();
+        let r_max = fleece.data.chunks(4).map(|px| px[0]).max().unwrap();
+        assert!(r_max - r_min > 10, "mottled red: {r_min}..{r_max}");
+        // ...and the coat's own ordering survives (a tan rounder than it is blue).
+        let blue = fleece.data.chunks(4).map(|px| px[2]).max().unwrap();
+        assert!(r_max > blue, "the coat reads tan: r {r_max} > b {blue}");
     }
 }

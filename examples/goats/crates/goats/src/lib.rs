@@ -748,28 +748,33 @@ impl Goat {
             .unwrap_or(0.0);
     }
 
-    /// Eat `tuft`: remove it from the meadow, face it, and top up energy and belly
-    /// — the original's `startEat`. The caller ensures a tuft is in reach and the
-    /// goat is free.
+    /// Eat `tuft`: remove it, face it, and top up energy and belly — the original's
+    /// `startEat`. `trapped` is the device check the caller has already taken
+    /// (`hazards::Hazards::trip_trap`): a trapped tuft is still gone, because the goat
+    /// did eat a mine, but it gives nothing back — so the goat lowers its head onto
+    /// what it bit either way.
     fn start_eat(
         &mut self,
         assets: &AssetRegistry,
         meadow: &mut grass::Meadow,
         tuft: &grass::Tuft,
+        trapped: bool,
     ) {
         meadow.consume(tuft);
         // Turn to face the tuft, so the head comes down where the grass was: the
         // model's local `+X` is forward, so this is `atan2(-dz, dx)`.
         self.yaw = (-(tuft.z - self.z)).atan2(tuft.x - self.x);
-        // A meal on an already-full belly has nothing to fill, so it heals.
-        let heal = if self.satiety >= FULL_BELLY {
-            FULL_BELLY_HEAL
-        } else {
-            0.0
-        };
-        self.energy = (self.energy + EAT_ENERGY).min(MAX_STATS);
-        self.satiety = (self.satiety + EAT_SATIETY).min(1.0);
-        self.health = (self.health + heal).min(MAX_STATS);
+        if !trapped {
+            // A meal on an already-full belly has nothing to fill, so it heals.
+            let heal = if self.satiety >= FULL_BELLY {
+                FULL_BELLY_HEAL
+            } else {
+                0.0
+            };
+            self.energy = (self.energy + EAT_ENERGY).min(MAX_STATS);
+            self.satiety = (self.satiety + EAT_SATIETY).min(1.0);
+            self.health = (self.health + heal).min(MAX_STATS);
+        }
         self.enter(Mode::Eat);
         self.eat_time = 0.0;
         let (clip, _) = self.animation();
@@ -1016,6 +1021,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &mut world.weather,
         &mut world.water,
         &world.craters,
+        &mut world.hazards,
         &mut world.sounds,
     );
     // The hazards own the ground too: a bang dishes a crater, and the ground heals
@@ -1036,6 +1042,9 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     // ...and its fire, smoke and grit: a burst per bang, then the pool advanced and
     // the sprites written onto the pooled billboard entities.
     for bang in &bangs {
+        // The herd takes the blast too (M19a): the player's curve without its floor,
+        // so a bot can be killed and thrown where the goat cannot.
+        world.herd.blast(bang.x, bang.z, bang.seed, &world.craters);
         let ground = world.craters.surface(bang.x, bang.z);
         world.fx.blast(bang.x, bang.z, ground, bang.seed);
         world.pulse.hit(bang.impact * bang.impact * PULSE_GAIN);
@@ -1060,7 +1069,8 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     }
     update_meadow(ctx, world, ate, ground_changed);
 
-    // The herd (M4): the bots roam, graze and keep each other apart.
+    // The herd (M4): the bots roam, graze and keep each other apart. They trip
+    // devices of their own too, so their update sees the hazard field.
     let herd_at = (world.goat.x, world.goat.z);
     world.herd.update(
         ctx,
@@ -1071,6 +1081,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &world.craters,
         &world.weather,
         &world.water,
+        &mut world.hazards,
     );
 
     let target = math::vec3(
@@ -1152,6 +1163,7 @@ impl World {
 /// root and play the state's clip. The `water` table it stands in slows it, burns its
 /// energy and gates its sleep; `craters` is the ground it stands on and, after a
 /// blast, the arc it flies.
+#[allow(clippy::too_many_arguments)]
 fn drive_goat(
     ctx: &mut EngineContext,
     goat: &mut Goat,
@@ -1159,6 +1171,7 @@ fn drive_goat(
     weather: &mut weather::Weather,
     water: &mut water::Water,
     craters: &terrain::Craters,
+    hazards: &mut hazards::Hazards,
     sounds: &mut Vec<Sound>,
 ) -> bool {
     let dt = ctx.time.delta();
@@ -1250,7 +1263,11 @@ fn drive_goat(
             if pressed('E')
                 && let Some(tuft) = food
             {
-                goat.start_eat(&ctx.assets, meadow, &tuft);
+                // A trapped tuft replaces the meal with a bang (`startEat`): the tuft
+                // is still gone, because the goat did eat a mine, but it gives
+                // nothing back.
+                let trapped = hazards.trip_trap(&tuft, meadow);
+                goat.start_eat(&ctx.assets, meadow, &tuft, trapped);
                 ate = true;
             } else if pressed('Z') {
                 // A goat does not sleep in the water (the original's `startSleep`).
@@ -2354,7 +2371,7 @@ mod tests {
         let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default())
             .expect("a tuft in reach");
 
-        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
+        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft, false);
 
         assert_eq!(goat.mode, Mode::Eat);
         assert!(meadow.is_eaten(tuft.cx, tuft.cz), "the tuft was eaten");
@@ -2385,7 +2402,7 @@ mod tests {
         let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default())
             .expect("a tuft in reach");
 
-        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
+        goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft, false);
         assert!(
             goat.health > 50.0,
             "a full belly turns grass into health: {}",

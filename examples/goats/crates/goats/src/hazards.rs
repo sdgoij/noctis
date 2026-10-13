@@ -40,16 +40,16 @@ const RELOCATE_MAX: f32 = 24.0;
 /// Candidate draws before the device is simply not replaced (`relocate.tries`).
 const RELOCATE_TRIES: i32 = 12;
 /// Metres of the blast's reach (`blast.radius`).
-const BLAST_RADIUS: f32 = 3.2;
+pub(crate) const BLAST_RADIUS: f32 = 3.2;
 /// Damage at the centre, falling to zero at the rim (`blast.damage`).
-const BLAST_DAMAGE: f32 = 45.0;
+pub(crate) const BLAST_DAMAGE: f32 = 45.0;
 /// A blast cannot take health below this (`blast.healthFloor`): the promise that a
 /// mine cannot end the player's run.
 const BLAST_HEALTH_FLOOR: f32 = 1.0;
 /// m/s of outward velocity at the centre (`blast.push`).
-const BLAST_PUSH: f32 = 13.0;
+pub(crate) const BLAST_PUSH: f32 = 13.0;
 /// m/s of upward velocity at the centre (`blast.lift`).
-const BLAST_LIFT: f32 = 34.0;
+pub(crate) const BLAST_LIFT: f32 = 34.0;
 /// How far a cascade goes; `1` = neighbours only (`chainDepth`).
 const CHAIN_DEPTH: u32 = 1;
 /// The per-session trap salt (`trapSalt`; the port has no session seeding, so the
@@ -275,9 +275,16 @@ impl Hazards {
         }
     }
 
-    /// What the goat has walked onto (`checkTriggers`): the mine in its own cell,
-    /// then the nearest trapped tuft in reach.
-    fn check_triggers(&mut self, x: f32, z: f32, airborne: bool, meadow: &grass::Meadow) {
+    /// What a unit has walked onto (`checkTriggers`): the mine in its own cell,
+    /// then the nearest trapped tuft in reach. Runs for the player's goat and for
+    /// every bot (`updateExplosions`).
+    pub(crate) fn check_triggers(
+        &mut self,
+        x: f32,
+        z: f32,
+        airborne: bool,
+        meadow: &grass::Meadow,
+    ) {
         if airborne {
             return;
         }
@@ -447,8 +454,29 @@ impl Hazards {
         self.moved.contains(&key) || mine_at(cx, cz)
     }
 
+    /// Trip the trapped tuft `tuft` if its cell is booby-trapped, the eat-path
+    /// device check (`startEat` / `botStartEat`): the tuft is gone whichever way
+    /// this goes, but a trapped one trades the meal for a bang. `false` when the
+    /// tuft is not trapped.
+    pub(crate) fn trip_trap(&mut self, tuft: &grass::Tuft, meadow: &grass::Meadow) -> bool {
+        if !self.trap_at(tuft.cx, tuft.cz) {
+            return false;
+        }
+        self.trip_device(
+            Device::Trap,
+            Loc {
+                cx: tuft.cx,
+                cz: tuft.cz,
+                x: tuft.x,
+                z: tuft.z,
+            },
+            0,
+            meadow,
+        )
+    }
+
     /// Whether the tuft in cell `(cx, cz)` is trapped now (`trapAt`).
-    fn trap_at(&self, cx: i32, cz: i32) -> bool {
+    pub(crate) fn trap_at(&self, cx: i32, cz: i32) -> bool {
         let key = tuft_key(cx, cz);
         if self.trap_spent.contains(&key) {
             return false;
@@ -485,8 +513,10 @@ fn trap_noise(cx: i32, cz: i32, salt: i32) -> f32 {
 }
 
 /// The direction a blast throws a goat in: away from the centre, turned a little
-/// off that axis by the blast's own stream (`flingDirection`).
-fn fling_direction(ox: f32, oz: f32, d: f32, seed: f32) -> (f32, f32) {
+/// off that axis by the blast's own stream (`flingDirection`). Shared with the
+/// herd's own blast (`herd::Herd::blast`), so the player and a bot are thrown the
+/// same way by the same bang.
+pub(crate) fn fling_direction(ox: f32, oz: f32, d: f32, seed: f32) -> (f32, f32) {
     let (ux, uz) = if d > 1e-3 {
         (ox / d, oz / d)
     } else {
@@ -780,5 +810,43 @@ mod tests {
         // Dead on the centre, the stream still picks a direction.
         let (dx, dz) = fling_direction(0.0, 0.0, 0.0, 0.7);
         assert!((dx * dx + dz * dz - 1.0).abs() < 0.25);
+    }
+
+    #[test]
+    fn a_bite_trips_only_a_trapped_tuft() {
+        // The eat-path device check (`startEat`): a trapped tuft is spent by the
+        // bite, and a plain one is left alone.
+        let mut hazards = Hazards::default();
+        let meadow = grass::Meadow::default();
+        let mut trapped = None;
+        let mut plain = None;
+        for cx in 0..200 {
+            for cz in 0..200 {
+                let Some(tuft) = grass::tuft_at(cx, cz) else {
+                    continue;
+                };
+                if hazards.trap_at(cx, cz) {
+                    trapped.get_or_insert(tuft);
+                } else {
+                    plain.get_or_insert(tuft);
+                }
+            }
+        }
+        let trapped = trapped.expect("the field grows a trapped tuft");
+        let plain = plain.expect("the field grows a plain tuft");
+
+        assert!(
+            hazards.trip_trap(&trapped, &meadow),
+            "the bite trips the trapped tuft"
+        );
+        assert!(
+            !hazards.trap_at(trapped.cx, trapped.cz),
+            "and its cell is spent"
+        );
+        assert_eq!(hazards.pending.len(), 1, "the device went on its fuse");
+        assert!(
+            !hazards.trip_trap(&plain, &meadow),
+            "a plain tuft is not a device"
+        );
     }
 }

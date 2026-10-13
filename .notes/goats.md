@@ -199,11 +199,15 @@ Single-player sandbox first; each milestone is playable.
 5. **M4 — herd.** *(Shipped in `examples/goats`.)* Seven bot goats (`TUNING.herd.count`)
    roam around the player on the original's state machine — graze, stroll, trot,
    occasionally sprint and hop, rarely doze — each with its own size, temperament
-   (`TUNING.herd.spec`) and coat-tinted materials, its own node hierarchy and
-   animator, but sharing the goat's meshes, skin and clips. They eat the meadow,
-   are slowed by the rain, are steered home when they stray and pushed apart so no
-   two goats overlap. (Bot blast damage and the death/respawn the original adds are
-   not ported yet.)
+   (`TUNING.herd.spec`) and generated fleece (`makeBotTextures`: a coat-tinted
+   value-noise image its material wears, so the herd reads as individuals), its own
+   node hierarchy and animator, but sharing the goat's meshes, skin and clips. They
+   eat the meadow, are slowed by the rain, are steered home when they stray and
+   pushed apart so no two goats overlap. They trip the devices they walk over
+   (`updateExplosions` runs `checkTriggers` for every bot, and a bot that grazes a
+   trapped tuft blows it too), and a bang **damages, flings and can kill** them —
+   the player's own curve without the player's health floor — after which a bot lies
+   dead for `herd.deathLinger` seconds and gets up somewhere else.
 6. **M5 — presentation.** *(Shipped: the sky — a `ScreenShaderMaterial` over the
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
    material's `user` block and animated there: the sun arcs and the colour drains

@@ -172,6 +172,27 @@ impl Sim {
         self.world.hazards.mine_armed(cx, cz)
     }
 
+    /// Whether the tuft in cell `(cx, cz)` is booby-trapped now.
+    pub fn trap_armed(&self, cx: i32, cz: i32) -> bool {
+        self.world.hazards.trap_at(cx, cz)
+    }
+
+    /// The first trapped tuft in the near meadow, for a case about eating a mine.
+    /// `None` only if the near field holds no trap.
+    pub fn first_trapped_tuft(&self) -> Option<crate::grass::Tuft> {
+        for cx in -30..=30 {
+            for cz in -30..=30 {
+                if self.world.meadow.is_eaten(cx, cz) || !self.world.hazards.trap_at(cx, cz) {
+                    continue;
+                }
+                if let Some(tuft) = crate::grass::tuft_at(cx, cz) {
+                    return Some(tuft);
+                }
+            }
+        }
+        None
+    }
+
     // ---- the observe seam -----------------------------------------------------
 
     /// The goat.
@@ -239,6 +260,32 @@ impl Sim {
         self.world
             .herd
             .min_gap((self.world.goat.x, self.world.goat.z))
+    }
+
+    /// Every bot's state (position, health, dead, thrown).
+    pub fn herd_states(&self) -> Vec<crate::herd::BotState> {
+        self.world.herd.states()
+    }
+
+    /// How many bots are lying dead right now.
+    pub fn herd_dead(&self) -> usize {
+        self.world
+            .herd
+            .states()
+            .iter()
+            .filter(|bot| bot.dead)
+            .count()
+    }
+
+    /// Apply a bang to the herd at `(x, z)`, as the frame does when a fuse lands.
+    pub fn blast_herd_at(&mut self, x: f32, z: f32, seed: f32) {
+        self.world.herd.blast(x, z, seed, &self.world.craters);
+    }
+
+    /// Stand bot `index` at `(x, z)`, awake and rooted, for a case about a bot
+    /// tripping a device.
+    pub fn place_bot(&mut self, index: usize, x: f32, z: f32) {
+        self.world.herd.place(index, x, z);
     }
 
     /// How many of the fx pool's billboards (fire, smoke, grit) are visible.

@@ -292,3 +292,72 @@ fn an_armed_mine_shows_its_tell() {
     );
     checks.finish();
 }
+
+#[test]
+fn a_bot_walking_over_a_mine_trips_it() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+
+    let Some((mx, mz)) = sim.first_armed_mine() else {
+        panic!("the derived field has an armed mine in the near field");
+    };
+    let (cx, cz) = (((mx - 1.0) / 2.0) as i32, ((mz - 1.0) / 2.0) as i32);
+    checks.check("the mine starts armed", sim.mine_armed(cx, cz), true);
+
+    // Stand a bot on it, awake: `updateExplosions` runs `checkTriggers` for every bot,
+    // so the herd trips its own devices where the player's goat trips the rest.
+    sim.place_bot(0, mx, mz);
+    sim.run(2);
+    checks.check(
+        "the bot tripped the mine",
+        !sim.mine_armed(cx, cz),
+        sim.mine_armed(cx, cz),
+    );
+    checks.finish();
+}
+
+#[test]
+fn eating_a_trapped_tuft_is_a_bang_not_a_meal() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+
+    let Some(tuft) = sim.first_trapped_tuft() else {
+        // The near field holds no trap (a pure function of position, so this is fixed
+        // for the session); there is nothing to prove.
+        return;
+    };
+    checks.check(
+        "the tuft starts trapped",
+        sim.trap_armed(tuft.cx, tuft.cz),
+        true,
+    );
+
+    // Stand on it and press E on the frame the goat arrives: `drive_goat` runs before
+    // the walk-over check in `apply_frame`, so it is the *bite* (`startEat`) that
+    // trips the trap, not walking over it. The tuft is gone either way.
+    sim.set_energy(20.0);
+    sim.place_goat(tuft.x, tuft.z);
+    sim.key_down('E');
+    sim.step(1.0 / 60.0);
+    sim.key_up('E');
+    checks.check(
+        "the bite tripped the trap",
+        !sim.trap_armed(tuft.cx, tuft.cz),
+        sim.trap_armed(tuft.cx, tuft.cz),
+    );
+    checks.check(
+        "the goat still lowered its head onto it",
+        sim.goat().mode == Mode::Eat,
+        sim.goat().mode,
+    );
+    checks.check(
+        "but the meal gave nothing back",
+        sim.goat().satiety < 0.01,
+        sim.goat().satiety,
+    );
+    checks.finish();
+}
