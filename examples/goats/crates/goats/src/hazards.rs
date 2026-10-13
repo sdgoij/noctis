@@ -677,6 +677,36 @@ mod tests {
     }
 
     #[test]
+    fn a_blast_never_kills_the_goat_however_hurt_it_is() {
+        // The promise `blast.healthFloor` makes: a device can hurt and throw the
+        // player's goat, but no bang — a mine or a trapped tuft — can end its run,
+        // however little health it has left. (Bots, with no floor, are the ones a
+        // bang can kill; that is `herd::Herd::blast`.)
+        let meadow = grass::Meadow::default();
+        let mut craters = Craters::default();
+        let mut hazards = Hazards::default();
+        let mut goat = test_goat();
+        goat.health = 1.0;
+
+        hazards.blast(
+            At {
+                x: goat.x,
+                z: goat.z,
+                seed: 1.5,
+            },
+            0,
+            &mut goat,
+            &meadow,
+            &mut craters,
+        );
+
+        assert!(goat.health >= BLAST_HEALTH_FLOOR, "still above the floor");
+        assert!(goat.health > 0.0, "the run is not ended");
+        assert_ne!(goat.mode, Mode::Dead, "and the goat is not dead");
+        assert_eq!(goat.mode, Mode::Flung, "but it was thrown");
+    }
+
+    #[test]
     fn a_blast_out_of_reach_is_only_a_hole() {
         let meadow = grass::Meadow::default();
         let mut craters = Craters::default();
