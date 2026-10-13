@@ -68,6 +68,17 @@ impl Kind {
             Kind::Clearing => "clearing",
         }
     }
+
+    /// The state named `name` (`weather rain`), or `None` for an unknown name.
+    pub fn from_name(name: &str) -> Option<Kind> {
+        match name {
+            "clear" => Some(Kind::Clear),
+            "cloudy" => Some(Kind::Cloudy),
+            "rain" => Some(Kind::Rain),
+            "clearing" => Some(Kind::Clearing),
+            _ => None,
+        }
+    }
 }
 
 /// The wind's resting speed, in metres per second (`TUNING.weather.windBase`).
@@ -184,6 +195,12 @@ impl Weather {
     pub fn force_next(&mut self) {
         self.kind = self.kind.next()[0];
         self.timer = self.kind.hold().0;
+    }
+
+    /// Force a named state (`weather rain`), holding it for the state's own time.
+    pub fn force(&mut self, kind: Kind) {
+        self.kind = kind;
+        self.timer = kind.hold().0;
     }
 
     /// Advance the wind and the state machine one frame (`updateWind` followed by

@@ -241,6 +241,22 @@ impl Audio {
         self.volume
     }
 
+    /// The master volume, `0..=100` (the settings slider reads it).
+    pub fn volume(&self) -> u8 {
+        self.volume
+    }
+
+    /// Whether the audio is muted (the settings checkbox reads it).
+    pub fn muted(&self) -> bool {
+        self.muted
+    }
+
+    /// Set the master volume, `0..=100` (the settings slider, or `volume <n>`).
+    pub fn set_volume(&mut self, volume: u8) {
+        self.volume = volume.min(100);
+        self.apply_volume();
+    }
+
     fn apply_volume(&mut self) {
         // The engine's own master mute, so the track and the beds (set by
         // `set_volume`) follow too.

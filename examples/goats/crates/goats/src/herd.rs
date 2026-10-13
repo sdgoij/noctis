@@ -467,8 +467,7 @@ impl Herd {
         }
     }
 
-    /// How many bots are alive.
-    #[cfg(test)]
+    /// How many bots are in the herd.
     pub fn count(&self) -> usize {
         self.bots.len()
     }

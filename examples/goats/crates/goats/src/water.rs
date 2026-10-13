@@ -139,16 +139,14 @@ impl Water {
         self.enabled
     }
 
-    /// Pin the level by hand — the harness's `flood <h>` seed (the original's
-    /// `waterSetForce`). The console (M6) will be its next caller.
-    #[cfg(test)]
+    /// Pin the level by hand — the console's `flood <h>` (the original's
+    /// `waterSetForce`), and the harness's seed seam.
     pub fn set_force(&mut self, level: f32) {
         self.force = Some(level);
         self.refresh();
     }
 
     /// Hand the level back to the rain (the original's `waterForceOff`).
-    #[cfg(test)]
     pub fn force_off(&mut self) {
         self.force = None;
         self.refresh();

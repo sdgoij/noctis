@@ -8,8 +8,10 @@ is the contract for that port; the engine features it depends on are designed in
 [`.notes/animation.md`](animation.md) (skeletal animation),
 [`.notes/shaders.md`](shaders.md) (the shader seam) and [`.notes/ui.md`](ui.md)
 (the screen-UI seam). **M0 (the render-path spike), M1
-(locomotion), M2 (the world sim) and M3 (hazards) are shipped** as `examples/goats`;
-the rest is not built yet. The port's test harness — the headless driver and its
+(locomotion), M2 (the world sim), M3 (hazards), M4 (the herd), M5 (presentation)
+and M6 (the menus) are largely shipped** as `examples/goats`; what remains inside
+them (day/night lighting, tier-2 water reflections, the mods screen) and M7–M9 are
+not. The port's test harness — the headless driver and its
 seed/observe seams — is designed in [`.notes/harness.md`](harness.md).
 
 Background: a Noctis *project* carries Rust as a plugin
@@ -229,8 +231,13 @@ Single-player sandbox first; each milestone is playable.
    the vertex colour). The water **reflects** the sky and a baked ground (tiers 0
    and 1 of [`.notes/reflections.md`](reflections.md)); tier 2, a planar mirror of
    the whole scene, waits on the engine's pass.
-7. **M6 — UI.** Main / settings / mods / keymap and the console. *(The screen-UI
-   seam is **shipped** ([`.notes/ui.md`](ui.md)); the menus are next.)*
+7. **M6 — UI.** *(Shipped: the menus.)* On the screen-UI seam
+   ([`.notes/ui.md`](ui.md)): the **main menu** (Continue/Play, Restart, Settings,
+   Keymap, Console, Quit), **settings** (volume, mute, the water, a weather
+   button), the **keymap** table, and the **console** (`help`, `weather`, `flood`,
+   `water`, `restart`, `mute`, `volume`, `clear`, `quit`). A screen freezes the
+   world and the game's input, as the original's `uiScreen` does; `Esc`/`P` opens
+   it, `Enter` runs the console line. The **mods** screen waits on M7.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
 9. **M8 — multiplayer and voice.** Reuse `session` / `proto` / `pull`; rebuild the
    scene-side sync and the voice path.

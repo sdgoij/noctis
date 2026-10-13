@@ -30,6 +30,7 @@ mod grass;
 mod hazards;
 mod herd;
 pub mod terrain;
+pub mod ui;
 mod water;
 mod weather;
 mod weather_fx;
@@ -945,6 +946,8 @@ pub struct World {
     reflection: terrain::ReflectionMap,
     /// The bot goats (M4).
     herd: herd::Herd,
+    /// The game's menus and console (M6).
+    menus: ui::Menus,
     /// The sounds the simulation asked for this frame, for the plugin to play.
     sounds: Vec<Sound>,
     /// The bang's fire, smoke and grit (M5).
@@ -1120,6 +1123,16 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         weather.push_str("   ");
         weather.push_str(&water);
     }
+    // Publish the same view into the menus (M6), which the main menu's footer and
+    // the settings screen read.
+    let herd = world.herd.count();
+    let water_on = world.water.enabled();
+    world.menus.fps = fps;
+    world.menus.started = true;
+    world.menus.goat = goat.mode.label().to_string();
+    world.menus.weather = weather.clone();
+    world.menus.herd = herd;
+    world.menus.water_on = water_on;
     ctx.screen_text = vec![
         format!(
             "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {}  |  \
@@ -1156,6 +1169,41 @@ impl World {
     /// The wind's sway, which the wind bed's volume follows.
     pub fn wind_sway(&self) -> f32 {
         self.weather.sway()
+    }
+
+    /// Draw the game's menus and console (M6) into the seam's [`Ui`], and carry out
+    /// the world commands they asked for (a restart, the weather, the water). The
+    /// plugin calls this from its UI callback; the audio and quit commands it cannot
+    /// carry out are left for [`World::take_plugin_commands`].
+    pub fn draw_ui(&mut self, ui: &mut dyn Ui) {
+        self.menus.draw(ui);
+        for command in self.menus.drain_world_commands() {
+            match command {
+                ui::WorldCommand::Restart => self.goat.restart(),
+                ui::WorldCommand::Weather(kind) => match kind {
+                    Some(kind) => self.weather.force(kind),
+                    None => self.weather.force_next(),
+                },
+                ui::WorldCommand::Flood(level) => match level {
+                    Some(level) => self.water.set_force(level),
+                    None => self.water.force_off(),
+                },
+                ui::WorldCommand::Water(on) => {
+                    self.water.set_enabled(on);
+                }
+            }
+        }
+    }
+
+    /// The menus' own commands (audio, quit), drained for the plugin (M6).
+    pub fn take_plugin_commands(&mut self) -> Vec<ui::PluginCommand> {
+        self.menus.take_plugin_commands()
+    }
+
+    /// The menus' state (M6), which the plugin drives between frames: the pause
+    /// toggle, the console's submit, and the audio volume/mute it syncs.
+    pub fn menus_mut(&mut self) -> &mut ui::Menus {
+        &mut self.menus
     }
 }
 
@@ -1882,6 +1930,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         water_material,
         reflection,
         herd,
+        menus: ui::Menus::new(),
         sounds: Vec::new(),
         fx: fx::Fx::new(fx_textures),
         fx_textures,

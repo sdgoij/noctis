@@ -12,6 +12,9 @@
 
 use noctis::prelude::*;
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 /// The project's plugin. `#[noctis::plugin]` exports the `noctis_plugin` symbol
 /// the tool links — a `Cargo.toml` at the project root is all `noctis` needs to
 /// find it.
@@ -21,45 +24,104 @@ pub struct Goats;
 
 impl Plugin for Goats {
     fn build(&self, app: &mut App) {
-        let mut world: Option<goats::World> = None;
+        // The world is built on the first tick, and shared with the UI callback (M6)
+        // the host calls after the frame's systems — `Rc<RefCell<..>>` is the
+        // single-threaded handle both hold. The engine's systems need not be `Send`,
+        // so this is enough (`.notes/ui.md`).
+        let shared: Rc<RefCell<Option<goats::World>>> = Rc::new(RefCell::new(None));
         // The audio device (or the silent fallback) is opened once. The plugin's own
         // tests must not touch a device, so it is skipped there; the harness never
         // builds it at all.
         let mut audio: Option<goats::audio::Audio> = None;
-        app.on_update("goats.frame", move |ctx| {
-            // The world is built on the first tick, so the closure owns it.
-            if world.is_none() {
-                world = goats::spawn_world(ctx);
-                if !cfg!(test) {
-                    audio = Some(goats::audio::Audio::new());
+        app.on_update("goats.frame", {
+            let shared = Rc::clone(&shared);
+            move |ctx| {
+                let mut slot = shared.borrow_mut();
+                if slot.is_none() {
+                    *slot = goats::spawn_world(ctx);
+                    if !cfg!(test) {
+                        audio = Some(goats::audio::Audio::new());
+                    }
                 }
-            }
-            let Some(world) = world.as_mut() else {
-                return;
-            };
-            goats::apply_frame(ctx, world);
+                let Some(world) = slot.as_mut() else {
+                    return;
+                };
 
-            // Play the sounds the frame asked for, and tie the beds to the weather.
-            if let Some(audio) = audio.as_mut() {
-                let goat = world.goat_position();
-                for &sound in world.sounds() {
-                    audio.play_sound(sound, goat);
+                // The pause keys open and close the menu, and `Enter` runs the
+                // console's line — before the game sees the frame's keys.
+                let escape = ctx.input.key_pressed(Key::Escape);
+                let pause = Key::letter('P').is_some_and(|key| ctx.input.key_pressed(key));
+                if escape || pause {
+                    world.menus_mut().toggle_pause();
                 }
-                audio.update(ctx.time.delta(), world.rain(), world.wind_sway());
+                if world.menus_mut().screen == goats::ui::Screen::Console
+                    && ctx.input.key_pressed(Key::Enter)
+                {
+                    world.menus_mut().submit();
+                }
 
-                // Volume keys: `M` mutes, `8`/`9` (the original's number pad) trim.
-                let pressed =
-                    |ch: char| Key::letter(ch).is_some_and(|key| ctx.input.key_pressed(key));
-                let digit = |ch: char| Key::digit(ch).is_some_and(|key| ctx.input.key_pressed(key));
-                if pressed('M') {
-                    audio.toggle_mute();
+                // A screen freezes the world and the game's input, exactly as the
+                // original's `uiScreen` does.
+                if !world.menus_mut().is_open() {
+                    goats::apply_frame(ctx, world);
                 }
-                if digit('8') {
-                    audio.adjust_volume(-5);
+
+                // The menus read the audio's own volume and mute.
+                if let Some(audio) = audio.as_ref() {
+                    world.menus_mut().volume = audio.volume();
+                    world.menus_mut().muted = audio.muted();
                 }
-                if digit('9') {
-                    audio.adjust_volume(5);
+                // ...and the audio and the loop carry out what they asked for.
+                for command in world.take_plugin_commands() {
+                    match command {
+                        goats::ui::PluginCommand::Mute => {
+                            if let Some(audio) = audio.as_mut() {
+                                audio.toggle_mute();
+                            }
+                        }
+                        goats::ui::PluginCommand::Volume(volume) => {
+                            if let Some(audio) = audio.as_mut() {
+                                audio.set_volume(volume);
+                            }
+                        }
+                        goats::ui::PluginCommand::Quit => ctx.request_exit(),
+                    }
                 }
+
+                // Play the sounds the frame asked for, and tie the beds to the weather.
+                if let Some(audio) = audio.as_mut() {
+                    let goat = world.goat_position();
+                    for &sound in world.sounds() {
+                        audio.play_sound(sound, goat);
+                    }
+                    audio.update(ctx.time.delta(), world.rain(), world.wind_sway());
+
+                    // Volume keys: `M` mutes, `8`/`9` (the original's number pad) trim.
+                    let pressed =
+                        |ch: char| Key::letter(ch).is_some_and(|key| ctx.input.key_pressed(key));
+                    let digit =
+                        |ch: char| Key::digit(ch).is_some_and(|key| ctx.input.key_pressed(key));
+                    if pressed('M') {
+                        audio.toggle_mute();
+                    }
+                    if digit('8') {
+                        audio.adjust_volume(-5);
+                    }
+                    if digit('9') {
+                        audio.adjust_volume(5);
+                    }
+                }
+
+                // Hand the menus to the host for this frame. The callback runs after
+                // the systems, once this borrow has dropped.
+                let ui_world = Rc::clone(&shared);
+                ctx.ui = Some(Box::new(move |ui| {
+                    if let Some(world) = ui_world.borrow_mut().as_mut() {
+                        world.draw_ui(ui);
+                    }
+                }));
+                // The goats game drags to orbit, so it keeps its pointer free.
+                ctx.mouse_captured = Some(false);
             }
         });
     }
@@ -268,6 +330,85 @@ mod tests {
 
     fn key(c: char) -> Key {
         Key::letter(c).expect("a letter key")
+    }
+
+    /// The goat root's translation.
+    fn goat_at(app: &App) -> Vec3 {
+        app.context
+            .scene
+            .world
+            .get::<LocalTransform>(goat_root(app))
+            .expect("a transform")
+            .translation
+    }
+
+    /// Draw the plugin's installed UI callback into a recording `Ui`.
+    fn draw_ui(app: &mut App) -> RecordingUi {
+        let mut ui = RecordingUi::new();
+        if let Some(callback) = app.context.ui.as_mut() {
+            callback(&mut ui);
+        }
+        ui
+    }
+
+    #[test]
+    fn escape_opens_the_menu_and_freezes_the_world() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0); // build the world
+        assert!(
+            app.context.ui.is_some(),
+            "the plugin installs a UI callback each frame"
+        );
+
+        // `Esc` opens the menu, and the installed callback draws it.
+        let before = goat_at(&app);
+        app.context.input.press_key(Key::Escape);
+        app.tick(1.0 / 60.0);
+        let ui = draw_ui(&mut app);
+        assert!(
+            ui.drew("panel:goats.main/"),
+            "the main menu drew: {:?}",
+            ui.calls()
+        );
+
+        // A screen freezes the world: holding `W` moves nothing.
+        app.context.input.press_key(key('W'));
+        for _ in 0..30 {
+            app.tick(1.0 / 60.0);
+        }
+        let after = goat_at(&app);
+        assert!(
+            math::length(after - before) < 1e-4,
+            "the world froze behind the menu: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn the_menu_opens_the_console() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        app.context.input.press_key(Key::Escape);
+        app.tick(1.0 / 60.0);
+
+        // From the main menu, click Console: the next draw is the console.
+        let mut ui = RecordingUi::new();
+        ui.press("Console");
+        if let Some(callback) = app.context.ui.as_mut() {
+            callback(&mut ui);
+        }
+        let ui = draw_ui(&mut app);
+        assert!(
+            ui.drew("panel:goats.console/"),
+            "the console drew: {:?}",
+            ui.calls()
+        );
+        assert!(
+            ui.drew("field:goats.console.input"),
+            "the console has a text field: {:?}",
+            ui.calls()
+        );
     }
 
     #[test]
