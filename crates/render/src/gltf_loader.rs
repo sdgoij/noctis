@@ -750,17 +750,9 @@ impl LoadedGltf {
                                 ..SkinnedMeshRenderer::default()
                             },
                         );
-                        let joints = node
-                            .skin
-                            .and_then(|index| self.skins.get(index))
-                            .map(|skin| {
-                                skin.joints
-                                    .iter()
-                                    .filter_map(|joint| node_entities.get(*joint).copied())
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        world.insert(child, Skeleton(joints));
+                        // The whole node list, because both the skin's joints and
+                        // an animation channel's targets index it by node index.
+                        world.insert(child, Skeleton(node_entities.clone()));
                     }
                     None => {
                         world.insert(

@@ -227,8 +227,10 @@ and does nothing until then.
    `mesh_world⁻¹ · joint_world · inverse_bind`, and the draw-loop wiring. A
    skinned glTF node instantiates as a `SkinnedMeshRenderer`; with no `Animator`
    yet it holds its bind pose, so phase 3 is what makes it move.
-3. **Playback.** *(Not built.)* `Animator`, the `update`-stage sampler, loop and
-   one-shot, the editor form, and the `testscene` joint-motion assertion.
+3. **Playback.** *(Shipped.)* `Animator` and the `update`-stage sampler
+   (`ecs::animation::sample_scene`), loop and one-shot, the editor's add/remove,
+   and the `testscene` skinned instance playing a clip. `examples/goats` plays its
+   gaits from input.
 4. **Fidelity.** *(Not built.)* `CUBICSPLINE`, cross-fade between clips, additive
    or masked layers, root-motion extraction — only as a consumer needs it.
 

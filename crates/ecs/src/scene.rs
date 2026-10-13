@@ -539,6 +539,15 @@ fn component_descs(
             receive_shadows: m.receive_shadows,
         });
     }
+    if let Some(a) = world.get::<Animator>(entity) {
+        out.push(ComponentDesc::Animator {
+            clip: assets.animations.path_of(a.clip).map(str::to_string),
+            time: a.time,
+            speed: a.speed,
+            looped: a.looped,
+            playing: a.playing,
+        });
+    }
     if let Some(r) = world.get::<RigidBody>(entity) {
         out.push(ComponentDesc::RigidBody {
             body_type: match r.body_type {
@@ -637,6 +646,9 @@ fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<
                     .as_deref()
                     .filter(|p| assets.materials.handle(p).is_none())
             }),
+        ComponentDesc::Animator { clip, .. } => clip
+            .as_deref()
+            .filter(|p| assets.animations.handle(p).is_none()),
         ComponentDesc::AudioSource { clip, .. } => {
             clip.as_deref().filter(|p| assets.audio.handle(p).is_none())
         }
@@ -741,6 +753,28 @@ fn apply_component(
                     material: material_handle,
                     cast_shadows: *cast_shadows,
                     receive_shadows: *receive_shadows,
+                },
+            );
+        }
+        ComponentDesc::Animator {
+            clip,
+            time,
+            speed,
+            looped,
+            playing,
+        } => {
+            let clip_handle = clip
+                .as_deref()
+                .and_then(|p| assets.animations.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                Animator {
+                    clip: clip_handle,
+                    time: *time,
+                    speed: *speed,
+                    looped: *looped,
+                    playing: *playing,
                 },
             );
         }
@@ -892,6 +926,7 @@ pub fn desc_name(desc: &ComponentDesc) -> &str {
         ComponentDesc::Light { .. } => "Light",
         ComponentDesc::MeshRenderer { .. } => "MeshRenderer",
         ComponentDesc::SkinnedMeshRenderer { .. } => "SkinnedMeshRenderer",
+        ComponentDesc::Animator { .. } => "Animator",
         ComponentDesc::RigidBody { .. } => "RigidBody",
         ComponentDesc::Collider { .. } => "Collider",
         ComponentDesc::AudioSource { .. } => "AudioSource",
@@ -1424,6 +1459,19 @@ pub enum ComponentDesc {
         cast_shadows: bool,
         /// Whether it receives shadows.
         receive_shadows: bool,
+    },
+    /// Animation playback state.
+    Animator {
+        /// Clip asset path.
+        clip: Option<String>,
+        /// The playhead, in seconds.
+        time: f32,
+        /// Playback rate.
+        speed: f32,
+        /// Whether the clip loops.
+        looped: bool,
+        /// Whether the playhead advances.
+        playing: bool,
     },
     /// A rigid body.
     RigidBody {

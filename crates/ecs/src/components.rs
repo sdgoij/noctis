@@ -4,7 +4,7 @@
 //! physics, audio, and scripting crates read and write them; the editor and the
 //! scripting API expose them by name.
 
-use crate::assets::{AssetHandle, AudioClip, FontAsset, Material, Mesh, Skin};
+use crate::assets::{AnimationClip, AssetHandle, AudioClip, FontAsset, Material, Mesh, Skin};
 use crate::world::Entity;
 use math::{Mat4, Quat, Transform, Vec3, vec3};
 
@@ -630,10 +630,52 @@ impl Default for SkinnedMeshRenderer {
 /// The joint entities a [`SkinnedMeshRenderer`] deforms with.
 ///
 /// Structural, like [`Parent`]/[`Children`]: not scene-serialized, resolved by the
-/// glTF loader when it instantiates a skinned node, and parallel to the skin's
-/// joint list.
+/// glTF loader when it instantiates a skinned node. It holds *every* imported node
+/// entity, in node-index order, because both a skin's joints and an animation
+/// channel's targets index into it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Skeleton(pub Vec<Entity>);
+
+/// Animation playback: which clip an entity plays and where its playhead is.
+///
+/// The engine's `update`-stage sampler (`ecs::animation::sample_scene`) advances
+/// it and writes the sampled pose into the [`Skeleton`]'s joint transforms. A
+/// skinned mesh plays clips by carrying this beside its [`SkinnedMeshRenderer`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Animator {
+    /// The clip to play.
+    pub clip: AssetHandle<AnimationClip>,
+    /// The playhead, in seconds.
+    pub time: f32,
+    /// Playback rate (1.0 is the clip's own speed).
+    pub speed: f32,
+    /// Whether the clip repeats.
+    pub looped: bool,
+    /// Whether the playhead advances.
+    pub playing: bool,
+}
+
+impl Default for Animator {
+    fn default() -> Self {
+        Self {
+            clip: AssetHandle::NONE,
+            time: 0.0,
+            speed: 1.0,
+            looped: true,
+            playing: true,
+        }
+    }
+}
+
+impl Animator {
+    /// An animator playing `clip` looping from its start.
+    pub fn new(clip: AssetHandle<AnimationClip>) -> Self {
+        Self {
+            clip,
+            ..Self::default()
+        }
+    }
+}
 
 /// The engine's list of "registered" component names, used by the editor and
 /// the scripting layer to build a stable, human-readable component index.
@@ -660,6 +702,8 @@ pub mod component_index {
         MeshRenderer,
         /// [`super::SkinnedMeshRenderer`]
         SkinnedMeshRenderer,
+        /// [`super::Animator`]
+        Animator,
         /// [`super::RigidBody`]
         RigidBody,
         /// [`super::Collider`]
@@ -685,6 +729,7 @@ pub mod component_index {
                 ComponentKind::Light => "Light",
                 ComponentKind::MeshRenderer => "MeshRenderer",
                 ComponentKind::SkinnedMeshRenderer => "SkinnedMeshRenderer",
+                ComponentKind::Animator => "Animator",
                 ComponentKind::RigidBody => "RigidBody",
                 ComponentKind::Collider => "Collider",
                 ComponentKind::AudioSource => "AudioSource",
@@ -705,6 +750,7 @@ pub mod component_index {
                 "Light" => ComponentKind::Light,
                 "MeshRenderer" => ComponentKind::MeshRenderer,
                 "SkinnedMeshRenderer" => ComponentKind::SkinnedMeshRenderer,
+                "Animator" => ComponentKind::Animator,
                 "RigidBody" => ComponentKind::RigidBody,
                 "Collider" => ComponentKind::Collider,
                 "AudioSource" => ComponentKind::AudioSource,
@@ -716,8 +762,9 @@ pub mod component_index {
 
         /// Every kind the coverage scenes must contain, in a stable order.
         ///
-        /// `SkinnedMeshRenderer` is deliberately absent until its draw path
-        /// ships ([`.notes/animation.md`]); it is still addressable by name.
+        /// `SkinnedMeshRenderer` and `Animator` are deliberately absent until the
+        /// animation draw path is proven ([`.notes/animation.md`]); both are still
+        /// addressable by name.
         pub const ALL: [ComponentKind; 13] = [
             ComponentKind::LocalTransform,
             ComponentKind::GlobalTransform,

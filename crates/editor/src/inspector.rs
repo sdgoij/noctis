@@ -8,8 +8,8 @@
 
 use ecs::assets::{AlphaMode, AssetHandle, AssetId, Assets, Material, TextureFilter};
 use ecs::components::{
-    Active, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind, MeshRenderer,
-    Projection, RigidBody, Script, SkinnedMeshRenderer, Text, TextAnchor, Visible,
+    Active, Animator, AudioSource, BodyType, Camera, Collider, ColliderShape, Light, LightKind,
+    MeshRenderer, Projection, RigidBody, Script, SkinnedMeshRenderer, Text, TextAnchor, Visible,
 };
 use ecs::reflect::{Field, FieldKind};
 use ecs::world::Entity;
@@ -957,6 +957,16 @@ fn add_component(editor: &mut Editor, entity: Entity, name: ComponentName) {
                     ..SkinnedMeshRenderer::default()
                 },
             );
+        }
+        ComponentName::Animator => {
+            let clip = editor
+                .assets()
+                .animations
+                .iter()
+                .next()
+                .map(|(id, ..)| AssetHandle::new(id))
+                .unwrap_or(AssetHandle::NONE);
+            editor.insert_component(entity, Animator::new(clip));
         }
         ComponentName::RigidBody => {
             editor.insert_component(entity, RigidBody::default());

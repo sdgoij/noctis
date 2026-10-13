@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod animation;
 pub mod app;
 pub mod assets;
 pub mod components;
@@ -43,9 +44,10 @@ pub mod prelude {
         TextureFormat, Vertex, VertexInfluence,
     };
     pub use crate::components::{
-        Active, AudioSource, BodyType, Camera, Children, Collider, ColliderShape, GlobalTransform,
-        Light, LightKind, LocalTransform, MeshRenderer, Name, Parent, PrefabInstance, Projection,
-        RigidBody, Script, Skeleton, SkinnedMeshRenderer, Text, TextAnchor, Visible,
+        Active, Animator, AudioSource, BodyType, Camera, Children, Collider, ColliderShape,
+        GlobalTransform, Light, LightKind, LocalTransform, MeshRenderer, Name, Parent,
+        PrefabInstance, Projection, RigidBody, Script, Skeleton, SkinnedMeshRenderer, Text,
+        TextAnchor, Visible,
     };
     pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
     pub use crate::resources::{

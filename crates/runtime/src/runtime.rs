@@ -283,6 +283,13 @@ impl<H: ScriptHost + 'static> Runtime<H> {
             });
         }
 
+        // Play skinned animation before transforms propagate: the sampler writes
+        // joint `LocalTransform`s, and `App::tick` composes their worlds after the
+        // update stage, so the skinned draw reads this frame's pose.
+        app.on_update("runtime.animation", |ctx| {
+            ecs::animation::sample_scene(&mut ctx.scene.world, &ctx.assets, ctx.time.delta());
+        });
+
         Self {
             app,
             config,

@@ -766,6 +766,30 @@ pub fn build_named(name: impl Into<String>) -> (Scene, AssetRegistry) {
     );
     world.insert(skinned_entity, Skeleton(vec![joint]));
 
+    // A clip that turns the joint, so the spine exercises playback end to end.
+    let clip = assets.animations.insert_named(
+        "animations/turn",
+        AnimationClip {
+            name: "turn".into(),
+            duration: 1.0,
+            channels: vec![AnimationChannel {
+                node: 0,
+                property: AnimationProperty::Rotation,
+                times: vec![0.0, 1.0],
+                values: vec![
+                    [0.0, 0.0, 0.0, 1.0],
+                    [
+                        0.0,
+                        std::f32::consts::FRAC_1_SQRT_2,
+                        0.0,
+                        std::f32::consts::FRAC_1_SQRT_2,
+                    ],
+                ],
+            }],
+        },
+    );
+    world.insert(skinned_entity, Animator::new(clip));
+
     scene.update_transforms();
     (scene, assets)
 }
@@ -790,6 +814,7 @@ pub fn coverage_of(world: &World) -> Vec<&'static str> {
             ComponentKind::Light => world.count::<Light>() > 0,
             ComponentKind::MeshRenderer => world.count::<MeshRenderer>() > 0,
             ComponentKind::SkinnedMeshRenderer => world.count::<SkinnedMeshRenderer>() > 0,
+            ComponentKind::Animator => world.count::<Animator>() > 0,
             ComponentKind::RigidBody => world.count::<RigidBody>() > 0,
             ComponentKind::Collider => world.count::<Collider>() > 0,
             ComponentKind::AudioSource => world.count::<AudioSource>() > 0,

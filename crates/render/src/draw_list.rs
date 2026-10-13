@@ -141,10 +141,10 @@ fn skin_matrices(
     skin.joints
         .iter()
         .enumerate()
-        .map(|(index, _)| {
+        .map(|(index, &joint_node)| {
             let joint_world = skeleton
                 .0
-                .get(index)
+                .get(joint_node)
                 .and_then(|joint| world.get::<GlobalTransform>(*joint))
                 .map(|global| global.to_matrix())
                 .unwrap_or_else(math::identity);

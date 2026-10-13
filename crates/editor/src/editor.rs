@@ -25,7 +25,7 @@ use std::path::Path;
 use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture};
 use ecs::components::component_index::ComponentKind;
 use ecs::components::{
-    Active, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
+    Active, Animator, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
     LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, SkinnedMeshRenderer,
     Text, Visible,
 };
@@ -1109,6 +1109,7 @@ impl Editor {
             ComponentKind::SkinnedMeshRenderer => {
                 self.scene.world.has::<SkinnedMeshRenderer>(entity)
             }
+            ComponentKind::Animator => self.scene.world.has::<Animator>(entity),
             ComponentKind::RigidBody => self.scene.world.has::<RigidBody>(entity),
             ComponentKind::Collider => self.scene.world.has::<Collider>(entity),
             ComponentKind::AudioSource => self.scene.world.has::<AudioSource>(entity),
@@ -1787,6 +1788,9 @@ impl Editor {
             }
             ComponentKind::SkinnedMeshRenderer => {
                 world.remove::<SkinnedMeshRenderer>(entity);
+            }
+            ComponentKind::Animator => {
+                world.remove::<Animator>(entity);
             }
             ComponentKind::RigidBody => {
                 world.remove::<RigidBody>(entity);

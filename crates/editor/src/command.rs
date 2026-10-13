@@ -159,6 +159,8 @@ pub enum ComponentName {
     MeshRenderer,
     /// [`ecs::components::SkinnedMeshRenderer`]
     SkinnedMeshRenderer,
+    /// [`ecs::components::Animator`]
+    Animator,
     /// [`ecs::components::RigidBody`]
     RigidBody,
     /// [`ecs::components::Collider`]
@@ -184,6 +186,7 @@ impl ComponentName {
             ComponentName::Light => ComponentKind::Light,
             ComponentName::MeshRenderer => ComponentKind::MeshRenderer,
             ComponentName::SkinnedMeshRenderer => ComponentKind::SkinnedMeshRenderer,
+            ComponentName::Animator => ComponentKind::Animator,
             ComponentName::RigidBody => ComponentKind::RigidBody,
             ComponentName::Collider => ComponentKind::Collider,
             ComponentName::AudioSource => ComponentKind::AudioSource,
@@ -209,6 +212,7 @@ impl ComponentName {
             ComponentKind::Light => ComponentName::Light,
             ComponentKind::MeshRenderer => ComponentName::MeshRenderer,
             ComponentKind::SkinnedMeshRenderer => ComponentName::SkinnedMeshRenderer,
+            ComponentKind::Animator => ComponentName::Animator,
             ComponentKind::RigidBody => ComponentName::RigidBody,
             ComponentKind::Collider => ComponentName::Collider,
             ComponentKind::AudioSource => ComponentName::AudioSource,
