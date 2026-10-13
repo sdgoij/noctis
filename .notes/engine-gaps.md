@@ -15,6 +15,10 @@ engine to precompute a reflection cubemap from the scene.
 *For:* the water's sky / ground / mirror reflections (goats.md's capability map).
 *Meanwhile:* the water is a flat translucent plane with a view-distance gradient;
 no reflections.
+*Designed:* [`.notes/reflections.md`](reflections.md) — a **planar reflection
+pass** (`PlanarReflection` component, a mirrored scene pass into an offscreen
+texture, and the seam's fourth bind group the receiver samples). Tiers 0 (sky) and
+1 (a baked ground texture) need no engine change and ship first.
 
 ### Scene depth in the shader contract
 
