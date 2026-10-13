@@ -83,8 +83,10 @@ const EYE_HEIGHT: f32 = 0.75;
 const LOOK_SPEED: f32 = 0.006;
 /// Radians per second the arrow keys turn the camera.
 const KEY_LOOK_SPEED: f32 = 1.8;
-/// World units the wheel dollies per point of scroll.
-const ZOOM_SPEED: f32 = 0.6;
+/// World units the wheel dollies per point of scroll. A line-wheel notch is 40
+/// points (see the platform's `LINE_SCROLL_POINTS`), so this is ~0.4 units a
+/// notch — the original's `wheel * 0.4`, where a raylib notch is 1.
+const ZOOM_SPEED: f32 = 0.01;
 /// The nearest the camera may orbit.
 const MIN_DIST: f32 = 2.5;
 /// The farthest the camera may orbit.
@@ -1503,6 +1505,53 @@ mod tests {
         assert!(
             (0.1..0.8).contains(&avg),
             "a moderate sky radiance: bright enough to light, dim enough not to clip ({avg})"
+        );
+    }
+
+    /// The distance from the active camera to the goat (the orbit's target).
+    fn camera_distance(app: &App) -> f32 {
+        let scene = &app.context.scene.world;
+        let cam = scene
+            .query::<Camera>()
+            .find(|(_, camera)| camera.is_active)
+            .map(|(entity, _)| entity)
+            .expect("an active camera");
+        let pos = scene
+            .get::<LocalTransform>(cam)
+            .expect("a camera transform")
+            .translation;
+        let root_y = scene
+            .get::<LocalTransform>(goat_root(app))
+            .expect("a goat transform")
+            .translation
+            .y;
+        math::length(pos - math::vec3(0.0, root_y + EYE_HEIGHT, 0.0))
+    }
+
+    #[test]
+    fn the_wheel_dollies_the_camera_a_fraction_of_a_unit() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        // Tests build no scene, so give the plugin a camera to orbit about.
+        let cam = app.context.scene.world.spawn_with(Camera {
+            is_active: true,
+            ..Camera::default()
+        });
+        app.context.scene.world.insert(
+            cam,
+            LocalTransform::from_translation(math::vec3(0.0, 4.5, 9.0)),
+        );
+        app.tick(1.0 / 60.0); // build the world and seed the orbit
+        let before = camera_distance(&app);
+
+        // One wheel notch is 40 scroll points; the camera should creep ~0.4 units
+        // closer rather than slam to the near limit.
+        app.context.input.add_scroll(40.0);
+        app.tick(1.0 / 60.0);
+        let after = camera_distance(&app);
+        assert!(
+            (before - after - 0.4).abs() < 0.05,
+            "one notch dollies ~0.4 units: {before} -> {after}"
         );
     }
 }
