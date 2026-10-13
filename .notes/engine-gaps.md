@@ -36,14 +36,12 @@ the sky's sun each frame — the sky animates, but nothing else can read that su
 
 ### A billboard / particle path
 
-*What:* camera-facing textured quads (a sprite), or a small particle system.
-*For:* the bang's fire, smoke and debris, the mine "tell", and the water's wake and
-splashes (goats.md M5). `ecs::components::Text` is billboarded, but text-specific.
-*Meanwhile:* none — the bang has no look beyond the flash light, the camera knock
-and the crater it dishes into the ground.
-*Designed:* [`.notes/billboards.md`](billboards.md) — the `Billboard` component and
-its pass, starting with the quad primitive (the game drives the pool); an engine
-`ParticleEmitter` is deferred until a second consumer proves it.
+*Resolved (kept for the record).* The **billboard quad** shipped
+([`.notes/billboards.md`](billboards.md)): `ecs::components::Billboard` and the
+batched pass, first used by the goats bang's fire, smoke, grit and the mine
+"tell" (`3033dd5`). Still open: an engine `ParticleEmitter` (deferred until a
+second consumer proves it), cylindrical and soft billboards, and the water's
+wake and splashes.
 
 ### Skin and shadows in a custom-shader mesh
 
