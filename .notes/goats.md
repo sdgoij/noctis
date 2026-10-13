@@ -226,6 +226,23 @@ The milestones *are* the phasing; the engine work inside them is:
 4. **The screen-UI seam** (M6).
 5. **Mods** (M7) and **multiplayer/voice** (M8) as the pure-Rust crates land.
 
+## Graphics gaps seen in play
+
+The port runs with the original's controls and behaviour; these are the known
+visual shortfalls, to take up under M5/M9 or the engine work they name. They are
+deliberately deferred — the systems come first.
+
+- **The goat reads grey.** Its fur texture is applied (and, since the importer
+  fix, its normal and metallic-roughness maps too), but the placeholder sky's
+  neutral ambient washes the colour out. A real sky (M5) is the fix; the fur's
+  sRGB handling and filtering are worth a look at the same time.
+- **The grass tufts read as thin sticks**, not the original's two stacked cubes.
+  The sizes and segments match `tuftField`, so this is a look/scale question (the
+  0.14-unit cube against the view distance) rather than the field maths.
+- **No weather or water visuals yet**: no clouds, rain streaks or sky tint (M5),
+  no water surface, and the grass does not sway in the wind (it is a rebuilt
+  mesh, so the sway wants the shader seam).
+
 ## Open questions
 
 - **Where the goat model lives.** `examples/goats` can carry its own
