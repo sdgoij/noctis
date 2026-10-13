@@ -194,7 +194,8 @@ Single-player sandbox first; each milestone is playable.
    the goat, the camera, the grass and the water all stand in the hole, and it heals
    over four minutes. The bang's *look* — the fire/smoke atlases, the debris, the
    flash light, the camera's knock and the red damage pulse — is the presentation
-   layer (M5).
+   layer (M5). *(The flash light and the camera's knock have since shipped, M5; the
+   fire, smoke, debris and damage pulse remain.)*
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** *(Shipped: the sky — a `ScreenShaderMaterial` over the
    engine's shader seam, a view ray plus a gradient and sun, tuned through the
@@ -202,8 +203,11 @@ Single-player sandbox first; each milestone is playable.
    toward grey in rain; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
    Day/night lighting and audio follow; the **terrain** carries per-vertex
    grass / sand / rock through the engine's vertex colour, and the **water** is a
-   translucent surface drawn through the seam's mesh form. Reflections, and the
-   bang's fire / smoke / light, remain.
+   translucent surface drawn through the seam's mesh form. The **bang** has its
+   flash — one shadowless point light that flares at a blast and decays — and a
+   camera knock from the bangs that reached the goat. Reflections, and the bang's
+   fire / smoke / debris and the red damage pulse (the billboard/particle path),
+   remain.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
@@ -264,9 +268,10 @@ deliberately deferred — the systems come first.
 - **No weather or water visuals yet**: no clouds, rain streaks or sky tint (M5),
   no water surface, and the grass does not sway in the wind (it is a rebuilt
   mesh, so the sway wants the shader seam).
-- **No bang visuals yet**: no fire or smoke, no debris, no flash light and no
-  camera knock or red damage pulse (M5). The crater *is* drawn — it is a term in
-  the ground's height, so the dished terrain mesh shows it — but there is no mine
+- **No bang fire or smoke yet**: the flash light and the camera knock are in
+  (M5), but there is no fire or smoke, no debris and no red damage pulse — those
+  want the billboard/particle path. The crater *is* drawn — it is a term in the
+  ground's height, so the dished terrain mesh shows it — but there is no mine
   "tell" either, so a minefield is invisible until one goes off.
 
 ## Open questions

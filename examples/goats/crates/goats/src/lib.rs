@@ -198,6 +198,30 @@ const MAX_PITCH: f32 = -0.08;
 /// it backs into cannot put it underground.
 const CAMERA_CLEARANCE: f32 = 0.35;
 
+// The bang's look (M5), the cheap part: a point light that flares and a camera
+// knock. The fireball, smoke and debris (the billboard/particle path) are the
+// follow-up.
+/// Seconds a bang's flash burns.
+const FLASH_TIME: f32 = 0.22;
+/// The flash's candela at its peak. The sun is 2.6 lux and the scene sits at
+/// exposure 0.5; with the falloff this is roughly ten times the sun a few metres
+/// out, so a bang reads as a fireball without washing the meadow out. The first
+/// knob to turn if the flash is too hot or too weak.
+const FLASH_INTENSITY: f32 = 30.0;
+/// Metres the flash reaches; beyond this its falloff is zero.
+const FLASH_RANGE: f32 = 16.0;
+/// Metres above the blast centre the flash sits (the fireball's height).
+const FLASH_HEIGHT: f32 = 1.0;
+
+/// Seconds a camera knock rings.
+const SHAKE_TIME: f32 = 0.32;
+/// Metres the camera is shoved at full strength.
+const SHAKE_POS: f32 = 0.28;
+/// Radians the camera is rocked at full strength.
+const SHAKE_ANGLE: f32 = 0.05;
+/// The shove's upward share, so a knock rocks the view as well as shifting it.
+const SHAKE_LIFT: f32 = 0.45;
+
 /// The orbit camera's state, about the goat.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Orbit {
@@ -246,6 +270,76 @@ impl Orbit {
             pitch: pitch.clamp(MIN_PITCH, MAX_PITCH),
             dist,
         }
+    }
+}
+
+/// The bang's flash (M5): one shadowless point light that flares at a blast and
+/// decays. A single light, so two bangs in one frame share the last site — the
+/// cheap pass; a pool of lights is the follow-up. Nothing is drawn: a light at
+/// zero intensity is invisible.
+struct Flash {
+    /// The point-light entity whose intensity this drives.
+    light: Entity,
+    /// Seconds of flare left (`0` = dark).
+    left: f32,
+}
+
+impl Flash {
+    /// The envelope now, `0..=1` — a sharp attack falling away.
+    fn envelope(&self) -> f32 {
+        let t = (self.left / FLASH_TIME).clamp(0.0, 1.0);
+        t * t
+    }
+}
+
+/// The camera's knock from a nearby bang (M5): a decaying shove, in world space so
+/// [`drive_camera`] can project it onto the camera's own axes.
+#[derive(Clone, Copy, Debug)]
+struct Shake {
+    /// Seconds of knock left (`0` = steady).
+    left: f32,
+    /// The world-space shove direction (unit, with a small lift).
+    dir: Vec3,
+    /// The peak strength (`0..=1`: a bang's impact at the goat).
+    amp: f32,
+}
+
+impl Default for Shake {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            dir: math::vec3(0.0, 1.0, 0.0),
+            amp: 0.0,
+        }
+    }
+}
+
+impl Shake {
+    /// The envelope now, `0..=1` — a fast attack easing out.
+    fn envelope(&self) -> f32 {
+        let t = (self.left / SHAKE_TIME).clamp(0.0, 1.0);
+        t * t
+    }
+
+    /// The knock's strength now (peak times envelope).
+    fn strength(&self) -> f32 {
+        self.amp * self.envelope()
+    }
+
+    /// Take a bang: `impact` at the goat and the unit ground direction `shove` it
+    /// throws in. A stronger knock overrides a weaker one still ringing.
+    fn hit(&mut self, impact: f32, shove: (f32, f32)) {
+        if impact <= 0.0 || impact < self.strength() {
+            return;
+        }
+        self.left = SHAKE_TIME;
+        self.amp = impact;
+        self.dir = math::normalize(math::vec3(shove.0, SHAKE_LIFT, shove.1));
+    }
+
+    /// Let the knock ring out one frame.
+    fn update(&mut self, dt: f32) {
+        self.left = (self.left - dt).max(0.0);
     }
 }
 
@@ -669,6 +763,10 @@ pub struct World {
     sky_time: f32,
     /// The water surface entity, moved to the table's level each frame.
     water_surface: Entity,
+    /// The bang's flash light (M5).
+    flash: Flash,
+    /// The camera's knock from nearby bangs (M5).
+    shake: Shake,
 }
 
 /// Advance the whole world one frame: the weather and the water, the goat, the
@@ -701,10 +799,20 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &world.craters,
     );
     // The hazards own the ground too: a bang dishes a crater, and the ground heals
-    // on its own clock whatever else is happening.
-    world
+    // on its own clock whatever else is happening. Each bang that lands this frame
+    // is reported for the presentation layer.
+    let bangs = world
         .hazards
         .update(dt, &mut world.goat, &world.meadow, &mut world.craters);
+    // The bang's look (M5): a flash light and a camera knock.
+    present_bangs(
+        ctx,
+        &mut world.flash,
+        &mut world.shake,
+        &bangs,
+        &world.craters,
+        dt,
+    );
     // A crater — or its heal — moves the ground: rebuild the mesh, resample the
     // water table, and re-derive the meadow from it.
     let ground_changed = world.craters.revision() != world.crater_rev;
@@ -726,6 +834,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &mut world.seeded,
         target,
         &world.craters,
+        &mut world.shake,
     );
 
     let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -956,6 +1065,36 @@ fn drive_goat(
     ate
 }
 
+/// The bang's look this frame (M5): flare the flash light at the last bang of the
+/// frame, and hand each bang to the camera's knock. The light flares wherever a
+/// bang landed — a blast out in the field is visible — while the knock takes only
+/// the bangs that reached the goat (their `impact` is zero out of reach).
+fn present_bangs(
+    ctx: &mut EngineContext,
+    flash: &mut Flash,
+    shake: &mut Shake,
+    bangs: &[hazards::Bang],
+    craters: &terrain::Craters,
+    dt: f32,
+) {
+    if let Some(at) = bangs.last() {
+        let y = craters.surface(at.x, at.z) + FLASH_HEIGHT;
+        if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(flash.light) {
+            transform.translation = math::vec3(at.x, y, at.z);
+        }
+        flash.left = FLASH_TIME;
+    }
+    flash.left = (flash.left - dt).max(0.0);
+    if let Some(light) = ctx.scene.world.get_mut::<Light>(flash.light) {
+        light.intensity = FLASH_INTENSITY * flash.envelope();
+    }
+
+    shake.update(dt);
+    for bang in bangs {
+        shake.hit(bang.impact, bang.shove);
+    }
+}
+
 /// Advance the orbit camera about `target` from player input.
 fn drive_camera(
     ctx: &mut EngineContext,
@@ -963,6 +1102,7 @@ fn drive_camera(
     seeded: &mut bool,
     target: Vec3,
     craters: &terrain::Craters,
+    shake: &mut Shake,
 ) {
     let Some(camera) = active_camera(ctx) else {
         return;
@@ -991,7 +1131,21 @@ fn drive_camera(
     orbit.pitch = (orbit.pitch + tilt * KEY_LOOK_SPEED * dt).clamp(MIN_PITCH, MAX_PITCH);
     orbit.dist = (orbit.dist - ctx.input.mouse.scroll * ZOOM_SPEED).clamp(MIN_DIST, MAX_DIST);
 
-    let (position, rotation) = orbit.view(target);
+    let (mut position, mut rotation) = orbit.view(target);
+    // A nearby bang shoves the view (M5): project the world shove onto the
+    // camera's own axes, rock it about them, and nudge the eye along it.
+    let strength = shake.strength();
+    if strength > 0.0 {
+        let right = rotation.rotate_vec3(math::vec3(1.0, 0.0, 0.0));
+        let up = rotation.rotate_vec3(math::vec3(0.0, 1.0, 0.0));
+        let lateral = math::dot(shake.dir, right);
+        let vertical = math::dot(shake.dir, up);
+        let rock = Quat::from_axis_angle(up, -lateral * SHAKE_ANGLE * strength).mul(
+            Quat::from_axis_angle(right, vertical * SHAKE_ANGLE * strength),
+        );
+        rotation = rock.mul(rotation).normalized();
+        position = position + shake.dir * (SHAKE_POS * strength);
+    }
     // Never let the camera sit in the ground it is looking across.
     let floor = craters.surface(position.x, position.z) + CAMERA_CLEARANCE;
     let position = math::vec3(position.x, position.y.max(floor), position.z);
@@ -1135,6 +1289,26 @@ fn spawn_water(ctx: &mut EngineContext) -> Entity {
     water
 }
 
+/// Spawn the bang's flash: one shadowless point light at zero intensity, which
+/// [`apply_frame`] flares when a bang lands. It lights the goat and the ground
+/// around the blast — the cheap half of the bang's look (M5).
+fn spawn_flash(ctx: &mut EngineContext) -> Entity {
+    let light = ctx.scene.world.spawn();
+    ctx.scene.world.insert(light, Name::new("Flash"));
+    ctx.scene.world.insert(light, LocalTransform::default());
+    ctx.scene.world.insert(
+        light,
+        Light {
+            kind: LightKind::Point { range: FLASH_RANGE },
+            color: math::vec3(1.0, 0.62, 0.28),
+            intensity: 0.0,
+            cast_shadows: false,
+            ..Light::default()
+        },
+    );
+    light
+}
+
 /// Build the whole world: the ground, the meadow, the sky, then the goat. Called
 /// by the plugin's frame system on the first tick, and by the harness directly.
 pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
@@ -1148,6 +1322,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     spawn_grass(ctx, &meadow, &water, &craters);
     let sky = spawn_sky(ctx);
     let water_surface = spawn_water(ctx);
+    let flash = spawn_flash(ctx);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1164,6 +1339,11 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         sky,
         sky_time: 0.0,
         water_surface,
+        flash: Flash {
+            light: flash,
+            left: 0.0,
+        },
+        shake: Shake::default(),
     })
 }
 

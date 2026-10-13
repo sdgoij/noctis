@@ -191,6 +191,21 @@ impl Sim {
         &self.world.hazards
     }
 
+    /// The bang flash's intensity now (`0` when dark).
+    pub fn flash_intensity(&self) -> f32 {
+        self.ctx
+            .scene
+            .world
+            .get::<Light>(self.world.flash.light)
+            .map(|light| light.intensity)
+            .unwrap_or(0.0)
+    }
+
+    /// The camera knock's strength now (`0` when steady).
+    pub fn shake(&self) -> f32 {
+        self.world.shake.strength()
+    }
+
     /// The goat root's world height (the drawn `y`).
     pub fn goat_y(&self) -> f32 {
         self.ctx

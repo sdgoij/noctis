@@ -93,6 +93,24 @@ struct Loc {
     z: f32,
 }
 
+/// A bang that landed this frame, handed to the presentation layer (M5): where it
+/// was, how hard it hit the goat, and which way it throws — the flash's site and
+/// the camera's knock read it. This is the only thing a bang exposes; the look
+/// itself lives in [`crate::apply_frame`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bang {
+    /// World X of the blast centre.
+    pub x: f32,
+    /// World Z of the blast centre.
+    pub z: f32,
+    /// The blast's reach at the goat: `1.0` at its feet, falling to `0.0` at the
+    /// rim and `0.0` out of reach — the same falloff the damage and the fling use.
+    pub impact: f32,
+    /// The unit ground direction the blast throws the goat in (away from the
+    /// centre, turned by the blast's stream); zero when out of reach.
+    pub shove: (f32, f32),
+}
+
 /// The hazard field: the devices that have gone off and the ones that moved, plus
 /// the fuses counting down.
 #[derive(Debug, Default)]
@@ -110,18 +128,21 @@ pub struct Hazards {
 
 impl Hazards {
     /// Advance the hazard field one frame: heal the ground, land the bangs whose
-    /// fuses have run out, then check what the goat has walked onto (`updateExplosions`).
+    /// fuses have run out, then check what the goat has walked onto
+    /// (`updateExplosions`). Returns the bangs that landed this frame, for the
+    /// presentation layer (M5).
     pub fn update(
         &mut self,
         dt: f32,
         goat: &mut Goat,
         meadow: &grass::Meadow,
         craters: &mut Craters,
-    ) {
+    ) -> Vec<Bang> {
         // The ground heals whether or not the hazards are armed: a crater is not an
         // effect.
         craters.update(dt);
         // Fuses first, so a bang that lands this frame can still chain.
+        let mut bangs = Vec::new();
         let mut i = self.pending.len();
         while i > 0 {
             i -= 1;
@@ -130,7 +151,7 @@ impl Hazards {
                 continue;
             }
             let p = self.pending.remove(i);
-            self.blast(
+            bangs.push(self.blast(
                 At {
                     x: p.x,
                     z: p.z,
@@ -140,19 +161,21 @@ impl Hazards {
                 goat,
                 meadow,
                 craters,
-            );
+            ));
         }
         // A sleeping goat is not moving, and a dead one is not a goat the world has
         // to be fair about: neither trips anything.
         if matches!(goat.mode, Mode::Sleep | Mode::Dead) {
-            return;
+            return bangs;
         }
         let airborne = matches!(goat.mode, Mode::Jump | Mode::Flung);
         self.check_triggers(goat.x, goat.z, airborne, meadow);
+        bangs
     }
 
     /// A bang at `(x, z)`: leave a crater, damage and fling the goat, and set off
-    /// the neighbours if there is chain budget left (`blast`).
+    /// the neighbours if there is chain budget left (`blast`). Returns the bang for
+    /// the presentation layer.
     fn blast(
         &mut self,
         at: At,
@@ -160,10 +183,16 @@ impl Hazards {
         goat: &mut Goat,
         meadow: &grass::Meadow,
         craters: &mut Craters,
-    ) {
+    ) -> Bang {
         let (x, z, seed) = (at.x, at.z, at.seed);
         // The hole is everyone's, and it is dug whatever else the bang does.
         craters.add(x, z, seed);
+        let mut bang = Bang {
+            x,
+            z,
+            impact: 0.0,
+            shove: (0.0, 0.0),
+        };
         let r = BLAST_RADIUS;
         let dx = goat.x - x;
         let dz = goat.z - z;
@@ -176,6 +205,8 @@ impl Hazards {
             // Away from the blast, up, scaled by the same falloff as the damage, so
             // the rim is a shove and the centre is a launch.
             let (ux, uz) = fling_direction(dx, dz, d, seed);
+            bang.impact = falloff;
+            bang.shove = (ux, uz);
             let base = craters.surface(goat.x, goat.z) + goat.lift;
             goat.start_fling(
                 ux * BLAST_PUSH * falloff,
@@ -187,6 +218,7 @@ impl Hazards {
         if depth < CHAIN_DEPTH {
             self.chain_from(x, z, depth + 1, meadow);
         }
+        bang
     }
 
     /// Fire a bang at `(x, z)` as a fuse would, with a fresh chain budget -- the
@@ -201,7 +233,7 @@ impl Hazards {
         meadow: &grass::Meadow,
         craters: &mut Craters,
     ) {
-        self.blast(At { x, z, seed }, 0, goat, meadow, craters);
+        let _ = self.blast(At { x, z, seed }, 0, goat, meadow, craters);
     }
 
     /// A blast sets off the armed mines it reaches, `FUSE` seconds later
@@ -633,6 +665,65 @@ mod tests {
         assert!(craters.revision() > 0, "still a hole");
         assert_eq!(goat.health, health, "but no damage");
         assert_eq!(goat.mode, Mode::Idle, "and no fling");
+    }
+
+    #[test]
+    fn a_bang_reports_its_impact_and_shove() {
+        let meadow = grass::Meadow::default();
+        let mut craters = Craters::default();
+        let mut hazards = Hazards::default();
+        let mut goat = test_goat();
+
+        // At the goat's feet: a full hit.
+        let at_feet = hazards.blast(
+            At {
+                x: goat.x,
+                z: goat.z,
+                seed: 1.5,
+            },
+            0,
+            &mut goat,
+            &meadow,
+            &mut craters,
+        );
+        assert!(
+            (at_feet.impact - 1.0).abs() < 1e-5,
+            "the centre is a full hit"
+        );
+
+        // Off to the side: a partial hit, and the shove points away from the blast.
+        let side = hazards.blast(
+            At {
+                x: goat.x + BLAST_RADIUS * 0.5,
+                z: goat.z,
+                seed: 2.5,
+            },
+            0,
+            &mut goat,
+            &meadow,
+            &mut craters,
+        );
+        assert!(
+            side.impact > 0.0 && side.impact < 1.0,
+            "the rim is a partial hit"
+        );
+        assert!(side.shove.0 < -0.5, "thrown away from the blast (+X)");
+        assert!(side.shove.1.abs() < 0.5, "and mostly along that axis");
+
+        // Out of reach: no impact and no shove.
+        let far = hazards.blast(
+            At {
+                x: goat.x + BLAST_RADIUS * 2.0,
+                z: goat.z,
+                seed: 3.5,
+            },
+            0,
+            &mut goat,
+            &meadow,
+            &mut craters,
+        );
+        assert_eq!(far.impact, 0.0, "out of reach is no hit");
+        assert_eq!(far.shove, (0.0, 0.0), "and no shove");
     }
 
     #[test]

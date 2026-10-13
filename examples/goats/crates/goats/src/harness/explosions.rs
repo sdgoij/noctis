@@ -159,3 +159,50 @@ fn a_mine_trips_fuses_and_bangs() {
     );
     checks.finish();
 }
+
+#[test]
+fn a_bang_flares_the_flash_and_knocks_the_camera() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+
+    checks.check(
+        "the flash starts dark",
+        sim.flash_intensity() == 0.0,
+        sim.flash_intensity(),
+    );
+    checks.check("the camera starts steady", sim.shake() == 0.0, sim.shake());
+
+    let Some((mx, mz)) = sim.first_armed_mine() else {
+        panic!("the derived field has an armed mine in the near field");
+    };
+    // Stand on it; step until the bang lands (a crater appears where it was).
+    sim.place_goat(mx, mz);
+    let mut banged = false;
+    for _ in 0..40 {
+        sim.run(1);
+        if sim.craters().dip_at(mx, mz) < 0.0 {
+            banged = true;
+            break;
+        }
+    }
+    checks.check("the mine banged", banged, sim.craters().dip_at(mx, mz));
+    checks.check(
+        "the bang lit the flash",
+        sim.flash_intensity() > 0.0,
+        sim.flash_intensity(),
+    );
+    checks.check("and knocked the camera", sim.shake() > 0.0, sim.shake());
+
+    // Both ring out. The goat is flung clear for well over this window, so no second
+    // bang can land and re-light the flash before it has burned down.
+    sim.run(20);
+    checks.check(
+        "the flash burns out",
+        sim.flash_intensity() == 0.0,
+        sim.flash_intensity(),
+    );
+    checks.check("and the camera settles", sim.shake() == 0.0, sim.shake());
+    checks.finish();
+}
