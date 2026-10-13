@@ -2036,7 +2036,6 @@ impl Renderer {
             }
         };
 
-        let material_rev = assets.shader_materials.revision(draw.material).unwrap_or(0);
         let seam = self.seam.material(
             &self.device,
             &self.queue,
@@ -2044,7 +2043,6 @@ impl Renderer {
             assets,
             draw.material.id(),
             material,
-            material_rev,
             &self.layouts.shader_textures,
             &self.layouts.shader_user,
             &self.material_sampler,
@@ -2084,7 +2082,6 @@ impl Renderer {
             .pipeline
             .clone();
 
-        let material_rev = assets.shader_materials.revision(draw.material).unwrap_or(0);
         let seam = self.seam.material(
             &self.device,
             &self.queue,
@@ -2092,7 +2089,6 @@ impl Renderer {
             assets,
             draw.material.id(),
             material,
-            material_rev,
             &self.layouts.shader_textures,
             &self.layouts.shader_user,
             &self.material_sampler,
@@ -2491,6 +2487,74 @@ mod tests {
         // The tonemap is monotonic per channel, so the sky's ordering survives it.
         assert!(r < g && g < b, "the sky is blueish: {r},{g},{b}");
         assert!(b > 40, "the sky is bright: {r},{g},{b}");
+    }
+
+    /// A material's user uniform block is dynamic: writing new floats redraws the
+    /// frame without rebuilding a bind group. Skips when no adapter is present.
+    #[test]
+    fn updating_a_material_uniform_changes_the_frame_or_reports_no_adapter() {
+        use ecs::assets::{Shader, ShaderMaterial};
+        use ecs::components::{Camera, ScreenShaderMaterial};
+
+        let config = RendererConfig {
+            width: 8,
+            height: 8,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::new();
+        let shader = assets.shaders.insert_named(
+            "skies/solid",
+            Shader::new(
+                "solid",
+                "@fragment fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {\n\
+                 \x20   return vec4<f32>(user[0].rgb, 1.0);\n\
+                 }",
+            ),
+        );
+        let material = assets.shader_materials.insert_named(
+            "skies/solid",
+            ShaderMaterial {
+                name: "solid".into(),
+                shader,
+                uniforms: vec![1.0, 0.0, 0.0, 1.0],
+                ..ShaderMaterial::default()
+            },
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        let pass = world.spawn();
+        world.insert(pass, ScreenShaderMaterial { material });
+
+        let first = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        let [r1, g1, b1, _] = first.pixel(0, 0).expect("a pixel");
+        assert!(r1 > b1 && r1 > g1, "the first frame is red: {r1},{g1},{b1}");
+
+        // Change the material's user block; the next frame follows, with no rebuild.
+        assets
+            .shader_materials
+            .get_mut(material)
+            .expect("the material")
+            .uniforms = vec![0.0, 0.0, 1.0, 1.0];
+        let second = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        let [r2, g2, b2, _] = second.pixel(0, 0).expect("a pixel");
+        assert!(
+            b2 > r2 && b2 > g2,
+            "the second frame is blue: {r2},{g2},{b2}"
+        );
     }
 
     /// The GPU path is exercised only when an adapter exists; otherwise the

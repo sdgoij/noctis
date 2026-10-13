@@ -1,20 +1,21 @@
 //! GPU resources for the shader seam (`.notes/shaders.md`).
 //!
 //! Per-[`Shader`] pipelines and per-[`ShaderMaterial`] bind groups, cached and
-//! rebuilt when the owning asset's revision changes. A shader is authored for one
-//! form — a **mesh** body (opaque + alpha-blended pipelines) or a **screen** body
-//! (one full-screen pass) — so only the form it is used as is ever compiled: a
+//! rebuilt only when what a bind group *depends on* changes. A shader is authored
+//! for one form — a **mesh** body (opaque + alpha-blended pipelines) or a **screen**
+//! body (one full-screen pass) — so only the form it is used as is ever compiled: a
 //! screen body that names `ScreenOut` could not also be a mesh vertex stage.
 //!
-//! The material builds the texture array (group 2, one view per slot with a white
-//! fallback) and the user uniform block (group 3).
+//! The material's texture array (group 2) is rebuilt only when its texture list
+//! changes; its user uniform block (group 3) is **dynamic**, written in place when
+//! the material's floats change, so a driver can animate a value (a sky's sun, the
+//! weather) without rebuilding a bind group each frame.
 
 use std::collections::HashMap;
 
 use ecs::assets::{
     AssetHandle, AssetId, AssetRegistry, Shader, ShaderMaterial, TEXTURE_SLOTS, USER_SLOTS,
 };
-use wgpu::util::DeviceExt;
 
 use crate::gpu::pipelines::{BindGroupLayouts, create_shader_pipeline};
 use crate::gpu::resources::ResourceCache;
@@ -39,16 +40,20 @@ pub struct ScreenPipeline {
 }
 
 /// A shader material's seam bind groups: the texture array (group 2) and the user
-/// uniform block (group 3).
+/// uniform block (group 3). The texture bind group is rebuilt only when the
+/// material's texture list changes; the user block is dynamic, written in place when
+/// the material's floats change.
 #[derive(Debug)]
 pub struct SeamMaterial {
     /// Group 2: one texture binding per slot plus the shared sampler.
     pub textures: wgpu::BindGroup,
     /// Group 3: the user uniform block.
     pub user: wgpu::BindGroup,
-    revision: u64,
-    /// Kept alive so the user bind group's buffer outlives it.
-    _uniform: wgpu::Buffer,
+    user_buffer: wgpu::Buffer,
+    /// The texture handles the bind group was built for, to detect a change.
+    texture_ids: Vec<AssetId>,
+    /// The floats last written into `user_buffer`.
+    written: Vec<f32>,
 }
 
 /// The seam's GPU cache, keyed by asset id.
@@ -139,7 +144,8 @@ impl ShaderSeam {
         &self.screens[&id]
     }
 
-    /// Get (building if new or stale) the bind groups for `material`.
+    /// Get the bind groups for `material`, building them if the texture list changed
+    /// and writing the current user floats in place if they differ from the last write.
     #[allow(clippy::too_many_arguments)]
     pub fn material(
         &mut self,
@@ -149,15 +155,16 @@ impl ShaderSeam {
         assets: &AssetRegistry,
         id: AssetId,
         material: &ShaderMaterial,
-        revision: u64,
         textures_layout: &wgpu::BindGroupLayout,
         user_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
     ) -> &SeamMaterial {
+        let texture_ids: Vec<AssetId> =
+            material.textures.iter().map(|handle| handle.id()).collect();
         let stale = self
             .materials
             .get(&id)
-            .is_none_or(|cached| cached.revision != revision);
+            .is_none_or(|cached| cached.texture_ids != texture_ids);
         if stale {
             // The texture array: one view per slot (white where the material names
             // none), then the shared sampler. The views are held until the bind
@@ -190,22 +197,18 @@ impl ShaderSeam {
                 entries: &entries,
             });
 
-            // The user block: the material's floats, truncated/padded to capacity.
-            let mut data = vec![0.0f32; USER_SLOTS * 4];
-            for (slot, value) in material.uniforms.iter().take(USER_SLOTS * 4).enumerate() {
-                data[slot] = *value;
-            }
-            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let user_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("shader.user.uniform"),
-                contents: bytemuck::cast_slice(&data),
+                size: (USER_SLOTS * 16) as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
             let user = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("shader.user.bind_group"),
                 layout: user_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform.as_entire_binding(),
+                    resource: user_buffer.as_entire_binding(),
                 }],
             });
 
@@ -214,11 +217,26 @@ impl ShaderSeam {
                 SeamMaterial {
                     textures,
                     user,
-                    revision,
-                    _uniform: uniform,
+                    user_buffer,
+                    texture_ids,
+                    written: Vec::new(),
                 },
             );
         }
+
+        // The user block is dynamic: write the material's floats when they changed,
+        // so an animating value costs a buffer write, not a rebuild.
+        if let Some(cached) = self.materials.get_mut(&id)
+            && cached.written != material.uniforms
+        {
+            let mut data = vec![0.0f32; USER_SLOTS * 4];
+            for (slot, value) in material.uniforms.iter().take(USER_SLOTS * 4).enumerate() {
+                data[slot] = *value;
+            }
+            queue.write_buffer(&cached.user_buffer, 0, bytemuck::cast_slice(&data));
+            cached.written = material.uniforms.clone();
+        }
+
         &self.materials[&id]
     }
 }
