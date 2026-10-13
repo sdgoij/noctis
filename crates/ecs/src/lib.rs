@@ -45,10 +45,10 @@ pub mod prelude {
         VertexInfluence,
     };
     pub use crate::components::{
-        Active, Animator, AudioSource, BodyType, Camera, Children, Collider, ColliderShape,
-        GlobalTransform, Light, LightKind, LocalTransform, MeshRenderer, Name, Parent,
-        PrefabInstance, Projection, RigidBody, ScreenShaderMaterial, Script, ShaderMeshRenderer,
-        Skeleton, SkinnedMeshRenderer, Text, TextAnchor, Visible,
+        Active, Animator, AudioSource, Billboard, BillboardBlend, BodyType, Camera, Children,
+        Collider, ColliderShape, GlobalTransform, Light, LightKind, LocalTransform, MeshRenderer,
+        Name, Parent, PrefabInstance, Projection, RigidBody, ScreenShaderMaterial, Script,
+        ShaderMeshRenderer, Skeleton, SkinnedMeshRenderer, Text, TextAnchor, Visible,
     };
     pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
     pub use crate::resources::{

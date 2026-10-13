@@ -274,8 +274,30 @@ pub struct Pipelines {
     /// World-space text glyph quads that ignore depth, drawn over the scene
     /// ([`ecs::components::Text::depth_test`] `== false`).
     pub text_no_depth: wgpu::RenderPipeline,
+    /// Billboard sprite quads, depth-tested, indexed by
+    /// [`BillboardBlend`](ecs::components::BillboardBlend) (opaque, alpha,
+    /// additive). `.notes/billboards.md`.
+    pub billboard: [wgpu::RenderPipeline; 3],
+    /// The same, ignoring depth (`Billboard::depth_test == false`).
+    pub billboard_no_depth: [wgpu::RenderPipeline; 3],
     /// HDR -> LDR tonemap.
     pub tonemap: wgpu::RenderPipeline,
+}
+
+impl Pipelines {
+    /// The billboard pipeline for a blend mode and depth-test setting.
+    pub fn billboard(
+        &self,
+        blend: ecs::components::BillboardBlend,
+        depth_test: bool,
+    ) -> &wgpu::RenderPipeline {
+        let set = if depth_test {
+            &self.billboard
+        } else {
+            &self.billboard_no_depth
+        };
+        &set[blend as usize]
+    }
 }
 
 /// Build the render pipeline for a custom [`Shader`] in the seam's fixed layout
@@ -698,6 +720,111 @@ pub fn create_pipelines(
     let text = make_text("text", wgpu::CompareFunction::LessEqual);
     let text_no_depth = make_text("text.no_depth", wgpu::CompareFunction::Always);
 
+    // Billboards (`.notes/billboards.md`): the same shape as text — a world-space
+    // textured quad — but sampling the sprite's own texture with a tint, in three
+    // blend modes, each with a depth-tested and a depth-ignoring variant. The
+    // fragment premultiplies, so alpha uses the premultiplied blend and additive
+    // adds nothing where the sprite is clear.
+    let billboard_shader =
+        device.create_shader_module(wgpu::include_wgsl!("../shaders/billboard.wgsl"));
+    let additive = wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
+    let make_billboard = |label: &str,
+                          blend: Option<wgpu::BlendState>,
+                          depth_write: bool,
+                          depth_compare: wgpu::CompareFunction| {
+        let layout = pipeline_layout(
+            device,
+            &format!("{label}.layout"),
+            &[&layouts.view, &layouts.text],
+        );
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &billboard_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(crate::billboard::BillboardVertex::layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(depth_write),
+                depth_compare: Some(depth_compare),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &billboard_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let billboard = [
+        make_billboard(
+            "billboard.opaque",
+            None,
+            true,
+            wgpu::CompareFunction::LessEqual,
+        ),
+        make_billboard(
+            "billboard.alpha",
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            false,
+            wgpu::CompareFunction::LessEqual,
+        ),
+        make_billboard(
+            "billboard.additive",
+            Some(additive),
+            false,
+            wgpu::CompareFunction::LessEqual,
+        ),
+    ];
+    let billboard_no_depth = [
+        make_billboard(
+            "billboard.opaque.no_depth",
+            None,
+            false,
+            wgpu::CompareFunction::Always,
+        ),
+        make_billboard(
+            "billboard.alpha.no_depth",
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            false,
+            wgpu::CompareFunction::Always,
+        ),
+        make_billboard(
+            "billboard.additive.no_depth",
+            Some(additive),
+            false,
+            wgpu::CompareFunction::Always,
+        ),
+    ];
+
     let tonemap = {
         let layout = pipeline_layout(device, "tonemap.layout", &[&layouts.tonemap]);
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -743,6 +870,8 @@ pub fn create_pipelines(
         gizmo_triangle,
         text,
         text_no_depth,
+        billboard,
+        billboard_no_depth,
         tonemap,
     }
 }

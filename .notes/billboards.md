@@ -11,6 +11,16 @@ It is the sibling of [`shaders.md`](shaders.md): the engine owns the pipeline,
 the vertex layout and the pass; the game supplies a texture handle and per-quad
 numbers. Nothing here is a plugin-defined pipeline.
 
+**Shipped:** the component (`ecs::components::Billboard` / `BillboardBlend`, with
+its scene serialization), the pure `render::billboard::build_vertices`, and the
+batched billboard pass in `renderer.rs` (opaque / alpha / additive, each
+depth-tested or not, sorted so smoke composites under the fire). Its first
+consumer is the goats bang — fire, smoke and grit flipbooks and the mine "tell"
+(`examples/goats`), whose atlases are generated at boot rather than shipped.
+**Not yet:** an engine `ParticleEmitter`, cylindrical and soft billboards, and
+the water's wake and splashes. The component stays out of `ComponentKind::ALL`
+for now.
+
 ## What it is
 
 One **component**: a `Billboard` — a camera-facing textured quad drawn at the

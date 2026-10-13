@@ -14,8 +14,10 @@
 //! 5. **Gizmo** — optional editor gizmo lines and triangles.
 //! 6. **Text** — world-space labels, depth-tested or drawn on top
 //!    ([`ecs::components::Text::depth_test`]).
-//! 7. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
-//! 8. **Present** — the LDR target is blitted to the surface, or copied into the
+//! 7. **Billboards** — camera-facing sprite quads, opaque, alpha or additive
+//!    ([`ecs::components::Billboard`], `.notes/billboards.md`).
+//! 8. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
+//! 9. **Present** — the LDR target is blitted to the surface, or copied into the
 //!    readback buffer for a headless [`Frame`].
 //!
 //! ## MSAA
@@ -59,7 +61,7 @@ use crate::ibl::{IblConfig, IblData};
 use crate::lights::{LightsUniform, MAX_LIGHTS, extract_lights, primary_shadow_light};
 use crate::tonemap::Tonemap;
 use ecs::assets::{AssetId, AssetRegistry, HdrTexture, Material};
-use ecs::components::{GlobalTransform, LightKind, Text};
+use ecs::components::{Billboard, GlobalTransform, LightKind, LocalTransform, Text};
 use ecs::resources::FrameImage;
 use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
@@ -212,6 +214,16 @@ struct TextAtlas {
     atlas: crate::text::FontAtlas,
 }
 
+/// One billboard sprite batch: a texture's bind group and a vertex buffer of its
+/// quads, drawn together with one pipeline (`.notes/billboards.md`).
+struct BillboardBatch {
+    bind_group: wgpu::BindGroup,
+    buffer: wgpu::Buffer,
+    count: u32,
+    blend: ecs::components::BillboardBlend,
+    depth_test: bool,
+}
+
 /// The offscreen PBR renderer.
 pub struct Renderer {
     config: RendererConfig,
@@ -251,6 +263,11 @@ pub struct Renderer {
     /// One vertex buffer per font and depth-test setting used this frame:
     /// `(font, buffer, vertex count, depth-tested)`.
     text_batches: Vec<(AssetId, wgpu::Buffer, u32, bool)>,
+    /// Billboard sprite batches for this frame, grouped by `(texture, blend,
+    /// depth-test)`. `.notes/billboards.md`.
+    billboard_batches: Vec<BillboardBatch>,
+    /// Per-texture billboard bind groups, cached for the renderer's life.
+    billboard_textures: HashMap<AssetId, wgpu::BindGroup>,
     ambient: [f32; 4],
     exposure: f32,
     tonemap_mode: Tonemap,
@@ -515,6 +532,8 @@ impl Renderer {
             text_sampler,
             text_atlases: HashMap::new(),
             text_batches: Vec::new(),
+            billboard_batches: Vec::new(),
+            billboard_textures: HashMap::new(),
             ambient: [1.0, 1.0, 1.0, 1.0],
             exposure: 1.0,
             tonemap_mode: Tonemap::Aces,
@@ -798,6 +817,123 @@ impl Renderer {
         (gpu, bind_group)
     }
 
+    /// Build this frame's billboard sprite batches (`.notes/billboards.md`): lay
+    /// each `Billboard` out as a camera-facing quad, group the quads by
+    /// `(texture, blend, depth-test)`, and upload one vertex buffer per group.
+    fn build_billboard_batches(
+        &mut self,
+        world: &World,
+        assets: &AssetRegistry,
+        view: &CameraView,
+    ) {
+        self.billboard_batches.clear();
+
+        // A quad plus its distance from the eye, so a group can sort back to front
+        // before it is uploaded.
+        type Quad = [crate::billboard::BillboardVertex; 6];
+        type Key = (AssetId, ecs::components::BillboardBlend, bool);
+        let mut groups: HashMap<Key, Vec<(f32, Quad)>> = HashMap::new();
+
+        for entity in world.entities_with::<Billboard>() {
+            let Some(billboard) = world.get::<Billboard>(entity) else {
+                continue;
+            };
+            if billboard.texture.is_none() || !crate::draw_list::is_renderable(world, entity) {
+                continue;
+            }
+            // The propagated transform if present, else the local one, as the draw
+            // list and the text pass do.
+            let origin = if let Some(global) = world.get::<GlobalTransform>(entity) {
+                global.position()
+            } else if let Some(local) = world.get::<LocalTransform>(entity) {
+                local.translation
+            } else {
+                continue;
+            };
+            let vertices = crate::billboard::build_vertices(billboard, origin, view.right, view.up);
+            let Ok(quad) = <Quad>::try_from(vertices) else {
+                continue;
+            };
+            let delta = origin - view.eye;
+            let distance = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+            groups
+                .entry((
+                    billboard.texture.id(),
+                    billboard.blend,
+                    billboard.depth_test,
+                ))
+                .or_default()
+                .push((distance, quad));
+        }
+
+        for ((id, blend, depth_test), mut quads) in groups {
+            // Back to front within the batch, for correct alpha.
+            quads.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            let vertices: Vec<crate::billboard::BillboardVertex> =
+                quads.into_iter().flat_map(|(_, quad)| quad).collect();
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("billboard.vertices"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let handle = ecs::assets::AssetHandle::<ecs::assets::Texture>::new(id);
+            let bind_group = self.billboard_bind_group(assets, id, handle);
+            self.billboard_batches.push(BillboardBatch {
+                bind_group,
+                buffer,
+                count: vertices.len() as u32,
+                blend,
+                depth_test,
+            });
+        }
+
+        // A stable draw order across batches: depth-tested before depth-ignoring,
+        // and opaque before alpha before additive — so smoke and grit composite
+        // under the additive fire, which is the order the fire is meant to read in.
+        self.billboard_batches.sort_by_key(|batch| {
+            let rank = match batch.blend {
+                ecs::components::BillboardBlend::Opaque => 0,
+                ecs::components::BillboardBlend::Alpha => 1,
+                ecs::components::BillboardBlend::Additive => 2,
+            };
+            (!batch.depth_test, rank)
+        });
+    }
+
+    /// The billboard bind group for a texture, cached per asset id. The layout is
+    /// the text pass's (one `texture_2d` and one sampler), which a sprite shares.
+    fn billboard_bind_group(
+        &mut self,
+        assets: &AssetRegistry,
+        id: AssetId,
+        handle: ecs::assets::AssetHandle<ecs::assets::Texture>,
+    ) -> wgpu::BindGroup {
+        if let Some(group) = self.billboard_textures.get(&id) {
+            return group.clone();
+        }
+        let view = self
+            .cache
+            .texture_view(&self.device, &self.queue, assets, handle);
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("billboard.texture_bind_group"),
+            layout: &self.layouts.text,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
+            ],
+        });
+        self.billboard_textures.insert(id, group.clone());
+        group
+    }
+
     /// Render one frame offscreen and read the pixels back as RGBA8.
     pub fn render_frame(
         &mut self,
@@ -830,6 +966,7 @@ impl Renderer {
         let lights_uniform = LightsUniform::from_lights(&lights);
         let draw_list = extract_draw_list(world, assets, &view);
         self.build_text_batches(world, assets, &view);
+        self.build_billboard_batches(world, assets, &view);
 
         // ---- shadow matrix -------------------------------------------------
         let (shadow_uniform, shadow_matrix, has_shadow) = self.build_shadow(&lights, &draw_list);
@@ -1249,7 +1386,46 @@ impl Renderer {
             }
         }
 
-        // 7. Tonemap.
+        // 7. Billboards: camera-facing sprite quads (`.notes/billboards.md`),
+        // one batch per texture and (blend, depth-test) setting.
+        if !self.billboard_batches.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("billboard.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.targets.color_target(),
+                    depth_slice: None,
+                    resolve_target: self.targets.color_resolve(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.targets.depth_target(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let mut bound: Option<(ecs::components::BillboardBlend, bool)> = None;
+            for batch in &self.billboard_batches {
+                if bound != Some((batch.blend, batch.depth_test)) {
+                    pass.set_pipeline(self.pipelines.billboard(batch.blend, batch.depth_test));
+                    pass.set_bind_group(0, &self.gizmo_view_bind_group, &[]);
+                    bound = Some((batch.blend, batch.depth_test));
+                }
+                pass.set_bind_group(1, &batch.bind_group, &[]);
+                pass.set_vertex_buffer(0, batch.buffer.slice(..));
+                pass.draw(0..batch.count, 0..1);
+            }
+        }
+
+        // 8. Tonemap.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tonemap.pass"),
@@ -1272,7 +1448,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // 8. Present to the surface, or copy into the readback buffer.
+        // 9. Present to the surface, or copy into the readback buffer.
         match present_view {
             Some(view) => {
                 let pipeline = self.present_pipeline.as_ref().ok_or_else(|| {
@@ -3071,6 +3247,97 @@ mod tests {
             "the text drawn must be visibly brighter: {} vs {}",
             brightest(&with_text),
             brightest(&without_text)
+        );
+    }
+
+    /// A billboard sprite draws a camera-facing quad: an additive white sprite
+    /// brightens the frame over a black clear, a textureless billboard draws
+    /// nothing, and removing the sprite empties the batches. Skips without an
+    /// adapter.
+    #[test]
+    fn a_billboard_renders_or_reports_no_adapter() {
+        use ecs::assets::{Texture, TextureFormat};
+        use ecs::components::{Billboard, BillboardBlend, Camera};
+
+        let config = RendererConfig {
+            width: 64,
+            height: 64,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let texture = assets.textures.insert_named(
+            "fx/spark",
+            Texture::solid("fx/spark", [255, 255, 255, 255], TextureFormat::Rgba8Srgb),
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera {
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+            ..Camera::default()
+        });
+        let sprite = world.spawn_with(Billboard {
+            texture,
+            size: math::vec2(2.0, 2.0),
+            color: [1.0, 1.0, 1.0, 1.0],
+            blend: BillboardBlend::Additive,
+            ..Billboard::default()
+        });
+        world.insert(
+            sprite,
+            math::Transform::from_translation(vec3(0.0, 0.0, -3.0)),
+        );
+
+        let with_sprite = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render with a billboard");
+        assert_eq!(renderer.billboard_batches.len(), 1, "one sprite, one batch");
+
+        // Removing the sprite empties the batches and darkens the frame, so the
+        // pass drew something.
+        world.despawn(sprite);
+        let without = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render without a billboard");
+        assert!(renderer.billboard_batches.is_empty(), "no sprite, no batch");
+
+        // A billboard with no texture draws nothing.
+        let bare = world.spawn_with(Billboard::default());
+        world.insert(
+            bare,
+            math::Transform::from_translation(vec3(0.0, 0.0, -3.0)),
+        );
+        let _ = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render a textureless billboard");
+        assert!(
+            renderer.billboard_batches.is_empty(),
+            "a textureless billboard is not batched"
+        );
+
+        let brightest = |frame: &Frame| {
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(
+            brightest(&with_sprite) > brightest(&without) + 32,
+            "the sprite must brighten the frame: {} vs {}",
+            brightest(&with_sprite),
+            brightest(&without)
         );
     }
 

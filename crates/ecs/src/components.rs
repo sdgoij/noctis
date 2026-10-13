@@ -5,10 +5,10 @@
 //! scripting API expose them by name.
 
 use crate::assets::{
-    AnimationClip, AssetHandle, AudioClip, FontAsset, Material, Mesh, ShaderMaterial, Skin,
+    AnimationClip, AssetHandle, AudioClip, FontAsset, Material, Mesh, ShaderMaterial, Skin, Texture,
 };
 use crate::world::Entity;
-use math::{Mat4, Quat, Transform, Vec3, vec3};
+use math::{Mat4, Quat, Transform, Vec2, Vec3, vec3};
 
 /// The local transform component. A type alias so authoring code can use the
 /// math crate's builders directly.
@@ -627,6 +627,57 @@ impl Text {
         Self {
             text: text.into(),
             ..Self::default()
+        }
+    }
+}
+
+/// How a [`Billboard`]'s quad blends with the scene.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BillboardBlend {
+    /// Depth-written like an opaque surface.
+    Opaque,
+    /// Straight alpha blending (the default): smoke, a splash, a "tell".
+    #[default]
+    Alpha,
+    /// Additive blending: fire and embers.
+    Additive,
+}
+
+/// A camera-facing textured quad — a sprite (`.notes/billboards.md`).
+///
+/// Drawn at the entity's world position, always facing the camera, as
+/// `texture * color` (unlit, tone-mapped with the frame). This is the general
+/// billboard path: the engine draws the quad, the game moves it — a bang's fire,
+/// smoke and debris, a static mine "tell", the water's wake and splashes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Billboard {
+    /// The sprite's texture (a `Texture` asset, sRGB or linear).
+    pub texture: AssetHandle<Texture>,
+    /// World-space size in metres (width, height).
+    pub size: Vec2,
+    /// Linear RGBA tint, multiplied into the texture.
+    pub color: [f32; 4],
+    /// An in-plane rotation, radians (a spinning ember or debris).
+    pub rotation: f32,
+    /// The sub-rectangle of the texture to sample, `[u0, v0, u1, v1]` (an atlas
+    /// frame; the whole texture is `[0, 0, 1, 1]`).
+    pub uv: [f32; 4],
+    /// Alpha, additive or opaque.
+    pub blend: BillboardBlend,
+    /// Whether geometry in front of the quad hides it.
+    pub depth_test: bool,
+}
+
+impl Default for Billboard {
+    fn default() -> Self {
+        Self {
+            texture: AssetHandle::NONE,
+            size: math::vec2(1.0, 1.0),
+            color: [1.0, 1.0, 1.0, 1.0],
+            rotation: 0.0,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            blend: BillboardBlend::Alpha,
+            depth_test: true,
         }
     }
 }

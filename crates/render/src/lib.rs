@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod billboard;
 pub mod camera;
 pub mod draw_list;
 pub mod error;
@@ -58,6 +59,7 @@ pub mod text;
 pub mod textures;
 pub mod tonemap;
 
+pub use billboard::BillboardVertex;
 pub use camera::{
     CameraUniform, CameraView, extract_camera, first_active_camera, projection_matrix,
 };

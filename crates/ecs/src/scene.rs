@@ -629,6 +629,17 @@ fn component_descs(
             depth_test: t.depth_test,
         });
     }
+    if let Some(b) = world.get::<Billboard>(entity) {
+        out.push(ComponentDesc::Billboard {
+            texture: assets.textures.path_of(b.texture).map(str::to_string),
+            size: [b.size.x, b.size.y],
+            color: b.color,
+            rotation: b.rotation,
+            uv: b.uv,
+            blend: BillboardBlendDesc::from(&b.blend),
+            depth_test: b.depth_test,
+        });
+    }
     // Registered custom components, sorted by name (deterministic).
     for (name, data) in components.serialize_entity(world, entity) {
         out.push(ComponentDesc::Custom {
@@ -685,6 +696,9 @@ fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<
         ComponentDesc::Text { font, .. } => {
             font.as_deref().filter(|p| assets.fonts.handle(p).is_none())
         }
+        ComponentDesc::Billboard { texture, .. } => texture
+            .as_deref()
+            .filter(|p| assets.textures.handle(p).is_none()),
         _ => None,
     }
 }
@@ -964,6 +978,32 @@ fn apply_component(
                 },
             );
         }
+        ComponentDesc::Billboard {
+            texture,
+            size,
+            color,
+            rotation,
+            uv,
+            blend,
+            depth_test,
+        } => {
+            let texture = texture
+                .as_deref()
+                .and_then(|p| assets.textures.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                Billboard {
+                    texture,
+                    size: math::vec2(size[0], size[1]),
+                    color: *color,
+                    rotation: *rotation,
+                    uv: *uv,
+                    blend: BillboardBlend::from(blend),
+                    depth_test: *depth_test,
+                },
+            );
+        }
         ComponentDesc::Custom { name, data } => {
             // The strict loader already validated the name; a lenient
             // `from_desc_with` on an unknown or malformed entry skips it.
@@ -1000,6 +1040,7 @@ pub fn desc_name(desc: &ComponentDesc) -> &str {
         ComponentDesc::AudioSource { .. } => "AudioSource",
         ComponentDesc::Script { .. } => "Script",
         ComponentDesc::Text { .. } => "Text",
+        ComponentDesc::Billboard { .. } => "Billboard",
         ComponentDesc::Custom { name, .. } => name,
     }
 }
@@ -1120,6 +1161,7 @@ pub fn remove_reflected_component(
         "AudioSource" => world.remove::<AudioSource>(entity).is_some(),
         "Script" => world.remove::<Script>(entity).is_some(),
         "Text" => world.remove::<Text>(entity).is_some(),
+        "Billboard" => world.remove::<Billboard>(entity).is_some(),
         _ => false,
     }
 }
@@ -1478,6 +1520,39 @@ impl From<&TextAnchorDesc> for TextAnchor {
     }
 }
 
+/// A serializable billboard blend mode.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BillboardBlendDesc {
+    /// Depth-written like an opaque surface.
+    Opaque,
+    /// Straight alpha blending (the default).
+    #[default]
+    Alpha,
+    /// Additive blending.
+    Additive,
+}
+
+impl From<&BillboardBlend> for BillboardBlendDesc {
+    fn from(blend: &BillboardBlend) -> Self {
+        match blend {
+            BillboardBlend::Opaque => BillboardBlendDesc::Opaque,
+            BillboardBlend::Alpha => BillboardBlendDesc::Alpha,
+            BillboardBlend::Additive => BillboardBlendDesc::Additive,
+        }
+    }
+}
+
+impl From<&BillboardBlendDesc> for BillboardBlend {
+    fn from(desc: &BillboardBlendDesc) -> Self {
+        match desc {
+            BillboardBlendDesc::Opaque => BillboardBlend::Opaque,
+            BillboardBlendDesc::Alpha => BillboardBlend::Alpha,
+            BillboardBlendDesc::Additive => BillboardBlend::Additive,
+        }
+    }
+}
+
 /// A serializable component.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1630,6 +1705,23 @@ pub enum ComponentDesc {
         /// Where the text sits relative to the entity's position.
         anchor: TextAnchorDesc,
         /// Whether geometry in front hides the text.
+        depth_test: bool,
+    },
+    /// A camera-facing textured quad (`.notes/billboards.md`).
+    Billboard {
+        /// Texture asset path.
+        texture: Option<String>,
+        /// World-space size in metres (width, height).
+        size: [f32; 2],
+        /// Linear RGBA tint.
+        color: [f32; 4],
+        /// In-plane rotation, radians.
+        rotation: f32,
+        /// The sampled sub-rectangle, `[u0, v0, u1, v1]`.
+        uv: [f32; 4],
+        /// Alpha, additive or opaque.
+        blend: BillboardBlendDesc,
+        /// Whether geometry in front hides the quad.
         depth_test: bool,
     },
     /// A component defined outside the engine, registered by name.
@@ -2251,6 +2343,52 @@ mod tests {
             fresh.get::<ScreenShaderMaterial>(target).unwrap().material,
             material
         );
+    }
+
+    #[test]
+    fn a_billboard_round_trips_through_json() {
+        use crate::assets::{Texture, TextureFormat};
+
+        let mut assets = AssetRegistry::with_defaults();
+        let texture = assets.textures.insert_named(
+            "fx/fire",
+            Texture::solid("fx/fire", [255, 128, 0, 255], TextureFormat::Rgba8Srgb),
+        );
+
+        let registry = ComponentRegistry::new();
+        let mut scene = Scene::new("Billboards");
+        let entity = scene.world.spawn();
+        scene.world.insert(
+            entity,
+            Billboard {
+                texture,
+                size: math::vec2(2.0, 3.0),
+                color: [1.0, 0.5, 0.0, 0.75],
+                rotation: 0.4,
+                uv: [0.25, 0.0, 0.5, 1.0],
+                blend: BillboardBlend::Additive,
+                depth_test: false,
+            },
+        );
+
+        // It appears in the reflected list by its canonical name.
+        let listed = reflect_components(&scene.world, entity, &assets, &registry);
+        assert!(listed.iter().any(|(n, _)| n == "Billboard"));
+
+        // Apply it to a fresh entity; the texture resolves back from its path.
+        let mut fresh = World::new();
+        let target = fresh.spawn();
+        for (name, value) in &listed {
+            set_reflected_component(&mut fresh, target, name, value, &assets, &registry).unwrap();
+        }
+        let applied = fresh.get::<Billboard>(target).expect("billboard");
+        assert_eq!(applied.texture, texture);
+        assert_eq!(applied.size, math::vec2(2.0, 3.0));
+        assert_eq!(applied.color, [1.0, 0.5, 0.0, 0.75]);
+        assert!((applied.rotation - 0.4).abs() < 1e-6);
+        assert_eq!(applied.uv, [0.25, 0.0, 0.5, 1.0]);
+        assert_eq!(applied.blend, BillboardBlend::Additive);
+        assert!(!applied.depth_test);
     }
 
     #[test]
