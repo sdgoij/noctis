@@ -12,7 +12,9 @@ use crate::gpu::resources::{GpuVertex, SkinVertex};
 use crate::gpu::targets::align_up;
 use crate::gpu::uniforms::{FrameUniform, ObjectUniform, ShadowUniform};
 use crate::lights::LightsUniform;
+use crate::shader::ShadeForm;
 use bytemuck::Pod;
+use ecs::assets::Shader;
 use std::num::NonZeroU64;
 
 /// The bind group layouts shared by the pipelines.
@@ -37,6 +39,10 @@ pub struct BindGroupLayouts {
     /// The joint matrices of a skinned draw (group 3 of the PBR pass, group 2 of
     /// the depth pass), bound with a dynamic offset.
     pub skin: wgpu::BindGroupLayout,
+    /// The shader seam's texture array and its shared sampler (group 2).
+    pub shader_textures: wgpu::BindGroupLayout,
+    /// The shader seam's user uniform block (group 3).
+    pub shader_user: wgpu::BindGroupLayout,
 }
 
 fn buffer_entry(
@@ -198,6 +204,34 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         }],
     });
 
+    // The shader seam (`.notes/shaders.md`). Group 2 is the material's texture
+    // array plus one shared sampler; group 3 is the user uniform block. The
+    // capacities are the `ecs` constants, so nothing can drift.
+    let shader_textures = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("shader.textures_layout"),
+        entries: &{
+            let mut entries: Vec<wgpu::BindGroupLayoutEntry> = (0..ecs::assets::TEXTURE_SLOTS
+                as u32)
+                .map(texture)
+                .collect();
+            entries.push(sampler(ecs::assets::TEXTURE_SLOTS as u32, false));
+            entries
+        },
+    });
+    let shader_user = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("shader.user_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: NonZeroU64::new((ecs::assets::USER_SLOTS * 16) as u64),
+            },
+            count: None,
+        }],
+    });
+
     BindGroupLayouts {
         frame,
         object,
@@ -208,6 +242,8 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
         tonemap,
         present,
         skin,
+        shader_textures,
+        shader_user,
     }
 }
 
@@ -240,6 +276,91 @@ pub struct Pipelines {
     pub text_no_depth: wgpu::RenderPipeline,
     /// HDR -> LDR tonemap.
     pub tonemap: wgpu::RenderPipeline,
+}
+
+/// Build the render pipeline for a custom [`Shader`] in the seam's fixed layout
+/// (`.notes/shaders.md`). `form` picks the vertex stage — the body's `vs_main`,
+/// or the prelude's `vs_fullscreen` for the screen form — and `blend` /
+/// `depth_write` / `sample_count` mirror the PBR pass. A screen pipeline writes no
+/// depth, because it runs before the scene draws.
+pub fn create_shader_pipeline(
+    device: &wgpu::Device,
+    layouts: &BindGroupLayouts,
+    shader: &Shader,
+    form: ShadeForm,
+    blend: Option<wgpu::BlendState>,
+    depth_write: bool,
+    sample_count: u32,
+) -> wgpu::RenderPipeline {
+    let source = crate::shader::compose(shader, form);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("shader.seam.module"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let layout = pipeline_layout(
+        device,
+        "shader.seam.layout",
+        &[
+            &layouts.frame,
+            &layouts.object,
+            &layouts.shader_textures,
+            &layouts.shader_user,
+        ],
+    );
+
+    let mesh_buffers = [Some(GpuVertex::layout())];
+    let screen_buffers: [Option<wgpu::VertexBufferLayout>; 0] = [];
+    let (vs_entry, buffers, depth_stencil): (
+        &str,
+        &[Option<wgpu::VertexBufferLayout>],
+        Option<wgpu::DepthStencilState>,
+    ) = match form {
+        ShadeForm::Mesh => (
+            "vs_main",
+            &mesh_buffers,
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(depth_write),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+        ),
+        ShadeForm::Screen => ("vs_fullscreen", &screen_buffers, None),
+    };
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("shader.seam.pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some(vs_entry),
+            compilation_options: Default::default(),
+            buffers,
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil,
+        multisample: wgpu::MultisampleState {
+            count: sample_count.max(1),
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some(shader.fs_entry.as_str()),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn pipeline_layout(

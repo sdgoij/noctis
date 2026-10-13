@@ -66,7 +66,8 @@ graph LR
 - **Object** (`group 1`, binding 0) is the existing [`ObjectUniform`], bound with
   a dynamic offset — the same slot the PBR pass uses, so the extra cost is zero.
 - **Textures** (`group 2`): one `texture_2d` binding per slot, `0..TEXTURE_SLOTS`
-  (engine-fixed at 32 — binding arrays are not universal), plus a single shared
+  (engine-fixed at 8 — binding arrays are not universal, and the count must stay
+  under the per-stage sampled-texture limit), plus a single shared
   `sampler` at binding `TEXTURE_SLOTS`; the first `material.textures.len()` are
   valid. The prelude declares the count as a const so a loop bound is not a
   runtime value.

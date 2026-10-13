@@ -2064,6 +2064,62 @@ mod tests {
         assert!(math::vec3_approx_eq(center, vec3(0.0, 0.0, 0.0), 1e-6));
     }
 
+    /// The shader seam's prelude compiles: build both a mesh and a screen pipeline
+    /// from a trivial body. Skips when no adapter is present.
+    #[test]
+    fn the_shader_seam_prelude_compiles() {
+        use crate::gpu::pipelines::create_shader_pipeline;
+        use crate::shader::ShadeForm;
+        use ecs::assets::Shader;
+
+        let config = RendererConfig {
+            width: 16,
+            height: 16,
+            ..Default::default()
+        };
+        let renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mesh = Shader::new(
+            "seam-mesh",
+            "@vertex fn vs_main(in: VsIn) -> @builtin(position) vec4<f32> {\n\
+             \x20   return vec4<f32>(in.position, 1.0);\n\
+             }\n\
+             @fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.0); }",
+        );
+        let _mesh = create_shader_pipeline(
+            &renderer.device,
+            &renderer.layouts,
+            &mesh,
+            ShadeForm::Mesh,
+            None,
+            true,
+            1,
+        );
+
+        let screen = Shader::new(
+            "seam-screen",
+            "@fragment fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {\n\
+             \x20   return vec4<f32>(in.uv, 0.0, 1.0);\n\
+             }",
+        );
+        let _screen = create_shader_pipeline(
+            &renderer.device,
+            &renderer.layouts,
+            &screen,
+            ShadeForm::Screen,
+            None,
+            false,
+            1,
+        );
+    }
+
     /// The async constructor opens a device with the requested size (or skips).
     #[test]
     fn headless_async_opens_a_device_or_reports_no_adapter() {

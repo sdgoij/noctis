@@ -415,8 +415,10 @@ impl Default for Material {
 pub const USER_SLOTS: usize = 64;
 
 /// The capacity of a shader material's texture array — `TEXTURE_SLOTS` in the
-/// prelude. Handles past this many are ignored at upload.
-pub const TEXTURE_SLOTS: usize = 32;
+/// prelude. Handles past this many are ignored at upload. Kept under the
+/// guaranteed per-stage sampled-texture limit (16), since the seam's group 2 is
+/// one texture binding per slot.
+pub const TEXTURE_SLOTS: usize = 8;
 
 /// A custom WGSL shader compiled against the engine's prelude
 /// ([`.notes/shaders.md`](../../../.notes/shaders.md)).
