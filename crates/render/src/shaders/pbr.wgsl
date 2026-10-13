@@ -220,9 +220,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var n = normalize(in.normal);
     if (object.flags.y > 0.5) {
         let sampled = textureSampleLevel(normal_tex, material_sampler, in.uv, 0.0).xyz * 2.0 - 1.0;
-        let t = normalize(in.tangent.xyz - n * dot(n, in.tangent.xyz));
-        let b = cross(n, t) * in.tangent.w;
-        n = normalize(t * sampled.x + b * sampled.y + n * sampled.z);
+        var t = in.tangent.xyz - n * dot(n, in.tangent.xyz);
+        // A missing or degenerate tangent (a mesh whose UVs span no area) would give
+        // an undefined basis; fall back to an arbitrary tangent orthogonal to N.
+        if (length(t) < 1e-4) {
+            t = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.x) > 0.9);
+            t = t - n * dot(n, t);
+        }
+        let tangent = normalize(t);
+        let b = cross(n, tangent) * in.tangent.w;
+        n = normalize(tangent * sampled.x + b * sampled.y + n * sampled.z);
     }
 
     let v = normalize(frame.camera_pos.xyz - in.world_pos);

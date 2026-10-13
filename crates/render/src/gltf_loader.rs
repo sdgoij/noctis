@@ -253,6 +253,16 @@ fn build_loaded(
                 .map(|i| i.into_u32().collect())
                 .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
+            // glTF calls TANGENT optional, and many exporters (Blender among them)
+            // omit it — but a normal map needs the tangent basis, without which the
+            // map contributes nothing and the surface reads flat. Derive one from the
+            // UVs when the file does not carry it.
+            let tangents = if tangents.is_empty() {
+                compute_tangents(&positions, &normals, &uvs, &indices)
+            } else {
+                tangents
+            };
+
             // The per-vertex skin influence, when the primitive carries one.
             let influences: Vec<VertexInfluence> = {
                 let joints: Vec<[u16; 4]> = reader
@@ -446,6 +456,88 @@ fn walk_parents(node: &gltf::Node<'_>, parents: &mut [Option<usize>]) {
         }
         walk_parents(&child, parents);
     }
+}
+
+/// Derive per-vertex tangents from positions, normals, UVs and indices (the usual
+/// per-triangle accumulation). `w` is the handedness. A vertex whose UVs span no
+/// area falls back to an arbitrary tangent orthogonal to its normal, so the normal
+/// map's basis is never degenerate.
+fn compute_tangents(
+    positions: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    uvs: &[[f32; 2]],
+    indices: &[u32],
+) -> Vec<[f32; 4]> {
+    let count = positions.len();
+    let mut tangent = vec![[0.0f32; 3]; count];
+    let mut bitangent = vec![[0.0f32; 3]; count];
+    let uv = |i: usize| uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+    for tri in indices.as_chunks::<3>().0 {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= count || i1 >= count || i2 >= count {
+            continue;
+        }
+        let (p0, p1, p2) = (positions[i0], positions[i1], positions[i2]);
+        let (uv0, uv1, uv2) = (uv(i0), uv(i1), uv(i2));
+        let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+        let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+        let det = duv1[0] * duv2[1] - duv2[0] * duv1[1];
+        if det.abs() < 1e-12 {
+            continue;
+        }
+        let r = 1.0 / det;
+        let t = [
+            (e1[0] * duv2[1] - e2[0] * duv1[1]) * r,
+            (e1[1] * duv2[1] - e2[1] * duv1[1]) * r,
+            (e1[2] * duv2[1] - e2[2] * duv1[1]) * r,
+        ];
+        let b = [
+            (e2[0] * duv1[0] - e1[0] * duv2[0]) * r,
+            (e2[1] * duv1[0] - e1[1] * duv2[0]) * r,
+            (e2[2] * duv1[0] - e1[2] * duv2[0]) * r,
+        ];
+        for i in [i0, i1, i2] {
+            for k in 0..3 {
+                tangent[i][k] += t[k];
+                bitangent[i][k] += b[k];
+            }
+        }
+    }
+
+    (0..count)
+        .map(|i| {
+            let n = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let mut t = tangent[i];
+            let d = n[0] * t[0] + n[1] * t[1] + n[2] * t[2];
+            t = [t[0] - n[0] * d, t[1] - n[1] * d, t[2] - n[2] * d];
+            if (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt() < 1e-8 {
+                // Degenerate UVs: any tangent orthogonal to the normal will do.
+                t = if n[0].abs() > 0.9 {
+                    [0.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
+                let d = n[0] * t[0] + n[1] * t[1] + n[2] * t[2];
+                t = [t[0] - n[0] * d, t[1] - n[1] * d, t[2] - n[2] * d];
+            }
+            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-8);
+            t = [t[0] / len, t[1] / len, t[2] / len];
+            let cross = [
+                n[1] * t[2] - n[2] * t[1],
+                n[2] * t[0] - n[0] * t[2],
+                n[0] * t[1] - n[1] * t[0],
+            ];
+            let b = bitangent[i];
+            let w = if cross[0] * b[0] + cross[1] * b[1] + cross[2] * b[2] < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            [t[0], t[1], t[2], w]
+        })
+        .collect()
 }
 
 fn build_material(material: gltf::Material<'_>) -> Material {
@@ -791,6 +883,24 @@ impl LoadedGltf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_tangents_are_generated_from_uvs() {
+        // `triangle_glb` carries no TANGENT attribute (glTF leaves it optional).
+        let loaded = load_gltf_bytes(&triangle_glb()).expect("import");
+        let mesh = loaded.meshes.first().expect("a mesh");
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| v.tangent[..3] != [0.0, 0.0, 0.0]),
+            "a tangent is derived when the file omits one"
+        );
+        for v in &mesh.vertices {
+            let len = (v.tangent[0].powi(2) + v.tangent[1].powi(2) + v.tangent[2].powi(2)).sqrt();
+            assert!((len - 1.0).abs() < 1e-3, "the tangent is unit: {len}");
+            assert_eq!(v.tangent[3].abs(), 1.0, "the handedness is +-1");
+        }
+    }
 
     /// Build a minimal binary glTF (GLB) containing one triangle with normals,
     /// UVs, indices, and a red material.
