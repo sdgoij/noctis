@@ -38,8 +38,9 @@ pub use ecs_macros::plugin;
 pub mod prelude {
     pub use crate::app::{App, EngineContext, EngineEvent, NullPlugin, Plugin, Stage, System};
     pub use crate::assets::{
-        AssetHandle, AssetId, AssetRegistry, Assets, AudioClip, FontAsset, HdrTexture, Material,
-        Mesh, ScriptAsset, Texture, TextureFormat, Vertex,
+        AnimationChannel, AnimationClip, AnimationProperty, AssetHandle, AssetId, AssetRegistry,
+        Assets, AudioClip, FontAsset, HdrTexture, Material, Mesh, ScriptAsset, Skin, Texture,
+        TextureFormat, Vertex, VertexInfluence,
     };
     pub use crate::components::{
         Active, AudioSource, BodyType, Camera, Children, Collider, ColliderShape, GlobalTransform,

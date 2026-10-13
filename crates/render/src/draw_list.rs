@@ -205,7 +205,7 @@ mod tests {
                 },
             ],
             indices: vec![0, 1, 2],
-            bounds: None,
+            ..Default::default()
         }
     }
 

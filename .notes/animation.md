@@ -41,16 +41,14 @@ Two new asset kinds, beside `Mesh` / `Material` / `Texture` in
 `crates/ecs/src/assets.rs`:
 
 ```rust
-/// A skin binding a mesh's vertices to the nodes that deform them.
+/// A skin: the joints that deform a mesh, and their bind-time inverse
+/// transforms.
 pub struct Skin {
     pub name: String,
     /// The joint node indices, in skin order (glTF `skin.joints`).
     pub joints: Vec<usize>,
     /// `inverse(mesh_node_world) * joint_world`, at bind time, per joint.
     pub inverse_bind: Vec<Mat4>,
-    /// Per-vertex influence, parallel to the mesh's `vertices`.
-    pub weights: Vec<[f32; 4]>,
-    pub joint_indices: Vec<[u16; 4]>,
 }
 
 /// One animation, as channels of TRS keyframes targeting nodes.
@@ -63,13 +61,20 @@ pub struct AnimationClip {
 pub struct AnimationChannel {
     /// The node this channel animates.
     pub node: usize,
-    pub target: AnimationTarget, // Translation | Rotation | Scale
+    pub property: AnimationProperty, // Translation | Rotation | Scale
     /// Keyframe times, ascending.
     pub times: Vec<f32>,
-    /// Values, one per time (a `Vec3` for T/S, a `Quat` for R).
-    pub values: Vec<TrackValue>,
+    /// The value per time: `[x, y, z, _]` for T/S, `[x, y, z, w]` for R.
+    pub values: Vec<[f32; 4]>,
 }
 ```
+
+The per-vertex influence — up to four joints and their weights — is **not** on
+the `Skin` but on the `Mesh`, as `Mesh::influences: Vec<VertexInfluence>`,
+parallel to `vertices` and empty for an unskinned mesh. glTF stores it as a
+primitive attribute (`JOINTS_0`/`WEIGHTS_0`) and one skin can serve several
+primitives, so it belongs with the geometry the vertex list describes (the goat
+is one skin over five primitives).
 
 The registry gains `animations: Assets<AnimationClip>` and `skins: Assets<Skin>`
 (`AssetRegistry`, `crates/ecs/src/assets.rs`). A clip registers under its name, so
@@ -135,14 +140,15 @@ frame and clears `playing`. Clip selection is a handle swap on `Animator::clip`.
 
 ## glTF import
 
-`build_loaded` (`crates/render/src/gltf_loader.rs`) gains two reads, and
-`LoadedGltf` two fields:
+`build_loaded` (`crates/render/src/gltf_loader.rs`) gains two reads; `LoadedGltf`
+gains `skins` and `animations`, and `NodeDesc` gains `skin` (the node's `skin`
+index):
 
 - **Skins** — `document.skins()`: the joint node indices and the
-  `inverse_bind_matrices` accessor, verbatim. The per-vertex `JOINTS_0` /
-  `WEIGHTS_0` accessors are read where primitives are built and attached to the
-  matching `Skin` (normalized to four influences; a mesh with no weights gets an
-  empty skin and is drawn unskinned).
+  `inverse_bind_matrices` accessor, verbatim, into a `Skin`. The per-vertex
+  `JOINTS_0` / `WEIGHTS_0` accessors are read where primitives are built and
+  stored on the mesh (`Mesh::influences`, four influences per vertex); a mesh
+  with no weights gets an empty influence list.
 - **Animations** — `document.animations()`: each animation becomes an
   `AnimationClip` named after the glTF animation, its channels resolved from the
   input/output accessors. Interpolation (`LINEAR` / `STEP` / `CUBICSPLINE`) is
@@ -211,9 +217,10 @@ and does nothing until then.
 
 ## Phasing
 
-1. **Import.** *(Not built.)* `Skin` / `AnimationClip` assets, the two glTF reads,
-   the two registry stores, a fixture test. No playback: the model still draws at
-   bind pose.
+1. **Import.** *(Shipped.)* `Skin` / `AnimationClip` assets, the `skin`/
+   `animations`/`JOINTS_0`/`WEIGHTS_0` reads, the two registry stores, and a
+   fixture test (`the_skin_and_clip_import`). No playback: the model still draws
+   at bind pose.
 2. **Skinned draw.** *(Not built.)* `SkinnedMeshRenderer`, the joint storage
    buffer, the skinned vertex pipeline and its shadow-pass twin.
 3. **Playback.** *(Not built.)* `Animator`, the `update`-stage sampler, loop and

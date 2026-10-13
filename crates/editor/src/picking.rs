@@ -177,6 +177,7 @@ mod tests {
                 vertices: Vec::new(),
                 indices: Vec::new(),
                 bounds: Some(unit_cube_aabb()),
+                ..Default::default()
             },
         );
 
@@ -208,6 +209,7 @@ mod tests {
                 vertices: Vec::new(),
                 indices: Vec::new(),
                 bounds: Some(unit_cube_aabb()),
+                ..Default::default()
             },
         );
 

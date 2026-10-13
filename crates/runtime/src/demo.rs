@@ -190,7 +190,7 @@ fn cube_mesh() -> Mesh {
         name: "cube".into(),
         vertices,
         indices,
-        bounds: None,
+        ..Default::default()
     };
     mesh.bounds = mesh.compute_bounds();
     mesh

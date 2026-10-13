@@ -2153,7 +2153,7 @@ mod tests {
                 },
             ],
             indices: vec![0, 1, 2],
-            bounds: None,
+            ..Default::default()
         });
         let material = assets.materials.handle("$default").unwrap();
 
@@ -2230,7 +2230,7 @@ mod tests {
                 },
             ],
             indices: vec![0, 1, 2],
-            bounds: None,
+            ..Default::default()
         });
         let grey = [0.5, 0.5, 0.5, 1.0];
         let unlit = assets.materials.insert_named(

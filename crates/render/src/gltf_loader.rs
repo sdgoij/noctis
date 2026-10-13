@@ -19,12 +19,13 @@
 
 use crate::error::RenderError;
 use ecs::assets::{
-    AssetHandle, AssetRegistry, Material, Mesh, Texture, TextureFilter, TextureFormat, Vertex,
+    AnimationChannel, AnimationClip, AnimationProperty, AssetHandle, AssetRegistry, Material, Mesh,
+    Skin, Texture, TextureFilter, TextureFormat, Vertex, VertexInfluence,
 };
 use ecs::components::{LocalTransform, MeshRenderer, Name};
 use ecs::scene::set_parent;
 use ecs::world::{Entity, World};
-use math::{Quat, Transform, vec3};
+use math::{Mat4, Quat, Transform, from_cols_array, vec3};
 
 /// A `KHR_texture_transform` applied to a texture's UVs.
 ///
@@ -83,6 +84,8 @@ pub struct NodeDesc {
     pub mesh: Option<usize>,
     /// Every mesh primitive attached to this node (usually zero or one entry).
     pub mesh_primitives: Vec<usize>,
+    /// The index of the skin this node deforms with, if any (its `skin`).
+    pub skin: Option<usize>,
 }
 
 /// The full result of importing a glTF document.
@@ -104,6 +107,10 @@ pub struct LoadedGltf {
     pub mesh_materials: Vec<Option<usize>>,
     /// The mesh primitives belonging to each glTF mesh, in mesh-index order.
     pub mesh_primitives: Vec<Vec<usize>>,
+    /// One [`Skin`] per glTF skin, in skin-index order.
+    pub skins: Vec<Skin>,
+    /// One [`AnimationClip`] per glTF animation, in animation-index order.
+    pub animations: Vec<AnimationClip>,
 }
 
 /// Handles produced by registering a [`LoadedGltf`] into an [`AssetRegistry`].
@@ -117,6 +124,10 @@ pub struct RegisteredGltf {
     pub textures: Vec<AssetHandle<Texture>>,
     /// The material used by primitives without one.
     pub default_material: AssetHandle<Material>,
+    /// Skin handles, parallel to [`LoadedGltf::skins`].
+    pub skins: Vec<AssetHandle<Skin>>,
+    /// Animation handles, parallel to [`LoadedGltf::animations`].
+    pub animations: Vec<AssetHandle<AnimationClip>>,
 }
 
 /// Load a glTF document from a filesystem path.
@@ -180,6 +191,30 @@ fn build_loaded(
         .map(base_color_uv_transform)
         .collect::<Vec<_>>();
 
+    // Skins: the joint nodes and their bind-time inverse transforms.
+    let skins = document
+        .skins()
+        .map(|skin| {
+            let joints: Vec<usize> = skin.joints().map(|node| node.index()).collect();
+            let inverse_bind: Vec<Mat4> = skin
+                .reader(|buffer| buffers.get(buffer.index()).map(|b| b.0.as_slice()))
+                .read_inverse_bind_matrices()
+                .map(|matrices| matrices.map(from_cols_array).collect())
+                .unwrap_or_default();
+            Skin {
+                name: skin.name().unwrap_or("skin").to_string(),
+                joints,
+                inverse_bind,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Animations: one clip per glTF animation, named for lookup.
+    let animations = document
+        .animations()
+        .map(|animation| build_clip(animation, buffers))
+        .collect::<Vec<_>>();
+
     let mut meshes = Vec::new();
     let mut mesh_materials = Vec::new();
     let mut mesh_primitives = Vec::new();
@@ -218,6 +253,30 @@ fn build_loaded(
                 .map(|i| i.into_u32().collect())
                 .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
+            // The per-vertex skin influence, when the primitive carries one.
+            let influences: Vec<VertexInfluence> = {
+                let joints: Vec<[u16; 4]> = reader
+                    .read_joints(0)
+                    .map(|j| j.into_u16().collect())
+                    .unwrap_or_default();
+                if joints.is_empty() {
+                    Vec::new()
+                } else {
+                    let weights: Vec<[f32; 4]> = reader
+                        .read_weights(0)
+                        .map(|w| w.into_f32().collect())
+                        .unwrap_or_default();
+                    joints
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &joints)| VertexInfluence {
+                            joints,
+                            weights: weights.get(i).copied().unwrap_or([0.0; 4]),
+                        })
+                        .collect()
+                }
+            };
+
             let vertices = positions
                 .iter()
                 .enumerate()
@@ -241,6 +300,7 @@ fn build_loaded(
                 vertices,
                 indices,
                 bounds: None,
+                influences,
             };
             asset.bounds = asset.compute_bounds();
 
@@ -282,6 +342,7 @@ fn build_loaded(
                 },
                 mesh,
                 mesh_primitives: primitives,
+                skin: node.skin().map(|skin| skin.index()),
             }
         })
         .collect::<Vec<_>>();
@@ -308,12 +369,72 @@ fn build_loaded(
         scene_name,
         mesh_materials,
         mesh_primitives,
+        skins,
+        animations,
+    }
+}
+
+/// Turn one glTF animation into an [`AnimationClip`].
+///
+/// Channels for a property the engine cannot drive (morph targets) are dropped;
+/// the clip's duration is the latest key time across its channels.
+fn build_clip(animation: gltf::Animation<'_>, buffers: &[gltf::buffer::Data]) -> AnimationClip {
+    use gltf::animation::util::ReadOutputs;
+
+    let get = |buffer: gltf::Buffer<'_>| buffers.get(buffer.index()).map(|b| b.0.as_slice());
+    let mut channels = Vec::new();
+    let mut duration = 0.0f32;
+    for channel in animation.channels() {
+        let target = channel.target();
+        let property = match target.property() {
+            gltf::animation::Property::Translation => AnimationProperty::Translation,
+            gltf::animation::Property::Rotation => AnimationProperty::Rotation,
+            gltf::animation::Property::Scale => AnimationProperty::Scale,
+            gltf::animation::Property::MorphTargetWeights => continue,
+        };
+        let reader = channel.reader(get);
+        let times: Vec<f32> = reader
+            .read_inputs()
+            .map(|inputs| inputs.collect())
+            .unwrap_or_default();
+        let values: Vec<[f32; 4]> = match reader.read_outputs() {
+            Some(ReadOutputs::Translations(t)) => t.map(|v| [v[0], v[1], v[2], 0.0]).collect(),
+            Some(ReadOutputs::Scales(s)) => s.map(|v| [v[0], v[1], v[2], 0.0]).collect(),
+            Some(ReadOutputs::Rotations(r)) => {
+                r.into_f32().map(|v| [v[0], v[1], v[2], v[3]]).collect()
+            }
+            Some(ReadOutputs::MorphTargetWeights(_)) | None => continue,
+        };
+        duration = duration.max(times.last().copied().unwrap_or(0.0));
+        channels.push(AnimationChannel {
+            node: target.node().index(),
+            property,
+            times,
+            values,
+        });
+    }
+    AnimationClip {
+        name: animation.name().unwrap_or("animation").to_string(),
+        duration,
+        channels,
     }
 }
 
 fn mark(flags: &mut [bool], index: usize) {
     if let Some(slot) = flags.get_mut(index) {
         *slot = true;
+    }
+}
+
+/// A registration key for an asset with `name`: the name itself, or
+/// `fallback#index` for an empty one, with a `#index` suffix when the name is
+/// already taken (so two never alias to the same id).
+fn unique_name(name: &str, fallback: &str, index: usize, taken: impl Fn(&str) -> bool) -> String {
+    let base = if name.is_empty() { fallback } else { name };
+    if name.is_empty() || taken(base) {
+        format!("{base}#{index}")
+    } else {
+        name.to_string()
     }
 }
 
@@ -546,11 +667,31 @@ impl LoadedGltf {
             .handle("$default")
             .unwrap_or_else(|| registry.materials.insert(Material::default()));
 
+        // Skins and clips register under their names, so a script plays a clip by
+        // name (its asset path). An unnamed or duplicate name gets a `#index`
+        // suffix, so two never alias to one id (`insert_named` replaces by path).
+        let mut skin_handles = Vec::with_capacity(self.skins.len());
+        for (index, skin) in self.skins.iter().enumerate() {
+            let key = unique_name(&skin.name, "skin", index, |path| {
+                registry.skins.handle(path).is_some()
+            });
+            skin_handles.push(registry.skins.insert_named(key, skin.clone()));
+        }
+        let mut animation_handles = Vec::with_capacity(self.animations.len());
+        for (index, clip) in self.animations.iter().enumerate() {
+            let key = unique_name(&clip.name, "animation", index, |path| {
+                registry.animations.handle(path).is_some()
+            });
+            animation_handles.push(registry.animations.insert_named(key, clip.clone()));
+        }
+
         RegisteredGltf {
             meshes: mesh_handles,
             materials: material_handles,
             textures: texture_handles,
             default_material,
+            skins: skin_handles,
+            animations: animation_handles,
         }
     }
 
@@ -835,6 +976,158 @@ mod tests {
         assert_eq!(mesh.vertices[2].uv, [0.5, 3.25]);
         // The base-color map resolved to a real texture handle.
         assert!(!loaded.materials[0].base_color_texture.is_none());
+    }
+
+    /// A two-bone skinned triangle with one clip: `Body` (the mesh node, also
+    /// joint 0) with `Bone` (joint 1) as its child, and a `Wiggle` clip that moves
+    /// `Bone` up.
+    fn skinned_triangle_glb() -> Vec<u8> {
+        fn section(bin: &mut Vec<u8>, bytes: &[u8]) -> usize {
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+            let offset = bin.len();
+            bin.extend_from_slice(bytes);
+            offset
+        }
+        let f =
+            |values: &[f32]| -> Vec<u8> { values.iter().flat_map(|x| x.to_le_bytes()).collect() };
+        let u =
+            |values: &[u16]| -> Vec<u8> { values.iter().flat_map(|x| x.to_le_bytes()).collect() };
+
+        let positions = f(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        let normals = f(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        let uvs = f(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        // Joint 1 for the third vertex, joint 0 for the rest; weight 1 on slot 0.
+        let joints = u(&[0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]);
+        let weights = f(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+        let indices = u(&[0, 1, 2]);
+        let bind = f(&[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]);
+        let times = f(&[0.0, 1.0]);
+        let moves = f(&[0.0, 1.0, 0.0, 0.0, 2.0, 0.0]);
+
+        let mut bin = Vec::new();
+        let len = |bin: &mut Vec<u8>, bytes: &[u8]| -> (usize, usize) {
+            (section(bin, bytes), bytes.len())
+        };
+        let views = [
+            len(&mut bin, &positions),
+            len(&mut bin, &normals),
+            len(&mut bin, &uvs),
+            len(&mut bin, &joints),
+            len(&mut bin, &weights),
+            len(&mut bin, &indices),
+            len(&mut bin, &bind),
+            len(&mut bin, &times),
+            len(&mut bin, &moves),
+        ];
+        let total = bin.len();
+
+        let json = format!(
+            r#"{{
+  "asset": {{ "version": "2.0" }},
+  "scene": 0,
+  "scenes": [ {{ "name": "Main", "nodes": [0] }} ],
+  "nodes": [
+    {{ "name": "Body", "mesh": 0, "skin": 0, "children": [1] }},
+    {{ "name": "Bone", "translation": [0.0, 1.0, 0.0] }}
+  ],
+  "skins": [ {{ "name": "Rig", "joints": [0, 1], "inverseBindMatrices": 6 }} ],
+  "meshes": [ {{ "name": "TriMesh", "primitives": [
+     {{ "attributes": {{ "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, "JOINTS_0": 3, "WEIGHTS_0": 4 }}, "indices": 5, "material": 0 }}
+  ] }} ],
+  "materials": [ {{ "name": "Hide", "pbrMetallicRoughness": {{ "baseColorFactor": [0.6, 0.4, 0.2, 1.0] }} }} ],
+  "animations": [ {{ "name": "Wiggle",
+     "channels": [ {{ "sampler": 0, "target": {{ "node": 1, "path": "translation" }} }} ],
+     "samplers": [ {{ "input": 7, "output": 8, "interpolation": "LINEAR" }} ]
+  }} ],
+  "buffers": [ {{ "byteLength": {total} }} ],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": {o0}, "byteLength": {l0} }},
+    {{ "buffer": 0, "byteOffset": {o1}, "byteLength": {l1} }},
+    {{ "buffer": 0, "byteOffset": {o2}, "byteLength": {l2} }},
+    {{ "buffer": 0, "byteOffset": {o3}, "byteLength": {l3} }},
+    {{ "buffer": 0, "byteOffset": {o4}, "byteLength": {l4} }},
+    {{ "buffer": 0, "byteOffset": {o5}, "byteLength": {l5} }},
+    {{ "buffer": 0, "byteOffset": {o6}, "byteLength": {l6} }},
+    {{ "buffer": 0, "byteOffset": {o7}, "byteLength": {l7} }},
+    {{ "buffer": 0, "byteOffset": {o8}, "byteLength": {l8} }}
+  ],
+  "accessors": [
+    {{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] }},
+    {{ "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" }},
+    {{ "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" }},
+    {{ "bufferView": 3, "componentType": 5123, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC4" }},
+    {{ "bufferView": 5, "componentType": 5123, "count": 3, "type": "SCALAR" }},
+    {{ "bufferView": 6, "componentType": 5126, "count": 2, "type": "MAT4" }},
+    {{ "bufferView": 7, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [1.0] }},
+    {{ "bufferView": 8, "componentType": 5126, "count": 2, "type": "VEC3" }}
+  ]
+}}"#,
+            o0 = views[0].0,
+            l0 = views[0].1,
+            o1 = views[1].0,
+            l1 = views[1].1,
+            o2 = views[2].0,
+            l2 = views[2].1,
+            o3 = views[3].0,
+            l3 = views[3].1,
+            o4 = views[4].0,
+            l4 = views[4].1,
+            o5 = views[5].0,
+            l5 = views[5].1,
+            o6 = views[6].0,
+            l6 = views[6].1,
+            o7 = views[7].0,
+            l7 = views[7].1,
+            o8 = views[8].0,
+            l8 = views[8].1,
+        );
+        make_glb(&json, &bin)
+    }
+
+    #[test]
+    fn the_skin_and_clip_import() {
+        let loaded = load_gltf_bytes(&skinned_triangle_glb()).expect("a skinned model imports");
+
+        // The skin: two joints and their inverse bind transforms.
+        assert_eq!(loaded.skins.len(), 1);
+        assert_eq!(loaded.skins[0].name, "Rig");
+        assert_eq!(loaded.skins[0].joints, vec![0, 1]);
+        assert_eq!(loaded.skins[0].inverse_bind.len(), 2);
+        assert_eq!(loaded.nodes[0].skin, Some(0));
+
+        // The per-vertex influences, parallel to the vertices.
+        let influences = &loaded.meshes[0].influences;
+        assert_eq!(influences.len(), 3);
+        assert_eq!(influences[2].joints[0], 1, "the third vertex is on bone 1");
+        assert_eq!(influences[0].weights[0], 1.0);
+
+        // The clip: one translation channel on bone 1, two keys over one second.
+        assert_eq!(loaded.animations.len(), 1);
+        let clip = &loaded.animations[0];
+        assert_eq!(clip.name, "Wiggle");
+        assert_eq!(clip.duration, 1.0);
+        assert_eq!(clip.channels.len(), 1);
+        let channel = &clip.channels[0];
+        assert_eq!(channel.node, 1);
+        assert_eq!(channel.property, AnimationProperty::Translation);
+        assert_eq!(channel.times, vec![0.0, 1.0]);
+        assert_eq!(
+            channel.values,
+            vec![[0.0, 1.0, 0.0, 0.0], [0.0, 2.0, 0.0, 0.0]]
+        );
+
+        // Registering returns handles, and the clip resolves by name.
+        let mut registry = AssetRegistry::new();
+        let handles = loaded.register(&mut registry);
+        assert_eq!(handles.skins.len(), 1);
+        assert_eq!(handles.animations.len(), 1);
+        assert!(registry.animations.handle("Wiggle").is_some());
     }
 
     /// A triangle whose material carries `KHR_materials_unlit`.

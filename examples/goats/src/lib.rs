@@ -288,6 +288,47 @@ mod tests {
     }
 
     #[test]
+    fn the_goat_model_carries_its_skin_and_clips() {
+        let loaded = load_gltf_bytes(GOAT_GLB).expect("the embedded goat imports");
+
+        // One rig, with a bind transform per joint and one influence per vertex.
+        assert_eq!(loaded.skins.len(), 1, "the goat has one rig");
+        let skin = &loaded.skins[0];
+        assert!(skin.joints.len() >= 10, "the rig has real bones");
+        assert_eq!(skin.inverse_bind.len(), skin.joints.len());
+        assert!(
+            loaded
+                .meshes
+                .iter()
+                .any(|mesh| !mesh.influences.is_empty()
+                    && mesh.influences.len() == mesh.vertices.len()),
+            "a skinned primitive carries one influence per vertex",
+        );
+
+        // The fourteen clips the original's `model.js` looks up by name.
+        let names: Vec<&str> = loaded.animations.iter().map(|c| c.name.as_str()).collect();
+        for wanted in [
+            "GoatIdle",
+            "GoatIdle2",
+            "GoatIdle3",
+            "GoatWalk",
+            "GoatTrot",
+            "GoatRun",
+            "GoatJump",
+            "GoatJump2",
+            "GoatFlung",
+            "GoatSleep",
+            "GoatSleep2",
+            "GoatDeath",
+            "GoatEat",
+            "GoatEat2",
+        ] {
+            assert!(names.contains(&wanted), "missing clip {wanted}: {names:?}");
+        }
+        assert!(loaded.animations.iter().all(|clip| clip.duration > 0.0));
+    }
+
+    #[test]
     fn the_plugin_spawns_the_goat_and_the_terrain() {
         let mut app = App::new("test");
         Goats.build(&mut app);

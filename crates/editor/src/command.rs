@@ -1268,7 +1268,7 @@ pub fn mesh_from_positions(
         name: name.into(),
         vertices,
         indices: indices.to_vec(),
-        bounds: None,
+        ..Default::default()
     };
     mesh.bounds = mesh.compute_bounds();
     Ok(mesh)

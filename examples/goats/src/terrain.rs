@@ -127,7 +127,7 @@ pub fn build_mesh() -> Mesh {
         name: "terrain/meadow".to_string(),
         vertices,
         indices,
-        bounds: None,
+        ..Default::default()
     };
     mesh.bounds = mesh.compute_bounds();
     mesh

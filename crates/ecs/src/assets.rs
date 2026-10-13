@@ -5,7 +5,7 @@
 //! Each asset type has its own [`Assets`] store, and an [`AssetRegistry`]
 //! bundles the stores the engine cares about.
 
-use math::Aabb;
+use math::{Aabb, Mat4};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -263,6 +263,18 @@ pub struct Vertex {
     pub tangent: [f32; 4],
 }
 
+/// A per-vertex skin influence: up to four joints and their blend weights.
+///
+/// Parallel to a [`Mesh`]'s vertices (empty for a mesh that is not skinned); the
+/// joint indices address the mesh's [`Skin::joints`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VertexInfluence {
+    /// Indices into the skin's joint list.
+    pub joints: [u16; 4],
+    /// Blend weights, summing to ~1 (unused slots are zero).
+    pub weights: [f32; 4],
+}
+
 /// An indexed triangle mesh.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
@@ -274,6 +286,8 @@ pub struct Mesh {
     pub indices: Vec<u32>,
     /// Object-space bounds.
     pub bounds: Option<Aabb>,
+    /// Per-vertex skin influences, parallel to `vertices` (empty when unskinned).
+    pub influences: Vec<VertexInfluence>,
 }
 
 impl Mesh {
@@ -560,6 +574,62 @@ impl FontAsset {
     }
 }
 
+/// A skin: the joints that deform a mesh, and their bind-time inverse
+/// transforms.
+///
+/// The joint indices are glTF node indices; the glTF loader resolves them to
+/// entities. The per-vertex influence that says *which* joints move a vertex
+/// lives on the [`Mesh`] ([`Mesh::influences`]), because glTF stores it as a
+/// primitive attribute and one skin can serve several primitives.
+#[derive(Clone, Debug, Default)]
+pub struct Skin {
+    /// A human-readable name.
+    pub name: String,
+    /// The joint node indices, in skin order.
+    pub joints: Vec<usize>,
+    /// The inverse bind matrix per joint, in mesh space.
+    pub inverse_bind: Vec<Mat4>,
+}
+
+/// Which transform of a node an animation channel drives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimationProperty {
+    /// The node's translation.
+    Translation,
+    /// The node's rotation (a quaternion).
+    Rotation,
+    /// The node's scale.
+    Scale,
+}
+
+/// One node property animated over time.
+///
+/// `values` holds one entry per time: `[x, y, z, _]` for translation and scale,
+/// and `[x, y, z, w]` for rotation. Kept flat (`[f32; 4]`) so a clip is plain data
+/// whatever the property.
+#[derive(Clone, Debug)]
+pub struct AnimationChannel {
+    /// The target node index.
+    pub node: usize,
+    /// The property this channel drives.
+    pub property: AnimationProperty,
+    /// Key times in seconds, ascending.
+    pub times: Vec<f32>,
+    /// The value at each time.
+    pub values: Vec<[f32; 4]>,
+}
+
+/// An animation clip: channels over a duration, named for lookup.
+#[derive(Clone, Debug, Default)]
+pub struct AnimationClip {
+    /// The clip's name (its glTF animation name; a script plays it by this).
+    pub name: String,
+    /// The clip's length in seconds.
+    pub duration: f32,
+    /// The channels the clip drives.
+    pub channels: Vec<AnimationChannel>,
+}
+
 /// Bundles the asset stores the engine uses.
 #[derive(Default)]
 pub struct AssetRegistry {
@@ -577,6 +647,10 @@ pub struct AssetRegistry {
     pub fonts: Assets<FontAsset>,
     /// HDR environment assets.
     pub hdr: Assets<HdrTexture>,
+    /// Skin assets.
+    pub skins: Assets<Skin>,
+    /// Animation clip assets.
+    pub animations: Assets<AnimationClip>,
 }
 
 impl AssetRegistry {
@@ -644,6 +718,8 @@ impl AssetRegistry {
             + self.scripts.len()
             + self.fonts.len()
             + self.hdr.len()
+            + self.skins.len()
+            + self.animations.len()
     }
 
     /// `true` if every store is empty.
@@ -661,7 +737,7 @@ mod tests {
             name: name.to_string(),
             vertices: vec![Vertex::default(), Vertex::default(), Vertex::default()],
             indices: vec![0, 1, 2],
-            bounds: None,
+            ..Default::default()
         }
     }
 

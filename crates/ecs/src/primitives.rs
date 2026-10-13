@@ -45,7 +45,7 @@ fn finalize(name: &str, vertices: Vec<Vertex>, indices: Vec<u32>) -> Mesh {
         name: name.to_string(),
         vertices,
         indices,
-        bounds: None,
+        ..Default::default()
     };
     mesh.bounds = mesh.compute_bounds();
     mesh
