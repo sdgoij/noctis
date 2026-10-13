@@ -165,22 +165,25 @@ impl GpuTexture {
         };
         let width = texture.width.max(1);
         let height = texture.height.max(1);
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
+        // Level 0 is the source; each step halves the larger dimension, so the
+        // chain runs down to 1x1. Non-square textures stop halving a dimension
+        // once it reaches 1.
+        let levels = mip_level_count(width, height);
         let gpu = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(name),
-            size,
-            mip_level_count: 1,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let bytes = if texture.data.len() >= (width * height * 4) as usize {
+        let mut bytes = if texture.data.len() >= (width * height * 4) as usize {
             texture.data.clone()
         } else {
             // Pad malformed data rather than panic.
@@ -188,24 +191,86 @@ impl GpuTexture {
             padded.resize((width * height * 4) as usize, 255);
             padded
         };
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &gpu,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            size,
-        );
+        let (mut level_w, mut level_h) = (width, height);
+        for level in 0..levels {
+            let size = wgpu::Extent3d {
+                width: level_w,
+                height: level_h,
+                depth_or_array_layers: 1,
+            };
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &gpu,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level_w * 4),
+                    rows_per_image: Some(level_h),
+                },
+                size,
+            );
+            let Some((next, next_w, next_h)) = downsample_2x2(&bytes, level_w, level_h) else {
+                break;
+            };
+            bytes = next;
+            level_w = next_w;
+            level_h = next_h;
+        }
         let view = gpu.create_view(&wgpu::TextureViewDescriptor::default());
         GpuTexture { texture: gpu, view }
     }
+}
+
+/// The number of mip levels for a `width`x`height` texture: the full chain,
+/// down to 1x1.
+fn mip_level_count(width: u32, height: u32) -> u32 {
+    let max = width.max(height).max(1);
+    32 - max.leading_zeros()
+}
+
+/// Box-filter `src` (an RGBA8 image of `width`x`height`) down by 2x2. Returns
+/// the halved image and its dimensions, or `None` when the image is already
+/// 1x1 (or has no pixels). Each output texel is the average of the up-to-four
+/// source texels it covers; a dimension already at 1 is carried over.
+fn downsample_2x2(src: &[u8], width: u32, height: u32) -> Option<(Vec<u8>, u32, u32)> {
+    if width <= 1 && height <= 1 {
+        return None;
+    }
+    let dst_w = (width / 2).max(1);
+    let dst_h = (height / 2).max(1);
+    let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            let mut sums = [0u32; 4];
+            let mut count = 0u32;
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let sx = (x * 2 + dx).min(width - 1);
+                let sy = (y * 2 + dy).min(height - 1);
+                // A dimension already at 1 keeps sampling its single row/column.
+                if x * 2 + dx >= width || y * 2 + dy >= height {
+                    continue;
+                }
+                let src_index = ((sy * width + sx) * 4) as usize;
+                if src_index + 4 > src.len() {
+                    continue;
+                }
+                for c in 0..4 {
+                    sums[c] += src[src_index + c] as u32;
+                }
+                count += 1;
+            }
+            let dst_index = ((y * dst_w + x) * 4) as usize;
+            // `count` is at least 1 for any width/height >= 1; `max(1)` is defensive.
+            for c in 0..4 {
+                dst[dst_index + c] = (sums[c] / count.max(1)) as u8;
+            }
+        }
+    }
+    Some((dst, dst_w, dst_h))
 }
 
 /// An uploaded material: a bind group over its textures.
@@ -458,5 +523,51 @@ mod tests {
         assert_eq!(layout.attributes[4].offset, 48);
         // Colour is location 6, clear of the skin buffer's 4 and 5.
         assert_eq!(layout.attributes[4].shader_location, 6);
+    }
+
+    #[test]
+    fn mip_level_count_is_the_full_chain() {
+        assert_eq!(mip_level_count(1, 1), 1);
+        assert_eq!(mip_level_count(2, 2), 2);
+        assert_eq!(mip_level_count(4, 4), 3);
+        assert_eq!(mip_level_count(256, 256), 9);
+        // Non-square: the chain follows the larger dimension.
+        assert_eq!(mip_level_count(256, 64), 9);
+        assert_eq!(mip_level_count(1024, 1), 11);
+    }
+
+    #[test]
+    fn downsample_2x2_averages_a_quad() {
+        // A 2x2 image of four distinct texels collapses to their average.
+        let src = [
+            0, 0, 0, 0, //
+            255, 255, 255, 255, //
+            100, 200, 50, 10, //
+            0, 0, 0, 0,
+        ];
+        let (dst, w, h) = downsample_2x2(&src, 2, 2).expect("2x2 downsamples");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(dst.len(), 4);
+        // Each channel is the average of the four texels: floor(sum / 4).
+        assert_eq!(dst, [88, 113, 76, 66]);
+    }
+
+    #[test]
+    fn downsample_2x2_halves_a_4x2() {
+        // A uniform white 4x2 image downsamples to uniform white 2x1.
+        let src = vec![255u8; 4 * 2 * 4];
+        let (dst, w, h) = downsample_2x2(&src, 4, 2).expect("4x2 downsamples");
+        assert_eq!((w, h), (2, 1));
+        assert!(dst.iter().all(|&b| b == 255));
+    }
+
+    #[test]
+    fn downsample_2x2_stops_at_one() {
+        assert!(downsample_2x2(&[0, 0, 0, 0], 1, 1).is_none());
+        // A 1xN image still halves along its non-singleton axis.
+        let src = vec![128u8; 16];
+        let (dst, w, h) = downsample_2x2(&src, 1, 4).expect("1x4 downsamples");
+        assert_eq!((w, h), (1, 2));
+        assert!(dst.iter().all(|&b| b == 128));
     }
 }
