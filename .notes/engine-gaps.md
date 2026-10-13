@@ -39,8 +39,11 @@ the sky's sun each frame — the sky animates, but nothing else can read that su
 *What:* camera-facing textured quads (a sprite), or a small particle system.
 *For:* the bang's fire, smoke and debris, the mine "tell", and the water's wake and
 splashes (goats.md M5). `ecs::components::Text` is billboarded, but text-specific.
-*Meanwhile:* none — the bang has no look beyond the crater it dishes into the
-ground.
+*Meanwhile:* none — the bang has no look beyond the flash light, the camera knock
+and the crater it dishes into the ground.
+*Designed:* [`.notes/billboards.md`](billboards.md) — the `Billboard` component and
+its pass, starting with the quad primitive (the game drives the pool); an engine
+`ParticleEmitter` is deferred until a second consumer proves it.
 
 ### Skin and shadows in a custom-shader mesh
 

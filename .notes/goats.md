@@ -206,8 +206,8 @@ Single-player sandbox first; each milestone is playable.
    translucent surface drawn through the seam's mesh form. The **bang** has its
    flash — one shadowless point light that flares at a blast and decays — and a
    camera knock from the bangs that reached the goat. Reflections, and the bang's
-   fire / smoke / debris and the red damage pulse (the billboard/particle path),
-   remain.
+   fire / smoke / debris and the red damage pulse (the billboard/particle path,
+   designed in [`.notes/billboards.md`](billboards.md)), remain.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
@@ -270,9 +270,10 @@ deliberately deferred — the systems come first.
   mesh, so the sway wants the shader seam).
 - **No bang fire or smoke yet**: the flash light and the camera knock are in
   (M5), but there is no fire or smoke, no debris and no red damage pulse — those
-  want the billboard/particle path. The crater *is* drawn — it is a term in the
-  ground's height, so the dished terrain mesh shows it — but there is no mine
-  "tell" either, so a minefield is invisible until one goes off.
+  want the billboard/particle path ([`.notes/billboards.md`](billboards.md)). The
+  crater *is* drawn — it is a term in the ground's height, so the dished terrain
+  mesh shows it — but there is no mine "tell" either, so a minefield is invisible
+  until one goes off.
 
 ## Open questions
 
