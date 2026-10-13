@@ -174,9 +174,10 @@ Single-player sandbox first; each milestone is playable.
    cause them (M2's food and energy, M3's blasts).
 3. **M2 — world sim.** Grass grazing, energy/health, weather state machine, water
    pooling, food. *(Shipped: the meadow — the procedural grass field and grazing
-   it (the eat action, the belly, regrow) — and the health/energy system with
-   exhaustion, death and restart. The weather, the water table and the rest of the
-   food model (the rain-shelter a full belly gives) are not built yet.)*
+   it (the eat action, the belly, regrow) — the health/energy system with
+   exhaustion, death and restart, and the weather state machine with its
+   rain/wind slowdown and wetter drain (its clouds, rain streaks and sky tint are
+   the presentation layer, M5). The water table is not built yet.)*
 4. **M3 — hazards.** Mines / traps / blasts / craters and the billboard FX.
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** Day/night sky and lighting, then audio. **Needs** the

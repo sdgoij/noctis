@@ -6,14 +6,18 @@
 //! goat's locomotion state machine — idle, its three gaits, a jump and sleep —
 //! driven from input, where each state plays a baked clip through the engine's
 //! `Animator` and the root moves at the state's authored speed. On top sits M2's
-//! health and energy system, and its meadow: energy drains with effort, eating
-//! grass tops it up, exhaustion caps the gait, and running out of health kills
-//! the goat until it is restarted.
+//! health and energy system, its meadow and its weather: energy drains with
+//! effort, eating grass tops it up, exhaustion caps the gait, running out of
+//! health kills the goat until it is restarted, and a weather state machine
+//! (clear / cloudy / rain / clearing) slows the goat and sharpens its drain in
+//! rain and wind. The weather's clouds, rain streaks and sky tint are the
+//! presentation layer's (M5).
 
 #![forbid(unsafe_code)]
 
 mod grass;
 mod terrain;
+mod weather;
 
 use noctis::prelude::*;
 
@@ -348,7 +352,14 @@ impl Goat {
 
     /// Take off into a jump at the gait's speed and the given travel direction,
     /// and note how long the jump clip runs (the original's `startJump`).
-    fn start_jump(&mut self, assets: &AssetRegistry, gait: Mode, direction: f32) {
+    /// `speed_factor` is the weather's slowdown — a wet goat does not jump as far.
+    fn start_jump(
+        &mut self,
+        assets: &AssetRegistry,
+        gait: Mode,
+        direction: f32,
+        speed_factor: f32,
+    ) {
         self.enter(Mode::Jump);
         self.jump_time = 0.0;
         self.jump_dir = direction;
@@ -357,6 +368,7 @@ impl Goat {
             Mode::Trot => TROT_SPEED,
             _ => WALK_SPEED,
         };
+        self.jump_speed *= speed_factor;
         self.energy = (self.energy - JUMP_ENERGY_COST).max(0.0);
         let (clip, _) = self.animation();
         self.jump_duration = assets
@@ -418,9 +430,9 @@ impl Goat {
 
     /// Advance health and energy for the state, once a frame; returns `true` once
     /// health has run out, so the caller switches to [`Mode::Dead`]. The
-    /// original's `updateStats`, minus the night and weather multipliers that
-    /// arrive with their systems.
-    fn update_stats(&mut self, dt: f32) -> bool {
+    /// original's `updateStats`, with the weather's wet/cold drain folded in (the
+    /// night multiplier arrives with the day/night system, M5).
+    fn update_stats(&mut self, dt: f32, weather_drain: f32) -> bool {
         if self.mode == Mode::Dead {
             return false;
         }
@@ -436,7 +448,7 @@ impl Goat {
             Mode::Walk => ENERGY_DRAIN_WALK,
             _ => ENERGY_DRAIN_IDLE,
         };
-        self.energy = (self.energy - drain * dt).max(0.0);
+        self.energy = (self.energy - drain * weather_drain * dt).max(0.0);
         if self.energy <= 0.0 {
             self.exhausted = true;
             self.health = (self.health - EXHAUST_HEALTH_DRAIN * dt).max(0.0);
@@ -475,10 +487,9 @@ pub struct Goats;
 struct World {
     goat: Goat,
     meadow: grass::Meadow,
+    weather: weather::Weather,
     /// The cell the grass field was last built around, so a move rebuilds it.
     grass_cell: (i32, i32),
-    /// The sway clock, advanced each frame (the wind is quiet until weather).
-    sway: f32,
 }
 
 impl Plugin for Goats {
@@ -493,7 +504,8 @@ impl Plugin for Goats {
                 world = spawn_world(ctx);
             }
             if let Some(world) = world.as_mut() {
-                let ate = drive_goat(ctx, &mut world.goat, &mut world.meadow);
+                world.weather.update(ctx.time.delta());
+                let ate = drive_goat(ctx, &mut world.goat, &mut world.meadow, &mut world.weather);
                 update_meadow(ctx, world, ate);
             }
 
@@ -512,36 +524,45 @@ impl Plugin for Goats {
 
             let dt = ctx.time.delta();
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            let (state, health, energy, belly, hint) =
-                world
-                    .as_ref()
-                    .map_or(("standing", MAX_STATS, MAX_STATS, 0.0, ""), |world| {
-                        let goat = &world.goat;
-                        let in_reach =
-                            !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
-                                && grass::nearest(goat.x, goat.z, grass::EAT_RANGE, &world.meadow)
-                                    .is_some();
-                        (
-                            goat.mode.label(),
-                            goat.health,
-                            goat.energy,
-                            goat.satiety,
-                            if in_reach { "  |  eat (E)" } else { "" },
-                        )
-                    });
-            ctx.screen_text = vec![format!(
-                "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
-                 health {health:.0}  energy {energy:.0}  belly {:.0}%{hint}",
-                dt * 1000.0,
-                belly * 100.0,
-            )];
+            let (state, health, energy, belly, hint, weather) = world.as_ref().map_or(
+                ("standing", MAX_STATS, MAX_STATS, 0.0, "", String::new()),
+                |world| {
+                    let goat = &world.goat;
+                    let in_reach =
+                        !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
+                            && grass::nearest(goat.x, goat.z, grass::EAT_RANGE, &world.meadow)
+                                .is_some();
+                    (
+                        goat.mode.label(),
+                        goat.health,
+                        goat.energy,
+                        goat.satiety,
+                        if in_reach { "  |  eat (E)" } else { "" },
+                        world.weather.hud(goat.satiety),
+                    )
+                },
+            );
+            ctx.screen_text = vec![
+                format!(
+                    "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {state}  |  \
+                     health {health:.0}  energy {energy:.0}  belly {:.0}%{hint}",
+                    dt * 1000.0,
+                    belly * 100.0,
+                ),
+                weather,
+            ];
         });
     }
 }
 
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
 /// root and play the state's clip.
-fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Meadow) -> bool {
+fn drive_goat(
+    ctx: &mut EngineContext,
+    goat: &mut Goat,
+    meadow: &mut grass::Meadow,
+    weather: &mut weather::Weather,
+) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
     let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
@@ -568,6 +589,13 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Mead
     } else {
         Mode::Walk
     };
+
+    // `C` forces the next weather state, for previewing the cycle.
+    if pressed('C') {
+        weather.force_next();
+    }
+    // Rain and wind slow the goat and make it work harder.
+    let speed_factor = weather.speed(goat.satiety);
 
     // The nearest tuft in reach; a free state lets the goat eat it.
     let food = grass::nearest(goat.x, goat.z, grass::EAT_RANGE, meadow);
@@ -608,7 +636,7 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Mead
             } else if pressed('Z') {
                 goat.enter(Mode::Sleep);
             } else if input.key_pressed(Key::Space) {
-                goat.start_jump(&ctx.assets, gait, move_axis);
+                goat.start_jump(&ctx.assets, gait, move_axis, speed_factor);
             } else {
                 goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
                 // A goat exhausted and stood still drops off where it stands.
@@ -625,7 +653,7 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Mead
     }
 
     // Health and energy for the frame; at zero health the goat dies.
-    if goat.update_stats(dt) {
+    if goat.update_stats(dt, weather.drain()) {
         goat.die();
     }
 
@@ -638,7 +666,7 @@ fn drive_goat(ctx: &mut EngineContext, goat: &mut Goat, meadow: &mut grass::Mead
     let (speed, direction) = match goat.mode {
         Mode::Jump => (goat.jump_speed, goat.jump_dir),
         Mode::Sleep => (0.0, 0.0),
-        _ => (goat.speed(), move_axis),
+        _ => (goat.speed() * speed_factor, move_axis),
     };
     goat.x = (goat.x + forward_x * speed * direction * dt).clamp(-FIELD, FIELD);
     goat.z = (goat.z + forward_z * speed * direction * dt).clamp(-FIELD, FIELD);
@@ -713,8 +741,8 @@ fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     Some(World {
         goat,
         meadow,
+        weather: weather::Weather::default(),
         grass_cell: (0, 0),
-        sway: 0.0,
     })
 }
 
@@ -789,7 +817,6 @@ fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow) {
 fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
     let dt = ctx.time.delta();
     let regrew = world.meadow.update(dt);
-    world.sway += dt;
 
     let cell = (
         (world.goat.x / grass::CELL).floor() as i32,
@@ -799,7 +826,15 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
         world.grass_cell = cell;
         ctx.assets.meshes.insert_named(
             "grass/meadow",
-            grass::build_mesh(&world.meadow, world.goat.x, world.goat.z, world.sway, 0.0),
+            grass::build_mesh(
+                &world.meadow,
+                world.goat.x,
+                world.goat.z,
+                world.weather.sway_time(),
+                // The grass's own wind sway waits on the shader seam (M5); the
+                // field is a rebuilt mesh, so it would only lean on a rebuild.
+                0.0,
+            ),
         );
     }
 }
