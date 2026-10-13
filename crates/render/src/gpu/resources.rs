@@ -212,12 +212,20 @@ pub struct GpuMaterial {
 /// A lazily-populated cache of GPU resources keyed by asset id.
 #[derive(Debug)]
 pub struct ResourceCache {
-    meshes: HashMap<AssetId, GpuMesh>,
+    meshes: HashMap<AssetId, CachedMesh>,
     textures: HashMap<AssetId, GpuTexture>,
     materials: HashMap<AssetId, GpuMaterial>,
     white: GpuTexture,
     flat_normal: GpuTexture,
     black: GpuTexture,
+}
+
+/// An uploaded mesh together with the asset revision it was uploaded at, so a
+/// mesh whose asset was rebuilt in place is re-uploaded rather than drawn stale.
+#[derive(Debug)]
+struct CachedMesh {
+    gpu: GpuMesh,
+    revision: u64,
 }
 
 impl ResourceCache {
@@ -267,10 +275,27 @@ impl ResourceCache {
     }
 
     /// Get or upload a mesh.
-    pub fn mesh(&mut self, device: &wgpu::Device, id: AssetId, mesh: &Mesh) -> &GpuMesh {
-        self.meshes
-            .entry(id)
-            .or_insert_with(|| GpuMesh::upload(device, &mesh.name, mesh))
+    ///
+    /// `revision` is the owning asset's revision (see `Assets::revision`); when it
+    /// differs from the revision the cached mesh was uploaded at, the mesh is
+    /// re-uploaded, so a caller that rebuilds a mesh in place (a following
+    /// terrain, a meadow) is drawn from its new data.
+    pub fn mesh(
+        &mut self,
+        device: &wgpu::Device,
+        id: AssetId,
+        revision: u64,
+        mesh: &Mesh,
+    ) -> &GpuMesh {
+        let cached = self.meshes.entry(id).or_insert_with(|| CachedMesh {
+            gpu: GpuMesh::upload(device, &mesh.name, mesh),
+            revision,
+        });
+        if cached.revision != revision {
+            cached.gpu = GpuMesh::upload(device, &mesh.name, mesh);
+            cached.revision = revision;
+        }
+        &cached.gpu
     }
 
     /// Get or upload a texture.

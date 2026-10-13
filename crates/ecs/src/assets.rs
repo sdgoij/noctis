@@ -100,6 +100,9 @@ impl<T> std::fmt::Debug for AssetHandle<T> {
 struct Entry<T> {
     value: Arc<T>,
     path: Option<String>,
+    /// Bumped whenever the entry is written, so a consumer can tell a changed
+    /// asset from an unchanged one (a renderer re-uploading a rebuilt mesh, say).
+    revision: u64,
 }
 
 /// A typed store of assets, addressable by id or by path.
@@ -140,11 +143,16 @@ impl<T> Assets<T> {
         if let Some(ref p) = path
             && let Some(&id) = self.paths.get(p)
         {
+            let revision = self
+                .entries
+                .get(&id)
+                .map_or(0, |entry| entry.revision.wrapping_add(1));
             self.entries.insert(
                 id,
                 Entry {
                     value: Arc::new(value),
                     path,
+                    revision,
                 },
             );
             return AssetHandle::new(id);
@@ -159,6 +167,7 @@ impl<T> Assets<T> {
             Entry {
                 value: Arc::new(value),
                 path,
+                revision: 0,
             },
         );
         AssetHandle::new(id)
@@ -175,14 +184,23 @@ impl<T> Assets<T> {
     }
 
     /// Mutably borrow an asset by handle, cloning it out of the shared store if
-    /// the value is aliased elsewhere.
+    /// the value is aliased elsewhere. Bumps the asset's revision counter.
     pub fn get_mut(&mut self, handle: AssetHandle<T>) -> Option<&mut T>
     where
         T: Clone,
     {
-        self.entries
-            .get_mut(&handle.id)
-            .map(|entry| Arc::make_mut(&mut entry.value))
+        let entry = self.entries.get_mut(&handle.id)?;
+        entry.revision = entry.revision.wrapping_add(1);
+        Some(Arc::make_mut(&mut entry.value))
+    }
+
+    /// A counter that changes whenever the asset at `handle` is written — by an
+    /// [`insert_named`](Self::insert_named) over it or a [`get_mut`](Self::get_mut)
+    /// borrow. `None` for an unknown handle. A consumer that uploads assets to
+    /// the GPU compares it against the revision it last uploaded and re-uploads
+    /// when they differ.
+    pub fn revision(&self, handle: AssetHandle<T>) -> Option<u64> {
+        self.entries.get(&handle.id).map(|entry| entry.revision)
     }
 
     /// The handle registered at `path`, if any.
@@ -857,6 +875,27 @@ mod tests {
         assert_eq!(decode_wasm(&source).as_deref(), Some(module.as_slice()));
         assert!(!is_wasm_source("on_update();"));
         assert_eq!(decode_wasm("wasm:abc"), None); // odd digit count
+    }
+
+    #[test]
+    fn the_revision_changes_only_when_an_asset_is_written() {
+        let mut meshes: Assets<Mesh> = Assets::new();
+        let handle = meshes.insert_named("m", dummy_mesh("m"));
+        let original = meshes.revision(handle).expect("a revision");
+
+        // A mutable borrow bumps it, so a consumer (a renderer) can tell the
+        // asset changed and re-upload it.
+        let _ = meshes.get_mut(handle);
+        assert!(meshes.revision(handle).unwrap() > original);
+
+        // Replacing it under the same path keeps the id but bumps the revision.
+        let bumped = meshes.revision(handle).unwrap();
+        let again = meshes.insert_named("m", dummy_mesh("m"));
+        assert_eq!(again.id(), handle.id(), "the id is kept");
+        assert!(meshes.revision(handle).unwrap() > bumped);
+
+        // An unknown handle has no revision.
+        assert!(meshes.revision(AssetHandle::<Mesh>::NONE).is_none());
     }
 
     #[test]

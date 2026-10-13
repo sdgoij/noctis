@@ -1859,7 +1859,12 @@ impl Renderer {
         let uniform = object_uniform(item, material);
         self.objects.write(&self.queue, index, &uniform);
 
-        let gpu_mesh = self.cache.mesh(&self.device, item.mesh.id(), mesh);
+        let gpu_mesh = self.cache.mesh(
+            &self.device,
+            item.mesh.id(),
+            assets.meshes.revision(item.mesh).unwrap_or(0),
+            mesh,
+        );
         let vertex_buffer = gpu_mesh.vertex_buffer.clone();
         let index_buffer = gpu_mesh.index_buffer.clone();
         let index_count = gpu_mesh.index_count;
@@ -2249,6 +2254,70 @@ mod tests {
         renderer
             .render_frame(&world, &assets, camera)
             .expect("render frame without gizmo");
+    }
+
+    /// Rebuilding a mesh in place (a `get_mut` borrow, which bumps its asset
+    /// revision) re-uploads it: the next frame differs, where a stale cache would
+    /// repeat the last one. Skips without an adapter.
+    #[test]
+    fn a_rebuilt_mesh_is_re_uploaded_or_reports_no_adapter() {
+        use ecs::assets::{Mesh, Vertex};
+        use ecs::components::{Camera, Light, MeshRenderer};
+        use math::vec3;
+
+        let config = RendererConfig {
+            width: 64,
+            height: 64,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::with_defaults();
+        let vertex = |x: f32, y: f32| Vertex {
+            position: [x, y, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.5, 0.5],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        };
+        let mesh = assets.meshes.insert(Mesh {
+            name: "triangle".into(),
+            vertices: vec![vertex(0.0, 0.4), vertex(-0.4, -0.4), vertex(0.4, -0.4)],
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        });
+        let material = assets.materials.handle("$default").unwrap();
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        world.spawn_with(Light::directional(vec3(0.0, -1.0, -0.5)));
+        let e = world.spawn_with(MeshRenderer {
+            mesh,
+            material,
+            ..MeshRenderer::default()
+        });
+        world.insert(e, math::Transform::from_translation(vec3(0.0, 0.0, -3.0)));
+
+        let before = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+
+        // Rebuild the mesh in place into a much larger triangle.
+        let target = assets.meshes.get_mut(mesh).expect("the mesh asset");
+        target.vertices[0].position = [0.0, 300.0, 0.0];
+        target.vertices[1].position = [-300.0, -300.0, 0.0];
+        target.vertices[2].position = [300.0, -300.0, 0.0];
+
+        let after = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        assert_ne!(before.rgba, after.rgba, "the rebuilt mesh was re-uploaded");
     }
 
     /// An unlit material ignores lighting: its frame is identical with and
