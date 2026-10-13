@@ -218,15 +218,25 @@ impl Sim {
         self.world.fx.live()
     }
 
-    /// How many pooled billboard sprites are visible this frame (the fx pool and the
-    /// mine "tell").
-    pub fn visible_sprites(&self) -> usize {
-        self.ctx
-            .scene
-            .world
-            .query::<Visible>()
-            .filter(|(entity, visible)| {
-                visible.0 && self.ctx.scene.world.get::<Billboard>(*entity).is_some()
+    /// How many of the fx pool's billboards (fire, smoke, grit) are visible.
+    pub fn fx_sprites(&self) -> usize {
+        self.visible_among(&self.world.fx_entities)
+    }
+
+    /// How many of the mine-"tell" pool's billboards are visible.
+    pub fn tell_marks(&self) -> usize {
+        self.visible_among(&self.world.tell_entities)
+    }
+
+    fn visible_among(&self, entities: &[Entity]) -> usize {
+        entities
+            .iter()
+            .filter(|entity| {
+                self.ctx
+                    .scene
+                    .world
+                    .get::<Visible>(**entity)
+                    .is_some_and(|visible| visible.0)
             })
             .count()
     }

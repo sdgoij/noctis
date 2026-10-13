@@ -6,8 +6,9 @@
 //! per-goat effect: rain and wind slow the goat and make it burn energy faster,
 //! and a full belly takes some of the rain's edge off.
 //!
-//! The clouds, the rain streaks and the sky tint are the presentation layer
-//! (`.notes/goats.md` M5); only the state and its factors live here.
+//! The clouds and the rain streaks are drawn by [`crate::weather_fx`] on the
+//! engine's billboard path (`.notes/goats.md` M5); only the state and its factors
+//! live here.
 
 /// The four weather states (`WEATHER_STATES`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +143,17 @@ impl Weather {
     /// The wind's speed, in metres per second.
     pub fn wind_speed(&self) -> f32 {
         (self.wind_x * self.wind_x + self.wind_z * self.wind_z).sqrt()
+    }
+
+    /// The wind's ground direction and speed, as `(x, z)` in metres per second
+    /// (the clouds and the rain streaks drift with it).
+    pub fn wind(&self) -> (f32, f32) {
+        (self.wind_x, self.wind_z)
+    }
+
+    /// The eased cloud cover, `0..=1` (which cloud puffs are drawn).
+    pub fn cloudiness(&self) -> f32 {
+        self.cloudiness
     }
 
     /// The eased rain strength, `0..=1` — the water table's level is a function of

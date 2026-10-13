@@ -208,7 +208,8 @@ Single-player sandbox first; each milestone is playable.
    knock from the bangs that reached the goat, and fire, smoke and grit drawn as
    billboards whose atlases are generated at boot (the engine's billboard path,
    [`.notes/billboards.md`](billboards.md)); an armed mine in reach shows its
-   "tell". Reflections and the red damage pulse remain.
+   "tell". The weather's clouds drift and its rain falls, both as billboards. The
+   grass does not sway yet. Reflections and the red damage pulse remain.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
@@ -266,9 +267,9 @@ deliberately deferred — the systems come first.
 - **The grass tufts read as thin sticks**, not the original's two stacked cubes.
   The sizes and segments match `tuftField`, so this is a look/scale question (the
   0.14-unit cube against the view distance) rather than the field maths.
-- **No weather or water visuals yet**: no clouds, rain streaks or sky tint (M5),
-  no water surface, and the grass does not sway in the wind (it is a rebuilt
-  mesh, so the sway wants the shader seam).
+- **No grass sway yet**: the weather's clouds and rain are in (M5), as are the
+  sky tint and the water surface, but the grass tufts do not sway in the wind —
+  the field is a rebuilt mesh, so the sway wants the shader seam.
 - **No red damage pulse yet**: the flash light, the camera knock and the bang's
   fire / smoke / grit are in (M5), and an armed mine in reach shows its "tell" —
   but a bang that hurts *this* goat does not yet tint the frame red. The crater

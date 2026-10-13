@@ -236,8 +236,8 @@ fn a_bang_shows_fire_smoke_and_grit() {
     checks.check("the bang threw fire, smoke and grit", at_bang >= 4, at_bang);
     checks.check(
         "and drew their sprites",
-        sim.visible_sprites() > 0,
-        sim.visible_sprites(),
+        sim.fx_sprites() >= at_bang,
+        (at_bang, sim.fx_sprites()),
     );
 
     // The fireball burns out first. The goat is airborne for the whole window (the
@@ -267,8 +267,8 @@ fn an_armed_mine_shows_its_tell() {
     checks.check("the fx pool stays quiet", sim.fx_live() == 0, sim.fx_live());
     checks.check(
         "an armed mine in reach shows its tell",
-        sim.visible_sprites() >= 1,
-        sim.visible_sprites(),
+        sim.tell_marks() >= 1,
+        sim.tell_marks(),
     );
 
     // The spawn's safe disc holds no mines, so out of range the tell is gone.
@@ -276,8 +276,8 @@ fn an_armed_mine_shows_its_tell() {
     sim.run(1);
     checks.check(
         "and hides out of range",
-        sim.visible_sprites() == 0,
-        sim.visible_sprites(),
+        sim.tell_marks() == 0,
+        sim.tell_marks(),
     );
     checks.finish();
 }

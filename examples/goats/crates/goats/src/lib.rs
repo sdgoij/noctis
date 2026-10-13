@@ -30,6 +30,7 @@ mod hazards;
 pub mod terrain;
 mod water;
 mod weather;
+mod weather_fx;
 
 #[cfg(test)]
 mod harness;
@@ -778,6 +779,14 @@ pub struct World {
     fx_entities: Vec<Entity>,
     /// Pooled billboard entities for the mine "tell".
     tell_entities: Vec<Entity>,
+    /// The cloud ring (M5).
+    clouds: weather_fx::Clouds,
+    /// The rain streaks (M5).
+    rain: weather_fx::Rain,
+    /// Pooled billboard entities for the clouds.
+    cloud_entities: Vec<Entity>,
+    /// Pooled billboard entities for the rain.
+    rain_entities: Vec<Entity>,
     /// The bang's flash light (M5).
     flash: Flash,
     /// The camera's knock from nearby bangs (M5).
@@ -835,7 +844,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         world.fx.blast(bang.x, bang.z, ground, bang.seed);
     }
     world.fx.update(dt);
-    sync_fx(ctx, world);
+    sync_sprites(ctx, world, dt);
     // A crater — or its heal — moves the ground: rebuild the mesh, resample the
     // water table, and re-derive the meadow from it.
     let ground_changed = world.craters.revision() != world.crater_rev;
@@ -1118,43 +1127,56 @@ fn present_bangs(
     }
 }
 
-/// Write the fx pool's sprites onto the pooled billboard entities, and the mine
-/// "tell" for the armed mines in reach. A pool entity with no sprite is hidden, so
-/// a quiet frame draws no sprites at all.
-fn sync_fx(ctx: &mut EngineContext, world: &mut World) {
-    let visuals = world.fx.visuals();
-    for (i, entity) in world.fx_entities.iter().copied().enumerate() {
+/// Advance and write every billboard sprite the world draws — the bang's fire,
+/// smoke and grit, the mine "tell", the clouds and the rain — onto its pooled
+/// entities. A pool entity with no sprite is hidden, so a quiet frame draws
+/// nothing.
+fn sync_sprites(ctx: &mut EngineContext, world: &mut World, dt: f32) {
+    write_sprites(ctx, &world.fx_entities, &world.fx.visuals());
+
+    // The weather's look: the clouds drift on the wind and the rain falls, both in
+    // a box that follows the goat.
+    let wind = world.weather.wind();
+    world.clouds.update(dt, wind);
+    world.rain.update(dt, wind);
+    let (goat_x, goat_z) = (world.goat.x, world.goat.z);
+    let cloud_visuals = world
+        .clouds
+        .visuals(goat_x, goat_z, world.weather.cloudiness());
+    let ground = world.craters.surface(goat_x, goat_z);
+    let rain_visuals = world
+        .rain
+        .visuals(goat_x, goat_z, world.weather.rain(), ground);
+    write_sprites(ctx, &world.cloud_entities, &cloud_visuals);
+    write_sprites(ctx, &world.rain_entities, &rain_visuals);
+
+    // The mine "tell": a faint patch over each armed mine in reach.
+    let tell_visuals: Vec<fx::Visual> =
+        tell_positions(goat_x, goat_z, &world.hazards, &world.craters)
+            .into_iter()
+            .map(|position| fx::Visual {
+                billboard: Billboard {
+                    texture: world.fx_textures.dust,
+                    size: math::vec2(fx::TELL_SIZE, fx::TELL_SIZE),
+                    color: fx::TELL_TINT,
+                    blend: BillboardBlend::Alpha,
+                    depth_test: true,
+                    ..Billboard::default()
+                },
+                position,
+            })
+            .collect();
+    write_sprites(ctx, &world.tell_entities, &tell_visuals);
+}
+
+/// Write `visuals` onto `entities`, hiding any pool entity with no sprite.
+fn write_sprites(ctx: &mut EngineContext, entities: &[Entity], visuals: &[fx::Visual]) {
+    for (i, entity) in entities.iter().copied().enumerate() {
         match visuals.get(i) {
             Some(visual) => {
                 ctx.scene.world.insert(entity, visual.billboard);
                 if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(entity) {
                     transform.translation = visual.position;
-                }
-                ctx.scene.world.insert(entity, Visible(true));
-            }
-            None => {
-                ctx.scene.world.insert(entity, Visible(false));
-            }
-        }
-    }
-
-    let tells = tell_positions(world.goat.x, world.goat.z, &world.hazards, &world.craters);
-    for (i, entity) in world.tell_entities.iter().copied().enumerate() {
-        match tells.get(i) {
-            Some(position) => {
-                ctx.scene.world.insert(
-                    entity,
-                    Billboard {
-                        texture: world.fx_textures.dust,
-                        size: math::vec2(fx::TELL_SIZE, fx::TELL_SIZE),
-                        color: fx::TELL_TINT,
-                        blend: BillboardBlend::Alpha,
-                        depth_test: true,
-                        ..Billboard::default()
-                    },
-                );
-                if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(entity) {
-                    transform.translation = *position;
                 }
                 ctx.scene.world.insert(entity, Visible(true));
             }
@@ -1442,6 +1464,8 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     };
     let fx_entities = spawn_billboard_pool(ctx, "Fx", FX_ENTITIES);
     let tell_entities = spawn_billboard_pool(ctx, "Tell", TELL_ENTITIES);
+    let cloud_entities = spawn_billboard_pool(ctx, "Cloud", weather_fx::CLOUD_COUNT);
+    let rain_entities = spawn_billboard_pool(ctx, "Rain", weather_fx::RAIN_COUNT);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
@@ -1462,6 +1486,10 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         fx_textures,
         fx_entities,
         tell_entities,
+        clouds: weather_fx::Clouds::ring(fx_textures.dust),
+        rain: weather_fx::Rain::field(fx_textures.dust),
+        cloud_entities,
+        rain_entities,
         flash: Flash {
             light: flash,
             left: 0.0,
