@@ -72,32 +72,34 @@ pub struct Water {
     enabled: bool,
 }
 
-impl Default for Water {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Water {
     /// Sample the ground and start the table on its floor (dry).
-    pub fn new() -> Self {
-        let mut heights = Vec::with_capacity(N * N);
-        for j in 0..N {
-            for i in 0..N {
-                heights.push(terrain::height(vertex_x(i), vertex_z(j)));
-            }
-        }
-        let ground = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    pub fn new(craters: &terrain::Craters) -> Self {
         let mut water = Self {
-            heights,
-            ground,
+            heights: Vec::new(),
+            ground: f32::INFINITY,
             wet: 0.0,
             level: LOW,
             on: false,
             enabled: true,
         };
-        water.refresh();
+        water.resample(craters);
         water
+    }
+
+    /// Re-sample the ground under the table — after a blast dished a crater, or one
+    /// healed — and re-measure the field's floor (`waterRebuild`). The table's own
+    /// state (its wetting) is kept, so a rise carries across the rebuild.
+    pub fn resample(&mut self, craters: &terrain::Craters) {
+        self.heights.clear();
+        self.heights.reserve(N * N);
+        for j in 0..N {
+            for i in 0..N {
+                self.heights.push(craters.surface(vertex_x(i), vertex_z(j)));
+            }
+        }
+        self.ground = self.heights.iter().copied().fold(f32::INFINITY, f32::min);
+        self.refresh();
     }
 
     /// Advance the table one frame for the weather's `rain` (`waterStep` then
@@ -265,6 +267,11 @@ fn vertex_z(j: usize) -> f32 {
 mod tests {
     use super::*;
 
+    /// A water table over undished ground.
+    fn flat() -> Water {
+        Water::new(&terrain::Craters::default())
+    }
+
     /// The grid's lowest and highest ground over the cells `depth_at` can read (its
     /// lower-left corners, `0..N-1`), and the vertices there.
     fn extremal(water: &Water) -> ((f32, f32), (usize, usize), (usize, usize)) {
@@ -286,7 +293,7 @@ mod tests {
 
     #[test]
     fn a_dry_spell_is_exactly_dry() {
-        let water = Water::new();
+        let water = flat();
         assert_eq!(water.wet, 0.0);
         assert_eq!(water.level(), LOW, "a dry table sits on its floor");
         assert!(!water.on, "nothing is wet");
@@ -318,7 +325,7 @@ mod tests {
 
     #[test]
     fn heavy_rain_fills_the_table_and_it_drains_slowly() {
-        let mut water = Water::new();
+        let mut water = flat();
         // A downpour: the rise is immediate.
         water.update(1.0 / 60.0, 1.0);
         assert_eq!(water.wet, 1.0, "the table rises the instant the rain does");
@@ -346,7 +353,7 @@ mod tests {
 
     #[test]
     fn wading_slows_the_goat_and_burns_energy() {
-        let mut water = Water::new();
+        let mut water = flat();
         let ((_, _), (li, lj), (hi, hj)) = extremal(&water);
         // A downpour fills the table to the top of its band, so the deepest point is
         // under water and the highest stands proud of it.
@@ -372,7 +379,7 @@ mod tests {
 
     #[test]
     fn the_off_switch_dries_the_whole_field() {
-        let mut water = Water::new();
+        let mut water = flat();
         water.update(1.0 / 60.0, 1.0);
         assert!(water.on, "the field is wet after a downpour");
 
@@ -390,7 +397,7 @@ mod tests {
 
     #[test]
     fn tufts_under_the_water_are_submerged() {
-        let mut water = Water::new();
+        let mut water = flat();
         let ((_, _), (li, lj), (hi, hj)) = extremal(&water);
         let (lx, lz) = (vertex_x(li), vertex_z(lj));
         let (hx, hz) = (vertex_x(hi), vertex_z(hj));
@@ -406,7 +413,7 @@ mod tests {
 
     #[test]
     fn the_hud_reads_the_depth_and_the_slowdown() {
-        let mut water = Water::new();
+        let mut water = flat();
         let ((_, _), (li, lj), _) = extremal(&water);
         let (lx, lz) = (vertex_x(li), vertex_z(lj));
         water.update(1.0 / 60.0, 1.0);

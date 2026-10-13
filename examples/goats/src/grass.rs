@@ -111,8 +111,15 @@ impl Meadow {
     }
 }
 
-/// The nearest live tuft within `range` of `(x, z)`, or `None`.
-pub fn nearest(x: f32, z: f32, range: f32, meadow: &Meadow) -> Option<Tuft> {
+/// The nearest live tuft within `range` of `(x, z)` that the ground has not
+/// swallowed, or `None`.
+pub fn nearest(
+    x: f32,
+    z: f32,
+    range: f32,
+    meadow: &Meadow,
+    craters: &terrain::Craters,
+) -> Option<Tuft> {
     let r = (range / CELL).ceil() as i32;
     let cx = (x / CELL).floor() as i32;
     let cz = (z / CELL).floor() as i32;
@@ -126,6 +133,10 @@ pub fn nearest(x: f32, z: f32, range: f32, meadow: &Meadow) -> Option<Tuft> {
             let Some(tuft) = tuft_at(i, j) else {
                 continue;
             };
+            // A tuft the ground swallowed cannot be grazed.
+            if craters.covers(tuft.x, tuft.z) {
+                continue;
+            }
             let d2 = tuft.distance2(x, z);
             if d2 <= best_d2 {
                 best_d2 = d2;
@@ -156,9 +167,9 @@ pub fn tuft_at(cx: i32, cz: i32) -> Option<Tuft> {
 
 /// Build the meadow mesh: one cube per visible tuft around `(gx, gz)`, clamped to
 /// the island. `sway` is the clock and `wind` the sway strength — both zero until
-/// the weather system gives them values. A tuft standing under `water` is skipped,
-/// as the original's `drawTufts` skips it: the surface is drawn over the ground, so
-/// a tuft inside a pool would stand out of it.
+/// the weather system gives them values. A tuft standing under `water`, or inside a
+/// crater, is skipped, as the original's `drawTufts` skips it: the surface and the
+/// hole are drawn over the ground, so a tuft inside either would stand out of it.
 pub fn build_mesh(
     meadow: &Meadow,
     gx: f32,
@@ -166,6 +177,7 @@ pub fn build_mesh(
     sway: f32,
     wind: f32,
     water: Option<&water::Water>,
+    craters: &terrain::Craters,
 ) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -198,7 +210,11 @@ pub fn build_mesh(
             {
                 continue;
             }
-            let gy = terrain::height(tuft.x, tuft.z);
+            // A tuft the ground swallowed is gone until the crater heals.
+            if craters.covers(tuft.x, tuft.z) {
+                continue;
+            }
+            let gy = craters.surface(tuft.x, tuft.z);
             push_cube(
                 &mut vertices,
                 &mut indices,
@@ -360,7 +376,7 @@ mod tests {
     #[test]
     fn nearest_finds_the_closest_tuft_in_reach() {
         let meadow = Meadow::default();
-        let Some(tuft) = nearest(0.0, 0.0, 6.0, &meadow) else {
+        let Some(tuft) = nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default()) else {
             panic!("a tuft within 6 units of the origin");
         };
         assert!(tuft.distance2(0.0, 0.0).sqrt() <= 6.0);
@@ -375,9 +391,24 @@ mod tests {
     }
 
     #[test]
+    fn nearest_skips_a_tuft_the_ground_swallowed() {
+        let meadow = Meadow::default();
+        let mut craters = terrain::Craters::default();
+        let tuft = nearest(0.0, 0.0, 6.0, &meadow, &craters).expect("a tuft");
+
+        craters.add(tuft.x, tuft.z, 1.0);
+        let found = nearest(0.0, 0.0, 6.0, &meadow, &craters);
+        assert_ne!(
+            found.map(|t| (t.cx, t.cz)),
+            Some((tuft.cx, tuft.cz)),
+            "a buried tuft is not in reach"
+        );
+    }
+
+    #[test]
     fn an_eaten_tuft_disappears_and_regrows() {
         let mut meadow = Meadow::default();
-        let tuft = nearest(0.0, 0.0, 6.0, &meadow).expect("a tuft");
+        let tuft = nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default()).expect("a tuft");
         assert!(!meadow.is_eaten(tuft.cx, tuft.cz));
         meadow.consume(&tuft);
         assert!(meadow.is_eaten(tuft.cx, tuft.cz));
@@ -394,7 +425,15 @@ mod tests {
     #[test]
     fn the_mesh_holds_the_visible_tufts_on_the_ground() {
         let meadow = Meadow::default();
-        let mesh = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None);
+        let mesh = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        );
         assert!(!mesh.vertices.is_empty(), "the spawn meadow has tufts");
         assert_eq!(mesh.indices.len() % 3, 0);
         assert!(mesh.bounds.is_some());
@@ -413,7 +452,15 @@ mod tests {
 
     #[test]
     fn every_cube_face_winds_outward() {
-        let mesh = build_mesh(&Meadow::default(), 0.0, 0.0, 0.0, 0.0, None);
+        let mesh = build_mesh(
+            &Meadow::default(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        );
         for tri in mesh.indices.as_chunks::<3>().0 {
             let normal = mesh.vertices[tri[0] as usize].normal;
             let p = |k: usize| mesh.vertices[tri[k] as usize].position;
@@ -428,7 +475,17 @@ mod tests {
     #[test]
     fn an_eaten_tuft_leaves_the_mesh() {
         let mut meadow = Meadow::default();
-        let before = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
+        let before = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        )
+        .vertices
+        .len();
 
         // Eat every tuft inside a tight radius of the origin.
         let mut eaten = 0;
@@ -443,21 +500,88 @@ mod tests {
             }
         }
         assert!(eaten > 0, "there was something to eat");
-        let after = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
+        let after = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        )
+        .vertices
+        .len();
         assert!(after < before, "the meadow thinned: {before} -> {after}");
     }
 
     #[test]
     fn a_tuft_under_the_water_leaves_the_mesh() {
         let meadow = Meadow::default();
-        let dry = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
+        let dry = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        )
+        .vertices
+        .len();
 
         // A downpour fills the table; the tufts in the hollows go under.
-        let mut flood = water::Water::new();
+        let mut flood = water::Water::new(&terrain::Craters::default());
         flood.update(1.0 / 60.0, 1.0);
-        let wet = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, Some(&flood))
+        let wet = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            Some(&flood),
+            &terrain::Craters::default(),
+        )
+        .vertices
+        .len();
+        assert!(wet < dry, "the flood hid some tufts: {dry} -> {wet}");
+    }
+
+    #[test]
+    fn a_tuft_inside_a_crater_leaves_the_mesh() {
+        let meadow = Meadow::default();
+        let whole = build_mesh(
+            &meadow,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            &terrain::Craters::default(),
+        )
+        .vertices
+        .len();
+
+        // Dig the hole over an actual tuft, so its dish swallows it.
+        let mut tuft = None;
+        'find: for i in -4..=4 {
+            for j in -4..=4 {
+                if let Some(t) = tuft_at(i, j) {
+                    tuft = Some(t);
+                    break 'find;
+                }
+            }
+        }
+        let tuft = tuft.expect("a tuft near the origin");
+        let mut craters = terrain::Craters::default();
+        craters.add(tuft.x, tuft.z, 1.0);
+        assert!(craters.covers(tuft.x, tuft.z));
+
+        let holed = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None, &craters)
             .vertices
             .len();
-        assert!(wet < dry, "the flood hid some tufts: {dry} -> {wet}");
+        assert!(
+            holed < whole,
+            "the crater hid some tufts: {whole} -> {holed}"
+        );
     }
 }

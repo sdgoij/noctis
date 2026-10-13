@@ -7,8 +7,8 @@ one close enough to read as the same — running in a Noctis window. This docume
 is the contract for that port; the engine features it depends on are designed in
 [`.notes/animation.md`](animation.md) (skeletal animation) and, once built, their
 own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike), M1
-(locomotion) and most of M2 (the world sim) are shipped** as `examples/goats`; the
-rest is not built yet.
+(locomotion), M2 (the world sim) and M3 (hazards) are shipped** as `examples/goats`;
+the rest is not built yet.
 
 Background: a Noctis *project* carries Rust as a plugin
 ([`.notes/embedding.md`](embedding.md)); its manifest and asset model are
@@ -181,7 +181,15 @@ Single-player sandbox first; each milestone is playable.
    sleep in a pool. The weather's clouds, rain streaks and sky tint, and the water's
    surface, wake and splashes, are the presentation layer (M5); the table's own
    `flood` console verb arrives with the console, M6.)*
-4. **M3 — hazards.** Mines / traps / blasts / craters and the billboard FX.
+4. **M3 — hazards.** *(Shipped in `examples/goats`.)* Mines and trapped tufts are
+   *derived* from a per-cell hash (nothing stored), trip when the goat comes within
+   0.6 m, go on a 0.18 s fuse, and blow: damage with a falloff and a floor (a mine
+   cannot end the run), a ballistic arc that dishes a crater into the ground, and a
+   one-level chain into neighbours. The crater is a term in the ground's height, so
+   the goat, the camera, the grass and the water all stand in the hole, and it heals
+   over four minutes. The bang's *look* — the fire/smoke atlases, the debris, the
+   flash light, the camera's knock and the red damage pulse — is the presentation
+   layer (M5).
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** Day/night sky and lighting, then audio. **Needs** the
    shader seam for the volumetric sky.
@@ -245,6 +253,10 @@ deliberately deferred — the systems come first.
 - **No weather or water visuals yet**: no clouds, rain streaks or sky tint (M5),
   no water surface, and the grass does not sway in the wind (it is a rebuilt
   mesh, so the sway wants the shader seam).
+- **No bang visuals yet**: no fire or smoke, no debris, no flash light and no
+  camera knock or red damage pulse (M5). The crater *is* drawn — it is a term in
+  the ground's height, so the dished terrain mesh shows it — but there is no mine
+  "tell" either, so a minefield is invisible until one goes off.
 
 ## Open questions
 

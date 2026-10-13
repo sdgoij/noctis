@@ -12,12 +12,17 @@
 //! (clear / cloudy / rain / clearing) slows the goat and sharpens its drain in
 //! rain and wind. The water table (M2) is the rain's other consequence: it pools in
 //! the hollows, slows a wading goat and burns its energy, hides the tufts it stands
-//! over, and refuses to let the goat sleep in a pool. The weather's clouds, rain
-//! streaks and sky tint, and the water's surface, are the presentation layer's (M5).
+//! over, and refuses to let the goat sleep in a pool. M3 adds the world's hazards
+//! ([`hazards`]): mines and trapped tufts, derived from a per-cell hash, that trip
+//! when the goat reaches them, blow it on a ballistic arc that dishes a crater into
+//! the ground, and chain into their neighbours. The weather's clouds, rain streaks
+//! and sky tint, the water's surface, and the bang's fire and light, are the
+//! presentation layer's (M5).
 
 #![forbid(unsafe_code)]
 
 mod grass;
+mod hazards;
 mod terrain;
 mod water;
 mod weather;
@@ -88,6 +93,13 @@ const SATIETY_DECAY: f32 = 0.02;
 /// rising table hides the tufts it reaches without rebuilding the field every frame
 /// of a slow drain.
 const WATER_MARK: f32 = 0.02;
+
+// The flung goat's arc (the original's `TUNING.explosions.fling`): the blast is the
+// impulse ([`hazards`]), and this is the ballistic flight the goat then owns.
+/// Gravity of the arc, in m/s² — several times life, so the goat lands hard.
+const FLING_GRAVITY: f32 = -72.0;
+/// A ceiling on the arc's stretch, in seconds.
+const FLING_MAX_FLIGHT: f32 = 2.5;
 
 /// Height above the goat's feet that the camera orbits and looks at.
 const EYE_HEIGHT: f32 = 0.75;
@@ -165,9 +177,6 @@ impl Orbit {
 }
 
 /// The goat's locomotion state — the original's `mode`.
-///
-/// The original also has `flung`; it arrives with the milestone that causes it —
-/// the blasts (`.notes/goats.md` M3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Idle,
@@ -175,6 +184,7 @@ enum Mode {
     Trot,
     Run,
     Jump,
+    Flung,
     Sleep,
     Eat,
     Dead,
@@ -182,9 +192,10 @@ enum Mode {
 
 impl Mode {
     /// Whether the state's clip is a cycle, or a one-shot the engine holds on
-    /// its last frame (a jump lands, a meal ends, a death stays down).
+    /// its last frame (a jump lands, an arc touches down, a meal ends, a death
+    /// stays down).
     fn loops(self) -> bool {
-        !matches!(self, Mode::Jump | Mode::Eat | Mode::Dead)
+        !matches!(self, Mode::Jump | Mode::Flung | Mode::Eat | Mode::Dead)
     }
 
     /// A short label for the HUD.
@@ -195,6 +206,7 @@ impl Mode {
             Mode::Trot => "trotting",
             Mode::Run => "running",
             Mode::Jump => "jumping",
+            Mode::Flung => "flung",
             Mode::Sleep => "sleeping (Z to wake)",
             Mode::Eat => "eating",
             Mode::Dead => "dead (R to restart)",
@@ -204,7 +216,7 @@ impl Mode {
 
 /// The goat's clips by role. The gaits are one clip each; idle, jump, sleep and
 /// eat have several takes the goat cycles through, exactly as the original's
-/// `VARIANTS` do.
+/// `VARIANTS` do. `flung` is one clip; the model that lacks it poses its jump.
 #[derive(Default)]
 struct Clips {
     idle: Vec<AssetHandle<AnimationClip>>,
@@ -212,6 +224,7 @@ struct Clips {
     trot: AssetHandle<AnimationClip>,
     run: AssetHandle<AnimationClip>,
     jump: Vec<AssetHandle<AnimationClip>>,
+    flung: AssetHandle<AnimationClip>,
     sleep: Vec<AssetHandle<AnimationClip>>,
     eat: Vec<AssetHandle<AnimationClip>>,
     death: AssetHandle<AnimationClip>,
@@ -228,6 +241,11 @@ impl Clips {
             Mode::Trot => Some(self.trot),
             Mode::Run => Some(self.run),
             Mode::Jump => at(&self.jump, variant),
+            // The arc: the flung clip when the model has one, the first jump when it
+            // does not — the placeholder the clip contract was written around.
+            Mode::Flung => Some(self.flung)
+                .filter(|h| *h != AssetHandle::default())
+                .or_else(|| at(&self.jump, 0)),
             Mode::Sleep => at(&self.sleep, variant),
             Mode::Eat => at(&self.eat, variant),
             Mode::Dead => Some(self.death),
@@ -316,6 +334,14 @@ struct Goat {
     eat_time: f32,
     /// The eat clip's length, so the meal ends when its clip does.
     eat_duration: f32,
+    /// The blast's arc (M3): seconds into the flight, the world-space velocity, the
+    /// absolute height, and the ballistic time the pose is stretched over.
+    fling_time: f32,
+    fling_vx: f32,
+    fling_vz: f32,
+    fling_vy: f32,
+    fling_y: f32,
+    fling_flight: f32,
 }
 
 impl Goat {
@@ -433,7 +459,65 @@ impl Goat {
         self.x = 0.0;
         self.z = 0.0;
         self.yaw = 0.0;
+        // A death mid-arc must not leave the next life hovering.
+        self.fling_time = 0.0;
+        self.fling_vx = 0.0;
+        self.fling_vz = 0.0;
+        self.fling_vy = 0.0;
+        self.fling_y = 0.0;
+        self.fling_flight = 0.0;
         self.enter(Mode::Idle);
+    }
+
+    /// Take a blast's impulse (the original's `startFling`). The first hit starts
+    /// the arc where the goat stands; every hit adds to the velocity already there.
+    fn start_fling(&mut self, vx: f32, vz: f32, vy: f32, base_y: f32) {
+        if self.mode != Mode::Flung {
+            self.fling_y = base_y;
+            self.fling_time = 0.0;
+            self.fling_vx = 0.0;
+            self.fling_vz = 0.0;
+            self.fling_vy = 0.0;
+            self.enter(Mode::Flung);
+        }
+        self.fling_vx += vx;
+        self.fling_vz += vz;
+        self.fling_vy += vy;
+        // The pose is stretched over the ballistic time the remaining upward impulse
+        // implies, counted from the start of the arc, so the phase keeps rising.
+        let air = if self.fling_vy > 0.0 && FLING_GRAVITY < 0.0 {
+            -2.0 * self.fling_vy / FLING_GRAVITY
+        } else {
+            0.4
+        };
+        self.fling_flight = (self.fling_time + air).clamp(0.3, FLING_MAX_FLIGHT);
+    }
+
+    /// One frame of the arc, integrated in absolute height so a slope the goat
+    /// crosses mid-air cannot drag it along. `ground` reports the surface under a
+    /// point (the cratered terrain, plus the goat's own lift). Returns whether the
+    /// feet touched the ground (`landed`).
+    fn advance_fling(&mut self, dt: f32, ground: impl Fn(f32, f32) -> f32) -> bool {
+        self.fling_time += dt;
+        self.x = (self.x + self.fling_vx * dt).clamp(-FIELD, FIELD);
+        self.z = (self.z + self.fling_vz * dt).clamp(-FIELD, FIELD);
+        self.fling_vy += FLING_GRAVITY * dt;
+        self.fling_y += self.fling_vy * dt;
+        let g = ground(self.x, self.z);
+        if self.fling_vy <= 0.0 && self.fling_y - g <= 0.0 {
+            self.fling_y = g;
+            self.fling_vx = 0.0;
+            self.fling_vz = 0.0;
+            self.fling_vy = 0.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// How far through the arc the pose is, `0..=1` (the original's `flingProgress`).
+    fn fling_progress(&self) -> f32 {
+        (self.fling_time / self.fling_flight).min(1.0)
     }
 
     /// Advance health and energy for the state, once a frame; returns `true` once
@@ -492,12 +576,18 @@ fn active_camera(ctx: &EngineContext) -> Option<Entity> {
 #[derive(Default)]
 pub struct Goats;
 
-/// The running world: the goat, its meadow, and the grass field's rebuild state.
+/// The running world: the goat, its meadow, and the ground's own state.
 struct World {
     goat: Goat,
     meadow: grass::Meadow,
     weather: weather::Weather,
     water: water::Water,
+    /// The mines, traps and fuses ([`hazards`]).
+    hazards: hazards::Hazards,
+    /// The craters bangs have dished into the ground.
+    craters: terrain::Craters,
+    /// The crater revision the ground was last built from.
+    crater_rev: u64,
     /// The cell the grass field was last built around, so a move rebuilds it.
     grass_cell: (i32, i32),
     /// The water level the meadow was last built against, so a rise rebuilds it.
@@ -524,8 +614,25 @@ impl Plugin for Goats {
                     &mut world.meadow,
                     &mut world.weather,
                     &mut world.water,
+                    &world.craters,
                 );
-                update_meadow(ctx, world, ate);
+                // The hazards own the ground too: a bang dishes a crater, and the
+                // ground heals on its own clock whatever else is happening.
+                world.hazards.update(
+                    ctx.time.delta(),
+                    &mut world.goat,
+                    &world.meadow,
+                    &mut world.craters,
+                );
+                // A crater — or its heal — moves the ground: rebuild the mesh, resample
+                // the water table, and re-derive the meadow from it.
+                let ground_changed = world.craters.revision() != world.crater_rev;
+                if ground_changed {
+                    world.crater_rev = world.craters.revision();
+                    rebuild_terrain(ctx, &world.craters);
+                    world.water.resample(&world.craters);
+                }
+                update_meadow(ctx, world, ate, ground_changed);
             }
 
             let target = world
@@ -534,12 +641,13 @@ impl Plugin for Goats {
                     let goat = &world.goat;
                     math::vec3(
                         goat.x,
-                        terrain::height(goat.x, goat.z) + goat.lift + EYE_HEIGHT,
+                        world.craters.surface(goat.x, goat.z) + goat.lift + EYE_HEIGHT,
                         goat.z,
                     )
                 })
                 .unwrap_or_else(|| math::vec3(0.0, EYE_HEIGHT, 0.0));
-            drive_camera(ctx, &mut orbit, &mut seeded, target);
+            let craters = world.as_ref().map(|world| &world.craters);
+            drive_camera(ctx, &mut orbit, &mut seeded, target, craters);
 
             let dt = ctx.time.delta();
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -549,8 +657,14 @@ impl Plugin for Goats {
                     let goat = &world.goat;
                     let in_reach =
                         !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
-                            && grass::nearest(goat.x, goat.z, grass::EAT_RANGE, &world.meadow)
-                                .is_some();
+                            && grass::nearest(
+                                goat.x,
+                                goat.z,
+                                grass::EAT_RANGE,
+                                &world.meadow,
+                                &world.craters,
+                            )
+                            .is_some();
                     // The water the goat is standing in joins the weather line, and is
                     // empty when it is dry (the original's `updateWeatherEffects`).
                     let mut weather = world.weather.hud(goat.satiety);
@@ -584,22 +698,28 @@ impl Plugin for Goats {
 
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
 /// root and play the state's clip. The `water` table it stands in slows it, burns its
-/// energy and gates its sleep.
+/// energy and gates its sleep; `craters` is the ground it stands on and, after a
+/// blast, the arc it flies.
 fn drive_goat(
     ctx: &mut EngineContext,
     goat: &mut Goat,
     meadow: &mut grass::Meadow,
     weather: &mut weather::Weather,
     water: &mut water::Water,
+    craters: &terrain::Craters,
 ) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
     let down = |c: char| Key::letter(c).is_some_and(|key| input.key_down(key));
     let pressed = |c: char| Key::letter(c).is_some_and(|key| input.key_pressed(key));
 
-    // Turning is locked while asleep, dead or eating; every other state may steer,
-    // even a jump. `A` turns left (it increases `yaw`, the original's `turn += 1`).
-    if !matches!(goat.mode, Mode::Sleep | Mode::Dead | Mode::Eat) {
+    // Turning is locked while asleep, dead, eating — or, for about a second, flung,
+    // which is the blast's and not the player's. Every other state may steer, even a
+    // jump. `A` turns left (it increases `yaw`, the original's `turn += 1`).
+    if !matches!(
+        goat.mode,
+        Mode::Sleep | Mode::Dead | Mode::Eat | Mode::Flung
+    ) {
         goat.yaw += axis(down('A'), down('D')) * TURN_RATE * dt;
     }
 
@@ -631,8 +751,9 @@ fn drive_goat(
     // exactly neutral out of the water.
     let speed_factor = weather.speed(goat.satiety) * water.speed_factor(goat.x, goat.z);
 
-    // The nearest tuft in reach; a free state lets the goat eat it.
-    let food = grass::nearest(goat.x, goat.z, grass::EAT_RANGE, meadow);
+    // The nearest tuft in reach that the ground has not swallowed; a free state lets
+    // the goat eat it.
+    let food = grass::nearest(goat.x, goat.z, grass::EAT_RANGE, meadow, craters);
 
     // The state machine (the original's `sceneFrame`): a locked state runs to its
     // end, a free one follows input. Eat, jump, sleep and restart take their key
@@ -666,6 +787,10 @@ fn drive_goat(
             if goat.eat_time >= goat.eat_duration {
                 goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
             }
+        }
+        Mode::Flung => {
+            // Not in charge until the feet touch (M19c): no steering, no jumping
+            // out of it, no eating. The arc is advanced below.
         }
         _ => {
             if pressed('E')
@@ -705,27 +830,54 @@ fn drive_goat(
     // Step the root. A jump travels at the speed and direction frozen at
     // take-off — its vertical arc is the clip's own root motion — a gait travels
     // at its ground speed along the goat's heading, and idle and sleep stand
-    // still. The heading is the model's local `+X` rotated about `+Y` by yaw.
+    // still. The heading is the model's local `+X` rotated about `+Y` by yaw. A
+    // flung goat owns its own arc instead (M19c).
     let forward_x = goat.yaw.cos();
     let forward_z = -goat.yaw.sin();
-    let (speed, direction) = match goat.mode {
-        Mode::Jump => (goat.jump_speed, goat.jump_dir),
-        Mode::Sleep => (0.0, 0.0),
-        _ => (goat.speed() * speed_factor, move_axis),
+    let y = if goat.mode == Mode::Flung {
+        let lift = goat.lift;
+        if goat.advance_fling(dt, |x, z| craters.surface(x, z) + lift) {
+            goat.enter(if move_axis != 0.0 { gait } else { Mode::Idle });
+        }
+        goat.fling_y
+    } else {
+        let (speed, direction) = match goat.mode {
+            Mode::Jump => (goat.jump_speed, goat.jump_dir),
+            Mode::Sleep => (0.0, 0.0),
+            _ => (goat.speed() * speed_factor, move_axis),
+        };
+        goat.x = (goat.x + forward_x * speed * direction * dt).clamp(-FIELD, FIELD);
+        goat.z = (goat.z + forward_z * speed * direction * dt).clamp(-FIELD, FIELD);
+        craters.surface(goat.x, goat.z) + goat.lift
     };
-    goat.x = (goat.x + forward_x * speed * direction * dt).clamp(-FIELD, FIELD);
-    goat.z = (goat.z + forward_z * speed * direction * dt).clamp(-FIELD, FIELD);
-    let y = terrain::height(goat.x, goat.z) + goat.lift;
 
     if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(goat.root) {
         transform.translation = math::vec3(goat.x, y, goat.z);
         transform.rotation = Quat::from_rotation_y(goat.yaw);
     }
 
-    // Play the state's clip; a reversing gait runs its clip backwards.
-    let reversing = move_axis < 0.0 && matches!(goat.mode, Mode::Walk | Mode::Trot | Mode::Run);
+    // Play the state's clip; a reversing gait runs its clip backwards. A flung goat
+    // is *posed*, phase 0 at the blast and phase 1 at contact, stretched over the
+    // flight (the original's `poseModel`), rather than played forward.
     let (clip, looped) = goat.animation();
-    if let Some(animator) = ctx.scene.world.get_mut::<Animator>(goat.skinned) {
+    if goat.mode == Mode::Flung {
+        let duration = ctx
+            .assets
+            .animations
+            .get(clip)
+            .map(|clip| clip.duration)
+            .unwrap_or(0.0);
+        if let Some(animator) = ctx.scene.world.get_mut::<Animator>(goat.skinned) {
+            if animator.clip != clip {
+                animator.clip = clip;
+                animator.playing = true;
+            }
+            animator.looped = false;
+            animator.speed = 0.0;
+            animator.time = goat.fling_progress() * duration;
+        }
+    } else if let Some(animator) = ctx.scene.world.get_mut::<Animator>(goat.skinned) {
+        let reversing = move_axis < 0.0 && matches!(goat.mode, Mode::Walk | Mode::Trot | Mode::Run);
         if animator.clip != clip {
             animator.clip = clip;
             animator.time = 0.0;
@@ -739,7 +891,13 @@ fn drive_goat(
 }
 
 /// Advance the orbit camera about `target` from player input.
-fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, target: Vec3) {
+fn drive_camera(
+    ctx: &mut EngineContext,
+    orbit: &mut Orbit,
+    seeded: &mut bool,
+    target: Vec3,
+    craters: Option<&terrain::Craters>,
+) {
     let Some(camera) = active_camera(ctx) else {
         return;
     };
@@ -769,7 +927,10 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
 
     let (position, rotation) = orbit.view(target);
     // Never let the camera sit in the ground it is looking across.
-    let floor = terrain::height(position.x, position.z) + CAMERA_CLEARANCE;
+    let floor = match craters {
+        Some(craters) => craters.surface(position.x, position.z),
+        None => terrain::height(position.x, position.z),
+    } + CAMERA_CLEARANCE;
     let position = math::vec3(position.x, position.y.max(floor), position.z);
     if let Some(transform) = ctx.scene.world.get_mut::<LocalTransform>(camera) {
         transform.translation = position;
@@ -779,29 +940,34 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
 
 /// Build the whole world: the ground, the meadow, then the goat.
 fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
-    spawn_terrain(ctx);
+    let craters = terrain::Craters::default();
+    spawn_terrain(ctx, &craters);
     // The water table samples the ground, so it is built once the terrain is up and
     // before the meadow, which culls the tufts the table stands over.
-    let water = water::Water::new();
+    let water = water::Water::new(&craters);
+    let water_level = water.level();
     let meadow = grass::Meadow::default();
-    spawn_grass(ctx, &meadow, &water);
+    spawn_grass(ctx, &meadow, &water, &craters);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
         meadow,
         weather: weather::Weather::default(),
-        water_level: water.level(),
         water,
+        hazards: hazards::Hazards::default(),
+        crater_rev: craters.revision(),
+        craters,
         grass_cell: (0, 0),
+        water_level,
     })
 }
 
 /// Build the ground mesh and put it in the scene under one entity.
-fn spawn_terrain(ctx: &mut EngineContext) {
+fn spawn_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
     let mesh = ctx
         .assets
         .meshes
-        .insert_named("terrain/meadow", terrain::build_mesh());
+        .insert_named("terrain/meadow", terrain::build_mesh(craters));
     let material = ctx.assets.materials.insert_named(
         "terrain/grass",
         Material {
@@ -827,12 +993,26 @@ fn spawn_terrain(ctx: &mut EngineContext) {
     );
 }
 
+/// Rebuild the ground mesh in place after a crater (or its heal) moved it. The
+/// path is unchanged, so the renderer re-uploads the same mesh with a new revision
+/// rather than drawing the ground the blast left.
+fn rebuild_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
+    ctx.assets
+        .meshes
+        .insert_named("terrain/meadow", terrain::build_mesh(craters));
+}
+
 /// Build the meadow: its mesh and material, under one entity. The mesh is rebuilt
 /// in place by [`update_meadow`] as the goat moves or grazes.
-fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow, water: &water::Water) {
+fn spawn_grass(
+    ctx: &mut EngineContext,
+    meadow: &grass::Meadow,
+    water: &water::Water,
+    craters: &terrain::Craters,
+) {
     let mesh = ctx.assets.meshes.insert_named(
         "grass/meadow",
-        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0, Some(water)),
+        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0, Some(water), craters),
     );
     let material = ctx.assets.materials.insert_named(
         "grass/tuft",
@@ -864,7 +1044,7 @@ fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow, water: &water::W
 ///
 /// The rebuild replaces the mesh asset in place (same handle, new revision), so
 /// the renderer re-uploads it rather than drawing the field the goat has left.
-fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
+fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool, ground_changed: bool) {
     let dt = ctx.time.delta();
     let regrew = world.meadow.update(dt);
 
@@ -875,7 +1055,7 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
     // A rising table hides the tufts it reaches, so the field is rebuilt when it
     // moves enough to matter — the original culls live, per frame.
     let rose = (world.water.level() - world.water_level).abs() > WATER_MARK;
-    if ate || regrew || rose || cell != world.grass_cell {
+    if ate || regrew || rose || ground_changed || cell != world.grass_cell {
         world.grass_cell = cell;
         world.water_level = world.water.level();
         ctx.assets.meshes.insert_named(
@@ -889,6 +1069,7 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
                 // field is a rebuilt mesh, so it would only lean on a rebuild.
                 0.0,
                 Some(&world.water),
+                &world.craters,
             ),
         );
     }
@@ -948,6 +1129,7 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         trot: first(role("trot")),
         run: first(role("run")),
         jump: role("jump"),
+        flung: first(role("flung")),
         sleep: role("sleep"),
         eat: role("eat"),
         death: first(role("death")),
@@ -984,6 +1166,12 @@ fn spawn_goat(ctx: &mut EngineContext) -> Option<Goat> {
         satiety: 0.0,
         eat_time: 0.0,
         eat_duration: 0.0,
+        fling_time: 0.0,
+        fling_vx: 0.0,
+        fling_vz: 0.0,
+        fling_vy: 0.0,
+        fling_y: 0.0,
+        fling_flight: 0.0,
     })
 }
 
@@ -1084,6 +1272,36 @@ mod tests {
             assert!(names.contains(&wanted), "missing clip {wanted}: {names:?}");
         }
         assert!(loaded.animations.iter().all(|clip| clip.duration > 0.0));
+    }
+
+    #[test]
+    fn a_flinged_goat_arcs_up_and_touches_down() {
+        let mut goat = lone_goat();
+        goat.start_fling(0.0, 0.0, 34.0, 0.0);
+        assert_eq!(goat.mode, Mode::Flung);
+        assert!(goat.fling_flight > 0.0, "the pose has a stretch to ride");
+
+        let ground = |_: f32, _: f32| 0.0;
+        let mut peak: f32 = 0.0;
+        let mut landed = false;
+        for _ in 0..600 {
+            if goat.advance_fling(1.0 / 60.0, ground) {
+                landed = true;
+                break;
+            }
+            peak = peak.max(goat.fling_y);
+        }
+        assert!(landed, "the arc ends on the ground");
+        assert!(peak > 5.0, "it goes up: {peak}");
+        assert_eq!(goat.fling_y, 0.0, "and lands back on it");
+
+        // A second blast mid-air adds to the velocity already there.
+        let mut goat = lone_goat();
+        goat.start_fling(10.0, 0.0, 20.0, 0.0);
+        let vx = goat.fling_vx;
+        goat.start_fling(10.0, 0.0, 0.0, 0.0);
+        assert!(goat.mode == Mode::Flung);
+        assert!(goat.fling_vx > vx, "the impulses stack");
     }
 
     #[test]
@@ -1481,6 +1699,12 @@ mod tests {
             satiety: 0.0,
             eat_time: 0.0,
             eat_duration: 0.0,
+            fling_time: 0.0,
+            fling_vx: 0.0,
+            fling_vz: 0.0,
+            fling_vy: 0.0,
+            fling_y: 0.0,
+            fling_flight: 0.0,
         }
     }
 
@@ -1489,7 +1713,8 @@ mod tests {
         let mut goat = lone_goat();
         goat.energy = 50.0;
         let mut meadow = grass::Meadow::default();
-        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow).expect("a tuft in reach");
+        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default())
+            .expect("a tuft in reach");
 
         goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
 
@@ -1519,7 +1744,8 @@ mod tests {
         goat.health = 50.0;
         goat.satiety = FULL_BELLY;
         let mut meadow = grass::Meadow::default();
-        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow).expect("a tuft in reach");
+        let tuft = grass::nearest(0.0, 0.0, 6.0, &meadow, &terrain::Craters::default())
+            .expect("a tuft in reach");
 
         goat.start_eat(&AssetRegistry::new(), &mut meadow, &tuft);
         assert!(
