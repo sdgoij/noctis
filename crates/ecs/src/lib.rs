@@ -28,6 +28,7 @@ pub mod primitives;
 pub mod reflect;
 pub mod resources;
 pub mod scene;
+pub mod ui;
 pub mod world;
 
 /// Derive the `Component` trait (see [`reflect::Component`]).
@@ -58,6 +59,7 @@ pub mod prelude {
         Prefab, Scene, SceneDesc, SceneError, SceneMode, children_of, instantiate_into,
         propagate_transforms, set_parent,
     };
+    pub use crate::ui::{RecordingUi, Ui, UiCallback};
     pub use crate::world::{Entities, Entity, Query, QueryMut, QueryWith, World};
     pub use ecs_macros::Component;
     pub use ecs_macros::plugin;

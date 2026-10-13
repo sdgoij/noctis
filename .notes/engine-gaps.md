@@ -61,10 +61,13 @@ exposes it) if it wants shadows.
 
 ### The screen-UI seam
 
-*What:* an egui-free `Ui` trait in `ecs` and a host implementation, so a plugin can
-draw panels (goats.md, "The screen-UI seam").
-*For:* the main / settings / mods / keymap menus and the console.
-*Meanwhile:* `screen_text` HUD lines only.
+*Shipped.* `ecs::ui::Ui` — an egui-free widget trait (`panel`, `label`, `button`,
+`toggle`, `slider`, `combo`, `text_field`) — and `EngineContext::ui`, a callback a
+plugin installs. `platform::EguiUi` implements the trait over the host's egui and
+the runtime bridges them; `ecs::ui::RecordingUi` drives a menu in a headless test.
+Designed in [`.notes/ui.md`](ui.md).
+*For:* the main / settings / mods / keymap menus and the console (goats M6).
+*Meanwhile (before):* `screen_text` HUD lines only.
 
 ## Tooling
 

@@ -5,9 +5,9 @@ onto the engine as a Noctis **project**: a Rust plugin that owns the simulation,
 scenes for the world, and the game's own assets. The goal is the same game — or
 one close enough to read as the same — running in a Noctis window. This document
 is the contract for that port; the engine features it depends on are designed in
-[`.notes/animation.md`](animation.md) (skeletal animation) and
-[`.notes/shaders.md`](shaders.md) (the shader seam); the screen-UI seam earns its
-own note when built. **M0 (the render-path spike), M1
+[`.notes/animation.md`](animation.md) (skeletal animation),
+[`.notes/shaders.md`](shaders.md) (the shader seam) and [`.notes/ui.md`](ui.md)
+(the screen-UI seam). **M0 (the render-path spike), M1
 (locomotion), M2 (the world sim) and M3 (hazards) are shipped** as `examples/goats`;
 the rest is not built yet. The port's test harness — the headless driver and its
 seed/observe seams — is designed in [`.notes/harness.md`](harness.md).
@@ -76,8 +76,8 @@ Two-thirds of the Rust is reusable; essentially none of the JS is.
 | Volumetric sky, water, custom lit look | no shader seam | **Add** — "The shader seam" |
 | Water reflections (sky/ground/mirror) | engine has shadow maps, no user render targets | tiers 0/1 shipped on the seam; tier 2 needs the planar pass — [`.notes/reflections.md`](reflections.md) |
 | Physics over the heightfield | rapier3d, `ColliderShape` is box/ball/capsule/cylinder | reimplement the original's `terrainHeight` sampling in a system; a heightfield collider only if rapier is actually wanted |
-| raygui menus / settings / mods / keymap / console | `AppDriver::ui` draws only `ctx.screen_text` | **Add** — "The screen-UI seam" (egui) |
-| HUD bars/text | `ctx.screen_text` + egui overlay | ships as `screen_text`, upgraded with the UI seam |
+| raygui menus / settings / mods / keymap / console | `AppDriver::ui` draws `screen_text`; the screen-UI seam is shipped ([`.notes/ui.md`](ui.md)) | **Build the menus** on the `Ui` seam |
+| HUD bars/text | `ctx.screen_text` + the `Ui` overlay | ships as `screen_text`, upgraded with the menus |
 | Mods and P2P sessions | engine `extensions` are editor-only; scripting is per-entity JS | reuse the Rust crates; rebuild the scene-side glue |
 | Day/night sun and shadows | IBL + one shadow-casting directional light + SSAO | maps onto the engine's light and shadow |
 
@@ -115,16 +115,17 @@ top of one seam, and the seam has [its own note](shaders.md).
 
 ### The screen-UI seam
 
-**Add.** Today the runtime's `AppDriver::ui` paints only `screen_text`
-(`crates/runtime/src/window.rs:53`); a plugin has no way to draw a widget. The
-engine gains a small, egui-free `Ui` seam: `ecs` defines a `Ui` trait with the
-handful of widgets the game needs (panel, label, button, toggle, slider, combo
-box, text field), `EngineContext` holds an optional boxed `Ui` callback that a
-plugin installs, and the host implements the trait over its egui context. Keeping
-the trait in `ecs` and the implementation in `platform` is what lets a plugin
-(a `noctis` consumer) draw a menu without `ecs` depending on egui, and lets a
-headless test drive a recording `Ui`. This is the same "engine owns the seam, the
-host renders it" shape as `screen_text` and `FrameImage`.
+**Shipped** ([`.notes/ui.md`](ui.md)). Today the runtime's `AppDriver::ui` paints
+only `screen_text` (`crates/runtime/src/window.rs`); a plugin has no way to draw a
+widget. The engine gained a small, egui-free `Ui` seam: `ecs::ui` defines a `Ui`
+trait with the handful of widgets the game needs (panel, label, button, toggle,
+slider, combo box, text field), `EngineContext::ui` holds an optional boxed `Ui`
+callback a plugin installs, and the host implements the trait over its egui
+context (`platform::EguiUi`). Keeping the trait in `ecs` and the implementation in
+`platform` is what lets a plugin (a `noctis` consumer) draw a menu without `ecs`
+depending on egui, and lets a headless test drive a recording `Ui`
+(`ecs::ui::RecordingUi`) — the same "engine owns the seam, the host renders it"
+shape as `screen_text` and `FrameImage`. The menus themselves are next.
 
 The goats screens become systems: `uiScreen` state, a system that draws the
 active panel through the seam, and the existing `SETTINGS` / `TUNING` writes
@@ -228,8 +229,8 @@ Single-player sandbox first; each milestone is playable.
    the vertex colour). The water **reflects** the sky and a baked ground (tiers 0
    and 1 of [`.notes/reflections.md`](reflections.md)); tier 2, a planar mirror of
    the whole scene, waits on the engine's pass.
-7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
-   screen-UI seam.
+7. **M6 — UI.** Main / settings / mods / keymap and the console. *(The screen-UI
+   seam is **shipped** ([`.notes/ui.md`](ui.md)); the menus are next.)*
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
 9. **M8 — multiplayer and voice.** Reuse `session` / `proto` / `pull`; rebuild the
    scene-side sync and the voice path.

@@ -40,6 +40,7 @@
 
 mod config;
 pub mod driver;
+mod egui_ui;
 pub mod error;
 
 #[cfg(target_arch = "wasm32")]
@@ -51,6 +52,7 @@ mod window;
 
 pub use config::{DEFAULT_CANVAS_ID, WindowConfig};
 pub use driver::AppDriver;
+pub use egui_ui::EguiUi;
 pub use error::PlatformError;
 
 #[cfg(target_arch = "wasm32")]

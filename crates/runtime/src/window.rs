@@ -51,30 +51,37 @@ impl<H: ScriptHost + 'static> AppDriver for Runtime<H> {
     }
 
     /// Draw the screen-space HUD lines a driver published, over the presented
-    /// frame: each line in white with a soft dark shadow, down the top-left.
+    /// frame: each line in white with a soft dark shadow, down the top-left. Then
+    /// the plugin's own UI, if it installed one — its menus, settings and console,
+    /// drawn through the [`ecs::ui::Ui`] seam.
     fn ui(&mut self, ui: &mut platform::egui::Ui) {
         use platform::egui::{Align2, Color32, FontId, pos2};
 
         let lines = self.app().context.screen_text.clone();
-        if lines.is_empty() {
-            return;
+        if !lines.is_empty() {
+            let painter = ui.painter();
+            let mut y = 8.0_f32;
+            for line in &lines {
+                let at = pos2(8.0, y);
+                let shadow = pos2(at.x + 1.0, at.y + 1.0);
+                let font = FontId::monospace(14.0);
+                painter.text(
+                    shadow,
+                    Align2::LEFT_TOP,
+                    line.as_str(),
+                    font.clone(),
+                    Color32::from_black_alpha(180),
+                );
+                painter.text(at, Align2::LEFT_TOP, line.as_str(), font, Color32::WHITE);
+                y += 16.0;
+            }
         }
 
-        let painter = ui.painter();
-        let mut y = 8.0_f32;
-        for line in &lines {
-            let at = pos2(8.0, y);
-            let shadow = pos2(at.x + 1.0, at.y + 1.0);
-            let font = FontId::monospace(14.0);
-            painter.text(
-                shadow,
-                Align2::LEFT_TOP,
-                line.as_str(),
-                font.clone(),
-                Color32::from_black_alpha(180),
-            );
-            painter.text(at, Align2::LEFT_TOP, line.as_str(), font, Color32::WHITE);
-            y += 16.0;
+        // The plugin's UI shares the egui layer with the HUD.
+        let context = &mut self.app_mut().context;
+        if let Some(callback) = context.ui.as_mut() {
+            let mut seam = platform::EguiUi::new(ui);
+            callback(&mut seam);
         }
     }
 

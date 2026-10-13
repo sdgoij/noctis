@@ -14,6 +14,7 @@
 use crate::assets::AssetRegistry;
 use crate::resources::{ActionMap, Events, FrameImage, InputState, Time};
 use crate::scene::{Scene, propagate_transforms};
+use crate::ui::UiCallback;
 use crate::world::Entity;
 
 pub use crate::resources::{Key, MouseButton, MouseState};
@@ -64,6 +65,11 @@ pub struct EngineContext {
     /// it, the way it draws `screen_text` — the seam a plugin that owns the loop
     /// asks for mouse-look through, without a script.
     pub mouse_captured: Option<bool>,
+    /// The plugin's screen-UI callback: the host calls it once a frame, when it
+    /// has a UI layer, with a [`Ui`](crate::ui::Ui) it implements over its own
+    /// toolkit (see [`crate::ui`]). `None` draws no plugin UI. A plugin sets it
+    /// each frame from a system, the way it publishes `screen_text`.
+    pub ui: Option<UiCallback>,
 }
 
 impl EngineContext {
@@ -80,6 +86,7 @@ impl EngineContext {
             frame: None,
             screen_text: Vec::new(),
             mouse_captured: None,
+            ui: None,
         }
     }
 
