@@ -45,7 +45,7 @@ pub mod prelude {
     pub use crate::components::{
         Active, AudioSource, BodyType, Camera, Children, Collider, ColliderShape, GlobalTransform,
         Light, LightKind, LocalTransform, MeshRenderer, Name, Parent, PrefabInstance, Projection,
-        RigidBody, Script, Text, TextAnchor, Visible,
+        RigidBody, Script, Skeleton, SkinnedMeshRenderer, Text, TextAnchor, Visible,
     };
     pub use crate::reflect::{Component, ComponentRegistry, Field, FieldKind};
     pub use crate::resources::{

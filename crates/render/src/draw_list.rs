@@ -11,13 +11,16 @@
 
 use crate::camera::CameraView;
 use crate::frustum::{Frustum, transform_aabb};
-use ecs::assets::{AlphaMode, AssetHandle, AssetRegistry, Material, Mesh};
-use ecs::components::{Active, GlobalTransform, LocalTransform, MeshRenderer, Parent, Visible};
+use ecs::assets::{AlphaMode, AssetHandle, AssetRegistry, Material, Mesh, Skin};
+use ecs::components::{
+    Active, GlobalTransform, LocalTransform, MeshRenderer, Parent, Skeleton, SkinnedMeshRenderer,
+    Visible,
+};
 use ecs::world::{Entity, World};
 use math::{Aabb, Mat4, vec3};
 
 /// One mesh instance scheduled for drawing.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DrawItem {
     /// The owning entity.
     pub entity: Entity,
@@ -37,6 +40,8 @@ pub struct DrawItem {
     pub cast_shadows: bool,
     /// Whether the item receives shadows.
     pub receive_shadows: bool,
+    /// The joint skin matrices (one per joint) for a skinned mesh, or `None`.
+    pub skin: Option<Vec<Mat4>>,
 }
 
 /// The sorted output of [`extract_draw_list`].
@@ -114,6 +119,45 @@ fn is_transparent(material: Option<&Material>) -> bool {
     matches!(material.map(|m| m.alpha_mode), Some(AlphaMode::Blend))
 }
 
+/// The joint skin matrices for a skinned entity: `mesh_world⁻¹ · joint_world ·
+/// inverse_bind` per joint, the pose the vertex shader blends against the four
+/// influences. Empty when the skin or skeleton is missing.
+fn skin_matrices(
+    world: &World,
+    assets: &AssetRegistry,
+    entity: Entity,
+    mesh_world: Mat4,
+    skin: AssetHandle<Skin>,
+) -> Vec<Mat4> {
+    let Some(skin) = assets.skins.get(skin) else {
+        return Vec::new();
+    };
+    let Some(skeleton) = world.get::<Skeleton>(entity) else {
+        return Vec::new();
+    };
+    let Some(inverse_mesh) = math::inverse(&mesh_world) else {
+        return Vec::new();
+    };
+    skin.joints
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let joint_world = skeleton
+                .0
+                .get(index)
+                .and_then(|joint| world.get::<GlobalTransform>(*joint))
+                .map(|global| global.to_matrix())
+                .unwrap_or_else(math::identity);
+            let inverse_bind = skin
+                .inverse_bind
+                .get(index)
+                .copied()
+                .unwrap_or_else(math::identity);
+            inverse_mesh * joint_world * inverse_bind
+        })
+        .collect()
+}
+
 /// Extract, cull, and sort every drawable in `world`.
 pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraView) -> DrawList {
     let frustum = Frustum::from_view_projection(&view.view_projection);
@@ -154,6 +198,53 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
             transparent: is_transparent(material),
             cast_shadows: renderer.cast_shadows,
             receive_shadows: renderer.receive_shadows,
+            skin: None,
+        };
+
+        if item.transparent {
+            list.transparent.push(item);
+        } else {
+            list.opaque.push(item);
+        }
+    }
+
+    // Skinned meshes: the same, plus each vertex's weighted joint matrices.
+    for (entity, renderer) in world.query::<SkinnedMeshRenderer>() {
+        if renderer.mesh.is_none() {
+            continue;
+        }
+        let Some(mesh) = assets.meshes.get(renderer.mesh) else {
+            continue;
+        };
+        if !is_renderable(world, entity) {
+            continue;
+        }
+
+        let matrix = world_matrix(world, entity);
+        let local = mesh_bounds(mesh);
+        let world_bounds = transform_aabb(&matrix, &local);
+
+        if !frustum.intersects_aabb(&world_bounds) {
+            list.culled += 1;
+            continue;
+        }
+
+        let center = world_bounds.center();
+        let delta = center - view.eye;
+        let distance = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+        let material = assets.materials.get(renderer.material);
+
+        let item = DrawItem {
+            entity,
+            mesh: renderer.mesh,
+            material: renderer.material,
+            world_matrix: matrix,
+            world_bounds,
+            distance,
+            transparent: is_transparent(material),
+            cast_shadows: renderer.cast_shadows,
+            receive_shadows: renderer.receive_shadows,
+            skin: Some(skin_matrices(world, assets, entity, matrix, renderer.skin)),
         };
 
         if item.transparent {

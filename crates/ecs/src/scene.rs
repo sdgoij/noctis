@@ -530,6 +530,15 @@ fn component_descs(
             receive_shadows: m.receive_shadows,
         });
     }
+    if let Some(m) = world.get::<SkinnedMeshRenderer>(entity) {
+        out.push(ComponentDesc::SkinnedMeshRenderer {
+            mesh: assets.meshes.path_of(m.mesh).map(str::to_string),
+            skin: assets.skins.path_of(m.skin).map(str::to_string),
+            material: assets.materials.path_of(m.material).map(str::to_string),
+            cast_shadows: m.cast_shadows,
+            receive_shadows: m.receive_shadows,
+        });
+    }
     if let Some(r) = world.get::<RigidBody>(entity) {
         out.push(ComponentDesc::RigidBody {
             body_type: match r.body_type {
@@ -614,6 +623,20 @@ fn missing_asset<'a>(desc: &'a ComponentDesc, assets: &AssetRegistry) -> Option<
                     .as_deref()
                     .filter(|p| assets.materials.handle(p).is_none())
             }),
+        ComponentDesc::SkinnedMeshRenderer {
+            mesh,
+            skin,
+            material,
+            ..
+        } => mesh
+            .as_deref()
+            .filter(|p| assets.meshes.handle(p).is_none())
+            .or_else(|| skin.as_deref().filter(|p| assets.skins.handle(p).is_none()))
+            .or_else(|| {
+                material
+                    .as_deref()
+                    .filter(|p| assets.materials.handle(p).is_none())
+            }),
         ComponentDesc::AudioSource { clip, .. } => {
             clip.as_deref().filter(|p| assets.audio.handle(p).is_none())
         }
@@ -685,6 +708,36 @@ fn apply_component(
                 entity,
                 MeshRenderer {
                     mesh: mesh_handle,
+                    material: material_handle,
+                    cast_shadows: *cast_shadows,
+                    receive_shadows: *receive_shadows,
+                },
+            );
+        }
+        ComponentDesc::SkinnedMeshRenderer {
+            mesh,
+            skin,
+            material,
+            cast_shadows,
+            receive_shadows,
+        } => {
+            let mesh_handle = mesh
+                .as_deref()
+                .and_then(|p| assets.meshes.handle(p))
+                .unwrap_or_default();
+            let skin_handle = skin
+                .as_deref()
+                .and_then(|p| assets.skins.handle(p))
+                .unwrap_or_default();
+            let material_handle = material
+                .as_deref()
+                .and_then(|p| assets.materials.handle(p))
+                .unwrap_or_default();
+            world.insert(
+                entity,
+                SkinnedMeshRenderer {
+                    mesh: mesh_handle,
+                    skin: skin_handle,
                     material: material_handle,
                     cast_shadows: *cast_shadows,
                     receive_shadows: *receive_shadows,
@@ -838,6 +891,7 @@ pub fn desc_name(desc: &ComponentDesc) -> &str {
         ComponentDesc::Camera { .. } => "Camera",
         ComponentDesc::Light { .. } => "Light",
         ComponentDesc::MeshRenderer { .. } => "MeshRenderer",
+        ComponentDesc::SkinnedMeshRenderer { .. } => "SkinnedMeshRenderer",
         ComponentDesc::RigidBody { .. } => "RigidBody",
         ComponentDesc::Collider { .. } => "Collider",
         ComponentDesc::AudioSource { .. } => "AudioSource",
@@ -1351,6 +1405,19 @@ pub enum ComponentDesc {
     MeshRenderer {
         /// Mesh asset path.
         mesh: Option<String>,
+        /// Material asset path.
+        material: Option<String>,
+        /// Whether it casts shadows.
+        cast_shadows: bool,
+        /// Whether it receives shadows.
+        receive_shadows: bool,
+    },
+    /// A skinned mesh renderer.
+    SkinnedMeshRenderer {
+        /// Mesh asset path.
+        mesh: Option<String>,
+        /// Skin asset path.
+        skin: Option<String>,
         /// Material asset path.
         material: Option<String>,
         /// Whether it casts shadows.

@@ -952,7 +952,8 @@ impl SkinBindings {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group = make_skin_bind_group(device, layout, &buffer);
+        let bind_group =
+            make_skin_bind_group(device, layout, &buffer, u64::from(MAX_SKIN_MATRICES) * 64);
         SkinBindings {
             buffer,
             bind_group,
@@ -974,7 +975,12 @@ impl SkinBindings {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.bind_group = make_skin_bind_group(device, &self.layout, &self.buffer);
+        self.bind_group = make_skin_bind_group(
+            device,
+            &self.layout,
+            &self.buffer,
+            u64::from(MAX_SKIN_MATRICES) * 64,
+        );
         self.capacity = new_capacity;
     }
 
@@ -1002,16 +1008,19 @@ fn make_skin_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
+    slot_size: u64,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("skin.bind_group"),
         layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
+            // Bind one slot, so the dynamic offset can select a slot; a
+            // whole-buffer binding (`size: None`) could only be offset by zero.
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer,
                 offset: 0,
-                size: None,
+                size: NonZeroU64::new(slot_size),
             }),
         }],
     })

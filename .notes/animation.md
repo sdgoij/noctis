@@ -221,8 +221,12 @@ and does nothing until then.
    `animations`/`JOINTS_0`/`WEIGHTS_0` reads, the two registry stores, and a
    fixture test (`the_skin_and_clip_import`). No playback: the model still draws
    at bind pose.
-2. **Skinned draw.** *(Not built.)* `SkinnedMeshRenderer`, the joint storage
-   buffer, the skinned vertex pipeline and its shadow-pass twin.
+2. **Skinned draw.** *(Shipped.)* `SkinnedMeshRenderer` + the structural
+   `Skeleton`, the joint storage buffer (`SkinBindings`), the skinned vertex
+   pipeline and its shadow-pass twin, the extraction that computes each joint's
+   `mesh_world⁻¹ · joint_world · inverse_bind`, and the draw-loop wiring. A
+   skinned glTF node instantiates as a `SkinnedMeshRenderer`; with no `Animator`
+   yet it holds its bind pose, so phase 3 is what makes it move.
 3. **Playback.** *(Not built.)* `Animator`, the `update`-stage sampler, loop and
    one-shot, the editor form, and the `testscene` joint-motion assertion.
 4. **Fidelity.** *(Not built.)* `CUBICSPLINE`, cross-fade between clips, additive

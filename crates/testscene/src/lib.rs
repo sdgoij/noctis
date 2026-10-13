@@ -723,6 +723,49 @@ pub fn build_named(name: impl Into<String>) -> (Scene, AssetRegistry) {
     let prefab = Prefab::from_scene_desc("Prop", prop.to_desc(&assets));
     prefab.instantiate(world, &assets, Some(root));
 
+    // A skinned mesh with a one-joint skeleton: the animation data path (a skin,
+    // its influence and the joint link) the renderer's skinned draw reads. One
+    // joint at the identity deforms nothing. `SkinnedMeshRenderer` stays out of
+    // `ComponentKind::ALL` until its draw path ships, but the spine carries one.
+    let skin = assets.skins.insert_named(
+        "skins/rig",
+        Skin {
+            name: "rig".into(),
+            joints: vec![0],
+            inverse_bind: vec![math::identity()],
+        },
+    );
+    let joint = world.spawn();
+    world.insert(joint, Name::new("SkinnedJoint"));
+    world.insert(joint, LocalTransform::identity());
+    let mut skinned = primitives::cube(1.0);
+    skinned.influences = vec![
+        VertexInfluence {
+            joints: [0, 0, 0, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        };
+        skinned.vertices.len()
+    ];
+    let mesh_skinned = assets
+        .meshes
+        .insert_named("primitives/skinned_cube", skinned);
+    let skinned_entity = world.spawn();
+    world.insert(skinned_entity, Name::new("Skinned"));
+    world.insert(
+        skinned_entity,
+        LocalTransform::from_translation(vec3(0.0, 3.0, 0.0)),
+    );
+    world.insert(
+        skinned_entity,
+        SkinnedMeshRenderer {
+            mesh: mesh_skinned,
+            skin,
+            material: mat_opaque,
+            ..SkinnedMeshRenderer::default()
+        },
+    );
+    world.insert(skinned_entity, Skeleton(vec![joint]));
+
     scene.update_transforms();
     (scene, assets)
 }
@@ -746,6 +789,7 @@ pub fn coverage_of(world: &World) -> Vec<&'static str> {
             ComponentKind::Camera => world.count::<Camera>() > 0,
             ComponentKind::Light => world.count::<Light>() > 0,
             ComponentKind::MeshRenderer => world.count::<MeshRenderer>() > 0,
+            ComponentKind::SkinnedMeshRenderer => world.count::<SkinnedMeshRenderer>() > 0,
             ComponentKind::RigidBody => world.count::<RigidBody>() > 0,
             ComponentKind::Collider => world.count::<Collider>() > 0,
             ComponentKind::AudioSource => world.count::<AudioSource>() > 0,

@@ -55,8 +55,8 @@ drag between docks is the one follow-up.
 
 Skeletal animation — playing a skinned glTF model's clips through an `Animator`
 component and a GPU-skinned draw path — is designed in
-[`.notes/animation.md`](.notes/animation.md). **Phase 1 (glTF skin and clip
-import) is shipped**; the skinned draw path and playback are not built yet.
+[`.notes/animation.md`](.notes/animation.md). **Phases 1-2 (glTF import and the
+skinned draw) are shipped**; playback is not built yet.
 
 Porting **Slag Goat** (`goats/`), a JavaScript-and-raylib goat sandbox, onto the
 engine — a Rust plugin for the simulation, scenes for the world and menus, egui

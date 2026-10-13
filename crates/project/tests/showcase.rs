@@ -47,6 +47,7 @@ fn coverage_of(world: &World) -> Vec<&'static str> {
             ComponentKind::Camera => world.count::<Camera>() > 0,
             ComponentKind::Light => world.count::<Light>() > 0,
             ComponentKind::MeshRenderer => world.count::<MeshRenderer>() > 0,
+            ComponentKind::SkinnedMeshRenderer => world.count::<SkinnedMeshRenderer>() > 0,
             ComponentKind::RigidBody => world.count::<RigidBody>() > 0,
             ComponentKind::Collider => world.count::<Collider>() > 0,
             ComponentKind::AudioSource => world.count::<AudioSource>() > 0,

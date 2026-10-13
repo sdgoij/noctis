@@ -4,7 +4,7 @@
 //! physics, audio, and scripting crates read and write them; the editor and the
 //! scripting API expose them by name.
 
-use crate::assets::{AssetHandle, AudioClip, FontAsset, Material, Mesh};
+use crate::assets::{AssetHandle, AudioClip, FontAsset, Material, Mesh, Skin};
 use crate::world::Entity;
 use math::{Mat4, Quat, Transform, Vec3, vec3};
 
@@ -595,6 +595,46 @@ impl Text {
     }
 }
 
+/// A renderable mesh whose vertices are deformed by a [`Skin`].
+///
+/// The skinned twin of [`MeshRenderer`]: the same mesh and material, but drawn
+/// through the skinning pipeline, with the joint entities listed by [`Skeleton`]
+/// resolving each vertex's influence (`Mesh::influences`) to a joint's world
+/// transform.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkinnedMeshRenderer {
+    /// The mesh asset (its `influences` name the joints).
+    pub mesh: AssetHandle<Mesh>,
+    /// The skin binding the mesh to its joints.
+    pub skin: AssetHandle<Skin>,
+    /// The material asset.
+    pub material: AssetHandle<Material>,
+    /// Whether this entity casts shadows.
+    pub cast_shadows: bool,
+    /// Whether this entity receives shadows.
+    pub receive_shadows: bool,
+}
+
+impl Default for SkinnedMeshRenderer {
+    fn default() -> Self {
+        Self {
+            mesh: AssetHandle::NONE,
+            skin: AssetHandle::NONE,
+            material: AssetHandle::NONE,
+            cast_shadows: true,
+            receive_shadows: true,
+        }
+    }
+}
+
+/// The joint entities a [`SkinnedMeshRenderer`] deforms with.
+///
+/// Structural, like [`Parent`]/[`Children`]: not scene-serialized, resolved by the
+/// glTF loader when it instantiates a skinned node, and parallel to the skin's
+/// joint list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Skeleton(pub Vec<Entity>);
+
 /// The engine's list of "registered" component names, used by the editor and
 /// the scripting layer to build a stable, human-readable component index.
 pub mod component_index {
@@ -618,6 +658,8 @@ pub mod component_index {
         Light,
         /// [`super::MeshRenderer`]
         MeshRenderer,
+        /// [`super::SkinnedMeshRenderer`]
+        SkinnedMeshRenderer,
         /// [`super::RigidBody`]
         RigidBody,
         /// [`super::Collider`]
@@ -642,6 +684,7 @@ pub mod component_index {
                 ComponentKind::Camera => "Camera",
                 ComponentKind::Light => "Light",
                 ComponentKind::MeshRenderer => "MeshRenderer",
+                ComponentKind::SkinnedMeshRenderer => "SkinnedMeshRenderer",
                 ComponentKind::RigidBody => "RigidBody",
                 ComponentKind::Collider => "Collider",
                 ComponentKind::AudioSource => "AudioSource",
@@ -661,6 +704,7 @@ pub mod component_index {
                 "Camera" => ComponentKind::Camera,
                 "Light" => ComponentKind::Light,
                 "MeshRenderer" => ComponentKind::MeshRenderer,
+                "SkinnedMeshRenderer" => ComponentKind::SkinnedMeshRenderer,
                 "RigidBody" => ComponentKind::RigidBody,
                 "Collider" => ComponentKind::Collider,
                 "AudioSource" => ComponentKind::AudioSource,
@@ -670,7 +714,10 @@ pub mod component_index {
             })
         }
 
-        /// Every kind, in a stable order.
+        /// Every kind the coverage scenes must contain, in a stable order.
+        ///
+        /// `SkinnedMeshRenderer` is deliberately absent until its draw path
+        /// ships ([`.notes/animation.md`]); it is still addressable by name.
         pub const ALL: [ComponentKind; 13] = [
             ComponentKind::LocalTransform,
             ComponentKind::GlobalTransform,

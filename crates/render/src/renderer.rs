@@ -44,8 +44,8 @@ use crate::error::RenderError;
 use crate::gizmo::{GizmoGeometry, GizmoVertex};
 use crate::gpu::ibl_gpu::IblGpu;
 use crate::gpu::pipelines::{
-    BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, create_layouts, create_pipelines,
-    create_present_pipeline, pick_surface_format,
+    BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, SkinBindings, create_layouts,
+    create_pipelines, create_present_pipeline, pick_surface_format,
 };
 use crate::gpu::resources::ResourceCache;
 use crate::gpu::shadow::ShadowResources;
@@ -180,6 +180,8 @@ struct PreparedDraw {
     index_count: u32,
     offset: u32,
     material: wgpu::BindGroup,
+    /// For a skinned mesh, its joint-matrix slot and skin vertex buffer.
+    skin: Option<(u32, wgpu::Buffer)>,
 }
 
 /// A font atlas uploaded to the GPU, with the CPU atlas kept for layout.
@@ -201,6 +203,8 @@ pub struct Renderer {
     ibl: IblGpu,
     frame: FrameBindings,
     objects: ObjectBindings,
+    /// The joint matrices of skinned draws, bound with a dynamic offset.
+    skins: SkinBindings,
     cache: ResourceCache,
     material_sampler: wgpu::Sampler,
     material_sampler_nearest: wgpu::Sampler,
@@ -334,6 +338,7 @@ impl Renderer {
             &targets.ssao.view,
         );
         let objects = ObjectBindings::new(&device, &layouts.object, 256);
+        let skins = SkinBindings::new(&device, &layouts.skin, 16);
         let cache = ResourceCache::new(&device, &queue);
 
         let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -466,6 +471,7 @@ impl Renderer {
             ibl,
             frame,
             objects,
+            skins,
             cache,
             material_sampler,
             material_sampler_nearest,
@@ -909,9 +915,20 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.depth);
             pass.set_bind_group(0, &self.light_view_bind_group, &[]);
             for draw in &prepared_opaque {
+                match &draw.skin {
+                    Some((slot, buffer)) => {
+                        pass.set_pipeline(&self.pipelines.depth_skinned);
+                        pass.set_bind_group(
+                            2,
+                            self.skins.bind_group(),
+                            &[self.skins.offset(*slot)],
+                        );
+                        pass.set_vertex_buffer(1, buffer.slice(..));
+                    }
+                    None => pass.set_pipeline(&self.pipelines.depth),
+                }
                 pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
                 pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
                 pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -939,9 +956,20 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.depth);
             pass.set_bind_group(0, &self.camera_view_bind_group, &[]);
             for draw in &prepared_opaque {
+                match &draw.skin {
+                    Some((slot, buffer)) => {
+                        pass.set_pipeline(&self.pipelines.depth_skinned);
+                        pass.set_bind_group(
+                            2,
+                            self.skins.bind_group(),
+                            &[self.skins.offset(*slot)],
+                        );
+                        pass.set_vertex_buffer(1, buffer.slice(..));
+                    }
+                    None => pass.set_pipeline(&self.pipelines.depth),
+                }
                 pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
                 pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
                 pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1012,8 +1040,19 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.frame.bind_group, &[]);
             if !prepared_opaque.is_empty() {
-                pass.set_pipeline(&self.pipelines.pbr_opaque);
                 for draw in &prepared_opaque {
+                    match &draw.skin {
+                        Some((slot, buffer)) => {
+                            pass.set_pipeline(&self.pipelines.pbr_opaque_skinned);
+                            pass.set_bind_group(
+                                3,
+                                self.skins.bind_group(),
+                                &[self.skins.offset(*slot)],
+                            );
+                            pass.set_vertex_buffer(1, buffer.slice(..));
+                        }
+                        None => pass.set_pipeline(&self.pipelines.pbr_opaque),
+                    }
                     pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
                     pass.set_bind_group(2, &draw.material, &[]);
                     pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
@@ -1022,8 +1061,19 @@ impl Renderer {
                 }
             }
             if !prepared_transparent.is_empty() {
-                pass.set_pipeline(&self.pipelines.pbr_transparent);
                 for draw in &prepared_transparent {
+                    match &draw.skin {
+                        Some((slot, buffer)) => {
+                            pass.set_pipeline(&self.pipelines.pbr_transparent_skinned);
+                            pass.set_bind_group(
+                                3,
+                                self.skins.bind_group(),
+                                &[self.skins.offset(*slot)],
+                            );
+                            pass.set_vertex_buffer(1, buffer.slice(..));
+                        }
+                        None => pass.set_pipeline(&self.pipelines.pbr_transparent),
+                    }
                     pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
                     pass.set_bind_group(2, &draw.material, &[]);
                     pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
@@ -1813,6 +1863,22 @@ impl Renderer {
         let vertex_buffer = gpu_mesh.vertex_buffer.clone();
         let index_buffer = gpu_mesh.index_buffer.clone();
         let index_count = gpu_mesh.index_count;
+        let skin_buffer = gpu_mesh.skin_buffer.clone();
+
+        // A skinned mesh uploads its joint matrices into a slot and draws with
+        // the skinning pipeline; a static mesh has neither.
+        let skin = match (&item.skin, &skin_buffer) {
+            (Some(matrices), Some(buffer)) if !matrices.is_empty() => {
+                self.skins.ensure(&self.device, index + 1);
+                let flat: Vec<f32> = matrices
+                    .iter()
+                    .flat_map(|matrix| math::to_cols_array(matrix).into_iter().flatten())
+                    .collect();
+                self.skins.write(&self.queue, index, &flat);
+                Some((index, buffer.clone()))
+            }
+            _ => None,
+        };
 
         let material_id = if item.material.is_none() {
             AssetId::NONE
@@ -1843,6 +1909,7 @@ impl Renderer {
             index_count,
             offset: index * self.objects.stride(),
             material: material_bind_group,
+            skin,
         })
     }
 

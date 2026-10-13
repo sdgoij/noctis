@@ -26,7 +26,8 @@ use ecs::assets::{AssetHandle, AssetRegistry, Material, Mesh, Texture};
 use ecs::components::component_index::ComponentKind;
 use ecs::components::{
     Active, AudioSource, Camera, Children, Collider, ColliderShape, Light, LightKind,
-    LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, Text, Visible,
+    LocalTransform, MeshRenderer, Name, Parent, Projection, RigidBody, Script, SkinnedMeshRenderer,
+    Text, Visible,
 };
 use ecs::reflect::{ComponentRegistry, Field};
 use ecs::scene::{Prefab, Scene, SceneDesc, SceneMode, set_parent};
@@ -1105,6 +1106,9 @@ impl Editor {
             ComponentKind::Camera => self.scene.world.has::<Camera>(entity),
             ComponentKind::Light => self.scene.world.has::<Light>(entity),
             ComponentKind::MeshRenderer => self.scene.world.has::<MeshRenderer>(entity),
+            ComponentKind::SkinnedMeshRenderer => {
+                self.scene.world.has::<SkinnedMeshRenderer>(entity)
+            }
             ComponentKind::RigidBody => self.scene.world.has::<RigidBody>(entity),
             ComponentKind::Collider => self.scene.world.has::<Collider>(entity),
             ComponentKind::AudioSource => self.scene.world.has::<AudioSource>(entity),
@@ -1780,6 +1784,9 @@ impl Editor {
             }
             ComponentKind::MeshRenderer => {
                 world.remove::<MeshRenderer>(entity);
+            }
+            ComponentKind::SkinnedMeshRenderer => {
+                world.remove::<SkinnedMeshRenderer>(entity);
             }
             ComponentKind::RigidBody => {
                 world.remove::<RigidBody>(entity);

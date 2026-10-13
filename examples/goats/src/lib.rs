@@ -341,8 +341,9 @@ mod tests {
                 .any(|(_, name)| name.as_str() == "Terrain"),
             "the terrain entity was spawned"
         );
-        // The terrain plus the goat's own mesh nodes: more than one renderer.
-        assert!(world.count::<MeshRenderer>() >= 2);
+        // The terrain is a plain mesh; the goat's primitives are skinned.
+        assert!(world.count::<MeshRenderer>() >= 1);
+        assert!(world.count::<SkinnedMeshRenderer>() >= 1);
         assert!(app.context.assets.meshes.handle("terrain/meadow").is_some());
     }
 }

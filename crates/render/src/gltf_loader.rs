@@ -22,7 +22,7 @@ use ecs::assets::{
     AnimationChannel, AnimationClip, AnimationProperty, AssetHandle, AssetRegistry, Material, Mesh,
     Skin, Texture, TextureFilter, TextureFormat, Vertex, VertexInfluence,
 };
-use ecs::components::{LocalTransform, MeshRenderer, Name};
+use ecs::components::{LocalTransform, MeshRenderer, Name, Skeleton, SkinnedMeshRenderer};
 use ecs::scene::set_parent;
 use ecs::world::{Entity, World};
 use math::{Mat4, Quat, Transform, from_cols_array, vec3};
@@ -732,14 +732,47 @@ impl LoadedGltf {
                 let child = world.spawn();
                 world.insert(child, Name::new(format!("{}_mesh{}", node.name, primitive)));
                 world.insert(child, LocalTransform::default());
-                world.insert(
-                    child,
-                    MeshRenderer {
-                        mesh,
-                        material,
-                        ..MeshRenderer::default()
-                    },
-                );
+                // A skinned node draws through the skinning pipeline, its joints
+                // resolved to the node entities just spawned; a plain node draws
+                // with the standard mesh renderer.
+                let skin = node
+                    .skin
+                    .and_then(|index| handles.skins.get(index).copied())
+                    .filter(|handle| !handle.is_none());
+                match skin {
+                    Some(skin) => {
+                        world.insert(
+                            child,
+                            SkinnedMeshRenderer {
+                                mesh,
+                                skin,
+                                material,
+                                ..SkinnedMeshRenderer::default()
+                            },
+                        );
+                        let joints = node
+                            .skin
+                            .and_then(|index| self.skins.get(index))
+                            .map(|skin| {
+                                skin.joints
+                                    .iter()
+                                    .filter_map(|joint| node_entities.get(*joint).copied())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        world.insert(child, Skeleton(joints));
+                    }
+                    None => {
+                        world.insert(
+                            child,
+                            MeshRenderer {
+                                mesh,
+                                material,
+                                ..MeshRenderer::default()
+                            },
+                        );
+                    }
+                }
                 set_parent(world, child, Some(node_entities[index]));
             }
         }
@@ -1128,6 +1161,16 @@ mod tests {
         assert_eq!(handles.skins.len(), 1);
         assert_eq!(handles.animations.len(), 1);
         assert!(registry.animations.handle("Wiggle").is_some());
+
+        // Instantiating attaches a skinned renderer with its joints linked.
+        let mut world = World::new();
+        let nodes = loaded.instantiate(&mut world, &handles);
+        assert!(nodes.len() >= 2);
+        let (child, _) = world
+            .query::<SkinnedMeshRenderer>()
+            .next()
+            .expect("a skinned renderer was attached");
+        assert_eq!(world.get::<Skeleton>(child).map(|s| s.0.len()), Some(2));
     }
 
     /// A triangle whose material carries `KHR_materials_unlit`.
