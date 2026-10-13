@@ -77,3 +77,44 @@ fn a_bang_flings_and_kills_a_bot_and_it_gets_up() {
     );
     checks.finish();
 }
+
+#[test]
+fn the_herd_grows_and_shrinks() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+    checks.check("the herd starts spawned", sim.herd() >= 4, sim.herd());
+
+    // The settings slider's own command (`setHerdSize`): unload the goats past the
+    // count, and load the ones short of it.
+    sim.set_herd_size(3);
+    checks.check("the herd shrank to three", sim.herd() == 3, sim.herd());
+    sim.run(30);
+    checks.check("and stays three as it runs", sim.herd() == 3, sim.herd());
+    checks.check(
+        "and the three still do not overlap",
+        sim.herd_min_gap() > -0.2,
+        sim.herd_min_gap(),
+    );
+
+    let cap = crate::herd::HERD_MAX;
+    sim.set_herd_size(cap);
+    checks.check("the herd grew to the cap", sim.herd() == cap, sim.herd());
+    sim.run(30);
+    checks.check(
+        "and the grown herd does not overlap either",
+        sim.herd_min_gap() > -0.2,
+        sim.herd_min_gap(),
+    );
+
+    sim.set_herd_size(0);
+    checks.check("an empty herd is allowed", sim.herd() == 0, sim.herd());
+    sim.run(5);
+    checks.check(
+        "and the world still runs without one",
+        sim.herd() == 0,
+        sim.herd(),
+    );
+    checks.finish();
+}

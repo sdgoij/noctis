@@ -76,6 +76,8 @@ pub enum PluginCommand {
 pub(crate) enum WorldCommand {
     /// Restart the goat where it stands (`R`).
     Restart,
+    /// Grow or shrink the herd (`herd.count`).
+    Herd(usize),
     /// Force the weather: the named state, or the next one (`C`).
     Weather(Option<weather::Kind>),
     /// Pin the water table to a level, or hand it back to the rain.
@@ -238,7 +240,7 @@ impl Menus {
         let mut volume = self.volume as f32;
         let mut muted = self.muted;
         let mut water = self.water_on;
-        let herd = self.herd;
+        let mut herd = self.herd as f32;
         let weather = self.weather.clone();
         let mut back = false;
         ui.panel("goats.settings", "Settings", &mut |ui| {
@@ -255,7 +257,10 @@ impl Menus {
             if ui.toggle("Water", &mut water) {
                 self.world_commands.push(WorldCommand::Water(water));
             }
-            ui.label(&format!("Herd: {herd} goats"));
+            if ui.slider("Herd size", &mut herd, 0.0, 100.0) {
+                self.world_commands
+                    .push(WorldCommand::Herd(herd.round() as usize));
+            }
             ui.label(&weather);
             if ui.button("Next weather") {
                 self.world_commands.push(WorldCommand::Weather(None));
@@ -311,6 +316,7 @@ const VERBS: &[(&str, &str)] = &[
     ("help", "list these verbs"),
     ("clear", "empty the console"),
     ("restart", "start the goat's life over"),
+    ("herd [0-10]", "set the herd size"),
     (
         "weather [state]",
         "force the weather: clear, cloudy, rain, clearing",
@@ -339,6 +345,10 @@ fn parse(line: &str) -> Verb {
         "volume" | "vol" => match arg.and_then(|a| a.parse::<f32>().ok()) {
             Some(v) => Verb::Plugin(PluginCommand::Volume(v.clamp(0.0, 100.0) as u8)),
             None => Verb::Error("volume needs a number, 0-100".to_string()),
+        },
+        "herd" => match arg.and_then(|a| a.parse::<usize>().ok()) {
+            Some(n) => Verb::World(WorldCommand::Herd(n)),
+            None => Verb::Error("herd needs a count, 0-10".to_string()),
         },
         "weather" | "w" => {
             let kind = match arg.map(|a| a.to_ascii_lowercase()) {
@@ -394,13 +404,13 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_slider_queues_a_volume_and_the_water_toggle_a_command() {
+    fn the_settings_queue_their_commands() {
         let mut menus = Menus::new();
         menus.screen = Screen::Settings;
         let mut ui = RecordingUi::new();
         ui.press("Volume");
         ui.press("Water");
-        let _ = menus.take_plugin_commands(); // clear anything from `new`
+        ui.press("Herd size");
         menus.draw(&mut ui);
 
         let plugin = menus.take_plugin_commands();
@@ -408,12 +418,14 @@ mod tests {
             plugin.iter().any(|c| matches!(c, PluginCommand::Volume(_))),
             "a volume was queued: {plugin:?}"
         );
+        let world = menus.drain_world_commands();
         assert!(
-            matches!(
-                menus.drain_world_commands().as_slice(),
-                [WorldCommand::Water(_)]
-            ),
-            "the water toggle queued a world command"
+            world.iter().any(|c| matches!(c, WorldCommand::Water(_))),
+            "the water toggle queued a world command: {world:?}"
+        );
+        assert!(
+            world.iter().any(|c| matches!(c, WorldCommand::Herd(_))),
+            "the herd slider queued a world command: {world:?}"
         );
     }
 
@@ -462,6 +474,13 @@ mod tests {
             menus.take_plugin_commands(),
             vec![PluginCommand::Volume(40)]
         );
+
+        menus.input = "herd 4".to_string();
+        menus.submit();
+        assert!(matches!(
+            menus.drain_world_commands().as_slice(),
+            [WorldCommand::Herd(4)]
+        ));
 
         menus.input = "help".to_string();
         menus.submit();

@@ -233,11 +233,12 @@ Single-player sandbox first; each milestone is playable.
    the whole scene, waits on the engine's pass.
 7. **M6 — UI.** *(Shipped: the menus.)* On the screen-UI seam
    ([`.notes/ui.md`](ui.md)): the **main menu** (Continue/Play, Restart, Settings,
-   Keymap, Console, Quit), **settings** (volume, mute, the water, a weather
-   button), the **keymap** table, and the **console** (`help`, `weather`, `flood`,
-   `water`, `restart`, `mute`, `volume`, `clear`, `quit`). A screen freezes the
-   world and the game's input, as the original's `uiScreen` does; `Esc`/`P` opens
-   it, `Enter` runs the console line. The **mods** screen waits on M7.
+   Keymap, Console, Quit), **settings** (volume, mute, the herd size, the water, a
+   weather button), the **keymap** table, and the **console** (`help`, `weather`,
+   `flood`, `water`, `herd`, `restart`, `mute`, `volume`, `clear`, `quit`). A
+   screen freezes the world and the game's input, as the original's `uiScreen`
+   does; a setting applies at once, even behind the menu; `Esc`/`P` opens it,
+   `Enter` runs the console line. The **mods** screen waits on M7.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
 9. **M8 — multiplayer and voice.** Reuse `session` / `proto` / `pull`; rebuild the
    scene-side sync and the voice path.

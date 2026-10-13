@@ -288,6 +288,11 @@ impl Sim {
         self.world.herd.place(index, x, z);
     }
 
+    /// Grow or shrink the herd, as the settings slider does (`herd.count`).
+    pub fn set_herd_size(&mut self, count: usize) {
+        self.world.set_herd_size(&mut self.ctx, count);
+    }
+
     /// How many of the fx pool's billboards (fire, smoke, grit) are visible.
     pub fn fx_sprites(&self) -> usize {
         self.visible_among(&self.world.fx_entities)

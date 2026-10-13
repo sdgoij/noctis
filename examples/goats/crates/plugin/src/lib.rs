@@ -60,6 +60,10 @@ impl Plugin for Goats {
                     world.menus_mut().submit();
                 }
 
+                // A setting a screen asked for applies at once, even behind the menu
+                // (the herd-size slider, the water toggle).
+                world.apply_ui_commands(ctx);
+
                 // A screen freezes the world and the game's input, exactly as the
                 // original's `uiScreen` does.
                 if !world.menus_mut().is_open() {

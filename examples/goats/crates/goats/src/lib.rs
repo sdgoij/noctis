@@ -946,6 +946,8 @@ pub struct World {
     reflection: terrain::ReflectionMap,
     /// The bot goats (M4).
     herd: herd::Herd,
+    /// The goat's loaded GLB, kept so the herd can grow and shrink at runtime.
+    loader: Loader,
     /// The game's menus and console (M6).
     menus: ui::Menus,
     /// The sounds the simulation asked for this frame, for the plugin to play.
@@ -1148,6 +1150,14 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     ];
 }
 
+/// The goat's loaded GLB and its registered handles, kept on the [`World`] so a
+/// herd resize (`setHerdSize`) can spawn a bot the way boot did.
+struct Loader {
+    loaded: LoadedGltf,
+    handles: RegisteredGltf,
+    lift: f32,
+}
+
 /// The world's state the plugin reads: the sounds a frame asked for, where the goat
 /// is, and the weather the beds follow.
 impl World {
@@ -1171,12 +1181,19 @@ impl World {
         self.weather.sway()
     }
 
-    /// Draw the game's menus and console (M6) into the seam's [`Ui`], and carry out
-    /// the world commands they asked for (a restart, the weather, the water). The
-    /// plugin calls this from its UI callback; the audio and quit commands it cannot
-    /// carry out are left for [`World::take_plugin_commands`].
+    /// Draw the game's menus and console (M6) into the seam's [`Ui`]. The plugin
+    /// calls this from its UI callback; the commands a screen asked for are applied
+    /// by [`World::apply_ui_commands`] the next frame, where the engine context is
+    /// in reach.
     pub fn draw_ui(&mut self, ui: &mut dyn Ui) {
         self.menus.draw(ui);
+    }
+
+    /// Carry out the world commands the menus asked for (M6). The plugin runs this
+    /// every frame — even behind a screen, so a setting takes hold while the menu is
+    /// open and the world is frozen. The audio and quit commands the world cannot
+    /// carry out are left for [`World::take_plugin_commands`].
+    pub fn apply_ui_commands(&mut self, ctx: &mut EngineContext) {
         for command in self.menus.drain_world_commands() {
             match command {
                 ui::WorldCommand::Restart => self.goat.restart(),
@@ -1191,8 +1208,25 @@ impl World {
                 ui::WorldCommand::Water(on) => {
                     self.water.set_enabled(on);
                 }
+                ui::WorldCommand::Herd(count) => self.set_herd_size(ctx, count),
             }
         }
+    }
+
+    /// Grow or shrink the herd to `count` (`herd.count`, the settings slider, or
+    /// the console's `herd <n>`).
+    pub fn set_herd_size(&mut self, ctx: &mut EngineContext, count: usize) {
+        let goat = (self.goat.x, self.goat.z);
+        self.herd.resize(
+            ctx,
+            &self.loader.loaded,
+            &self.loader.handles,
+            &self.goat.clips,
+            self.loader.lift,
+            count,
+            goat,
+        );
+        self.menus.herd = self.herd.count();
     }
 
     /// The menus' own commands (audio, quit), drained for the plugin (M6).
@@ -1930,6 +1964,11 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         water_material,
         reflection,
         herd,
+        loader: Loader {
+            loaded,
+            handles,
+            lift,
+        },
         menus: ui::Menus::new(),
         sounds: Vec::new(),
         fx: fx::Fx::new(fx_textures),

@@ -39,6 +39,8 @@ const RESPAWN_MAX: f32 = 16.0;
 /// Candidate spawns before a bot gives up and takes the last one — a dense field
 /// may leave no clean ground (`botRespawn`).
 const RESPAWN_TRIES: u32 = 8;
+/// The most goats the settings let the herd hold (`TUNING_CLAMP["herd.count"]`).
+pub const HERD_MAX: usize = 100;
 
 /// One bot's coat (sRGB bytes), body scale and temperament (`TUNING.herd.spec`).
 #[derive(Clone, Copy, Debug)]
@@ -382,6 +384,9 @@ pub struct Herd {
     rng: Rng,
     /// The death clip's length, which a dying bot's pose is stretched over.
     death_dur: f32,
+    /// The generated fleeces, so a bot that spawns later (a herd resize) wears
+    /// one too (`BOT_TEX`).
+    fleeces: Vec<AssetHandle<Texture>>,
 }
 
 impl Herd {
@@ -430,6 +435,50 @@ impl Herd {
             bots,
             rng,
             death_dur,
+            fleeces,
+        }
+    }
+
+    /// Grow or shrink the herd to `count` (`setHerdSize`): unload the goats past
+    /// the count, and load the ones short of it — each at its own index, so the
+    /// coats and sizes are the ones a fresh herd would have had.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resize(
+        &mut self,
+        ctx: &mut EngineContext,
+        loaded: &LoadedGltf,
+        handles: &RegisteredGltf,
+        clips: &Clips,
+        lift: f32,
+        count: usize,
+        goat: (f32, f32),
+    ) {
+        let count = count.min(HERD_MAX);
+        while self.bots.len() > count {
+            if let Some(bot) = self.bots.pop() {
+                despawn_tree(&mut ctx.scene.world, bot.root);
+            }
+        }
+        while self.bots.len() < count {
+            let index = self.bots.len();
+            let spec = bot_spec(index);
+            let fleece = self.fleeces[index % self.fleeces.len()];
+            // A bot that cannot be built stops the growth, as `botAdd`'s `false` does.
+            let Some(bot) = spawn_bot(
+                ctx,
+                loaded,
+                handles,
+                clips,
+                lift,
+                index,
+                spec,
+                fleece,
+                goat,
+                &mut self.rng,
+            ) else {
+                break;
+            };
+            self.bots.push(bot);
         }
     }
 
@@ -819,6 +868,15 @@ fn bot_spec(i: usize) -> Spec {
         scale: base.scale * (1.0 + 0.08 * cycle as f32),
         ..base
     }
+}
+
+/// Despawn an entity and its descendants (the editor's `destroy`). A bot's root
+/// owns its whole instantiated node hierarchy, so unloading a goat is one pass.
+fn despawn_tree(world: &mut World, entity: Entity) {
+    for child in children_of(world, entity) {
+        despawn_tree(world, child);
+    }
+    world.despawn(entity);
 }
 
 /// Spawn one bot: its own node hierarchy under a root, its own animator, and its
