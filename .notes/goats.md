@@ -6,9 +6,9 @@ scenes for the world, and the game's own assets. The goal is the same game — o
 one close enough to read as the same — running in a Noctis window. This document
 is the contract for that port; the engine features it depends on are designed in
 [`.notes/animation.md`](animation.md) (skeletal animation) and, once built, their
-own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike) and
-M1 (locomotion) are shipped** as `examples/goats`; the world simulation and the
-rest are not built yet.
+own notes (the shader seam, the screen-UI seam). **M0 (the render-path spike), M1
+(locomotion) and most of M2 (the world sim) are shipped** as `examples/goats`; the
+rest is not built yet.
 
 Background: a Noctis *project* carries Rust as a plugin
 ([`.notes/embedding.md`](embedding.md)); its manifest and asset model are
@@ -175,9 +175,12 @@ Single-player sandbox first; each milestone is playable.
 3. **M2 — world sim.** Grass grazing, energy/health, weather state machine, water
    pooling, food. *(Shipped: the meadow — the procedural grass field and grazing
    it (the eat action, the belly, regrow) — the health/energy system with
-   exhaustion, death and restart, and the weather state machine with its
-   rain/wind slowdown and wetter drain (its clouds, rain streaks and sky tint are
-   the presentation layer, M5). The water table is not built yet.)*
+   exhaustion, death and restart, the weather state machine with its rain/wind
+   slowdown and wetter drain, and the water table: the rain fills it, it slows and
+   drains a wading goat, hides the tufts it stands over and refuses to let the goat
+   sleep in a pool. The weather's clouds, rain streaks and sky tint, and the water's
+   surface, wake and splashes, are the presentation layer (M5); the table's own
+   `flood` console verb arrives with the console, M6.)*
 4. **M3 — hazards.** Mines / traps / blasts / craters and the billboard FX.
 5. **M4 — herd.** Bot AI and collision.
 6. **M5 — presentation.** Day/night sky and lighting, then audio. **Needs** the

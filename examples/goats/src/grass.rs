@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use noctis::prelude::*;
 
 use crate::terrain;
+use crate::water;
 
 /// The terrain's half-extent. The meadow is clamped to it: this island's ground
 /// does not follow the goat yet (the original's does — see `.notes/goats.md`), so
@@ -155,8 +156,17 @@ pub fn tuft_at(cx: i32, cz: i32) -> Option<Tuft> {
 
 /// Build the meadow mesh: one cube per visible tuft around `(gx, gz)`, clamped to
 /// the island. `sway` is the clock and `wind` the sway strength — both zero until
-/// the weather system gives them values.
-pub fn build_mesh(meadow: &Meadow, gx: f32, gz: f32, sway: f32, wind: f32) -> Mesh {
+/// the weather system gives them values. A tuft standing under `water` is skipped,
+/// as the original's `drawTufts` skips it: the surface is drawn over the ground, so
+/// a tuft inside a pool would stand out of it.
+pub fn build_mesh(
+    meadow: &Meadow,
+    gx: f32,
+    gz: f32,
+    sway: f32,
+    wind: f32,
+    water: Option<&water::Water>,
+) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
@@ -182,6 +192,12 @@ pub fn build_mesh(meadow: &Meadow, gx: f32, gz: f32, sway: f32, wind: f32) -> Me
                 mix(sway_seed(i, j), 16, 3_266_489_917u32 as i32, 16) as f32 / 4_294_967_296.0;
             // The original uses `6.28`; `TAU` is the same phase to the eye.
             let off = (sway * 3.0 + phase * std::f32::consts::TAU).sin() * 0.11 * wind;
+            // The cull is tested at the tuft's *drawn* position, as the original does.
+            if let Some(water) = water
+                && water.submerged_at(tuft.x + off, tuft.z + off * 0.4)
+            {
+                continue;
+            }
             let gy = terrain::height(tuft.x, tuft.z);
             push_cube(
                 &mut vertices,
@@ -378,7 +394,7 @@ mod tests {
     #[test]
     fn the_mesh_holds_the_visible_tufts_on_the_ground() {
         let meadow = Meadow::default();
-        let mesh = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0);
+        let mesh = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None);
         assert!(!mesh.vertices.is_empty(), "the spawn meadow has tufts");
         assert_eq!(mesh.indices.len() % 3, 0);
         assert!(mesh.bounds.is_some());
@@ -397,7 +413,7 @@ mod tests {
 
     #[test]
     fn every_cube_face_winds_outward() {
-        let mesh = build_mesh(&Meadow::default(), 0.0, 0.0, 0.0, 0.0);
+        let mesh = build_mesh(&Meadow::default(), 0.0, 0.0, 0.0, 0.0, None);
         for tri in mesh.indices.as_chunks::<3>().0 {
             let normal = mesh.vertices[tri[0] as usize].normal;
             let p = |k: usize| mesh.vertices[tri[k] as usize].position;
@@ -412,7 +428,7 @@ mod tests {
     #[test]
     fn an_eaten_tuft_leaves_the_mesh() {
         let mut meadow = Meadow::default();
-        let before = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0).vertices.len();
+        let before = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
 
         // Eat every tuft inside a tight radius of the origin.
         let mut eaten = 0;
@@ -427,7 +443,21 @@ mod tests {
             }
         }
         assert!(eaten > 0, "there was something to eat");
-        let after = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0).vertices.len();
+        let after = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
         assert!(after < before, "the meadow thinned: {before} -> {after}");
+    }
+
+    #[test]
+    fn a_tuft_under_the_water_leaves_the_mesh() {
+        let meadow = Meadow::default();
+        let dry = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None).vertices.len();
+
+        // A downpour fills the table; the tufts in the hollows go under.
+        let mut flood = water::Water::new();
+        flood.update(1.0 / 60.0, 1.0);
+        let wet = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, Some(&flood))
+            .vertices
+            .len();
+        assert!(wet < dry, "the flood hid some tufts: {dry} -> {wet}");
     }
 }

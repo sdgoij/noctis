@@ -131,6 +131,12 @@ impl Weather {
         (self.wind_x * self.wind_x + self.wind_z * self.wind_z).sqrt()
     }
 
+    /// The eased rain strength, `0..=1` — the water table's level is a function of
+    /// this and nothing else.
+    pub fn rain(&self) -> f32 {
+        self.rain
+    }
+
     /// The goat's ground-speed multiplier — the original's `weatherSpeedFor`.
     /// Rain and wind slow it; a full belly (`satiety`) shelters some of the rain.
     pub fn speed(&self, satiety: f32) -> f32 {

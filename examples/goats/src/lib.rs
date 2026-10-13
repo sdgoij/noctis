@@ -10,13 +10,16 @@
 //! effort, eating grass tops it up, exhaustion caps the gait, running out of
 //! health kills the goat until it is restarted, and a weather state machine
 //! (clear / cloudy / rain / clearing) slows the goat and sharpens its drain in
-//! rain and wind. The weather's clouds, rain streaks and sky tint are the
-//! presentation layer's (M5).
+//! rain and wind. The water table (M2) is the rain's other consequence: it pools in
+//! the hollows, slows a wading goat and burns its energy, hides the tufts it stands
+//! over, and refuses to let the goat sleep in a pool. The weather's clouds, rain
+//! streaks and sky tint, and the water's surface, are the presentation layer's (M5).
 
 #![forbid(unsafe_code)]
 
 mod grass;
 mod terrain;
+mod water;
 mod weather;
 
 use noctis::prelude::*;
@@ -80,6 +83,11 @@ const FULL_BELLY: f32 = 0.85;
 const FULL_BELLY_HEAL: f32 = 3.0;
 /// Belly lost per second.
 const SATIETY_DECAY: f32 = 0.02;
+
+/// The water level must move at least this much before the meadow is rebuilt, so a
+/// rising table hides the tufts it reaches without rebuilding the field every frame
+/// of a slow drain.
+const WATER_MARK: f32 = 0.02;
 
 /// Height above the goat's feet that the camera orbits and looks at.
 const EYE_HEIGHT: f32 = 0.75;
@@ -430,9 +438,10 @@ impl Goat {
 
     /// Advance health and energy for the state, once a frame; returns `true` once
     /// health has run out, so the caller switches to [`Mode::Dead`]. The
-    /// original's `updateStats`, with the weather's wet/cold drain folded in (the
-    /// night multiplier arrives with the day/night system, M5).
-    fn update_stats(&mut self, dt: f32, weather_drain: f32) -> bool {
+    /// original's `updateStats`, with the weather's and the water's drain multipliers
+    /// folded into `drain_multiplier` (the night multiplier arrives with the day/night
+    /// system, M5).
+    fn update_stats(&mut self, dt: f32, drain_multiplier: f32) -> bool {
         if self.mode == Mode::Dead {
             return false;
         }
@@ -448,7 +457,7 @@ impl Goat {
             Mode::Walk => ENERGY_DRAIN_WALK,
             _ => ENERGY_DRAIN_IDLE,
         };
-        self.energy = (self.energy - drain * weather_drain * dt).max(0.0);
+        self.energy = (self.energy - drain * drain_multiplier * dt).max(0.0);
         if self.energy <= 0.0 {
             self.exhausted = true;
             self.health = (self.health - EXHAUST_HEALTH_DRAIN * dt).max(0.0);
@@ -488,8 +497,11 @@ struct World {
     goat: Goat,
     meadow: grass::Meadow,
     weather: weather::Weather,
+    water: water::Water,
     /// The cell the grass field was last built around, so a move rebuilds it.
     grass_cell: (i32, i32),
+    /// The water level the meadow was last built against, so a rise rebuilds it.
+    water_level: f32,
 }
 
 impl Plugin for Goats {
@@ -505,7 +517,14 @@ impl Plugin for Goats {
             }
             if let Some(world) = world.as_mut() {
                 world.weather.update(ctx.time.delta());
-                let ate = drive_goat(ctx, &mut world.goat, &mut world.meadow, &mut world.weather);
+                world.water.update(ctx.time.delta(), world.weather.rain());
+                let ate = drive_goat(
+                    ctx,
+                    &mut world.goat,
+                    &mut world.meadow,
+                    &mut world.weather,
+                    &mut world.water,
+                );
                 update_meadow(ctx, world, ate);
             }
 
@@ -532,13 +551,21 @@ impl Plugin for Goats {
                         !matches!(goat.mode, Mode::Dead | Mode::Sleep | Mode::Jump | Mode::Eat)
                             && grass::nearest(goat.x, goat.z, grass::EAT_RANGE, &world.meadow)
                                 .is_some();
+                    // The water the goat is standing in joins the weather line, and is
+                    // empty when it is dry (the original's `updateWeatherEffects`).
+                    let mut weather = world.weather.hud(goat.satiety);
+                    let water = world.water.hud(goat.x, goat.z);
+                    if !water.is_empty() {
+                        weather.push_str("   ");
+                        weather.push_str(&water);
+                    }
                     (
                         goat.mode.label(),
                         goat.health,
                         goat.energy,
                         goat.satiety,
                         if in_reach { "  |  eat (E)" } else { "" },
-                        world.weather.hud(goat.satiety),
+                        weather,
                     )
                 },
             );
@@ -556,12 +583,14 @@ impl Plugin for Goats {
 }
 
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
-/// root and play the state's clip.
+/// root and play the state's clip. The `water` table it stands in slows it, burns its
+/// energy and gates its sleep.
 fn drive_goat(
     ctx: &mut EngineContext,
     goat: &mut Goat,
     meadow: &mut grass::Meadow,
     weather: &mut weather::Weather,
+    water: &mut water::Water,
 ) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
@@ -594,8 +623,13 @@ fn drive_goat(
     if pressed('C') {
         weather.force_next();
     }
-    // Rain and wind slow the goat and make it work harder.
-    let speed_factor = weather.speed(goat.satiety);
+    // `J` toggles the whole water system, the original's own bisect.
+    if pressed('J') {
+        water.set_enabled(!water.enabled());
+    }
+    // Rain and wind slow the goat and make it work harder; so does wading, which is
+    // exactly neutral out of the water.
+    let speed_factor = weather.speed(goat.satiety) * water.speed_factor(goat.x, goat.z);
 
     // The nearest tuft in reach; a free state lets the goat eat it.
     let food = grass::nearest(goat.x, goat.z, grass::EAT_RANGE, meadow);
@@ -611,7 +645,13 @@ fn drive_goat(
             }
         }
         Mode::Sleep => {
-            if pressed('Z') || move_axis != 0.0 || goat.energy >= MAX_STATS {
+            // The water can arrive under a sleeping goat, so the same test that refuses
+            // to *start* a sleep ends one (the original's `sceneFrame`).
+            if pressed('Z')
+                || move_axis != 0.0
+                || goat.energy >= MAX_STATS
+                || water.in_water(goat.x, goat.z)
+            {
                 goat.enter(Mode::Idle);
             }
         }
@@ -634,7 +674,10 @@ fn drive_goat(
                 goat.start_eat(&ctx.assets, meadow, &tuft);
                 ate = true;
             } else if pressed('Z') {
-                goat.enter(Mode::Sleep);
+                // A goat does not sleep in the water (the original's `startSleep`).
+                if !water.in_water(goat.x, goat.z) {
+                    goat.enter(Mode::Sleep);
+                }
             } else if input.key_pressed(Key::Space) {
                 goat.start_jump(&ctx.assets, gait, move_axis, speed_factor);
             } else {
@@ -642,7 +685,7 @@ fn drive_goat(
                 // A goat exhausted and stood still drops off where it stands.
                 if goat.exhausted && move_axis == 0.0 {
                     goat.idle_timer += dt;
-                    if goat.idle_timer >= AUTO_SLEEP_DELAY {
+                    if goat.idle_timer >= AUTO_SLEEP_DELAY && !water.in_water(goat.x, goat.z) {
                         goat.enter(Mode::Sleep);
                     }
                 } else {
@@ -652,8 +695,10 @@ fn drive_goat(
         }
     }
 
-    // Health and energy for the frame; at zero health the goat dies.
-    if goat.update_stats(dt, weather.drain()) {
+    // Health and energy for the frame; at zero health the goat dies. Wading burns
+    // extra energy (the original's `waterDrainFactor`).
+    let drain = weather.drain() * water.drain_factor(goat.x, goat.z);
+    if goat.update_stats(dt, drain) {
         goat.die();
     }
 
@@ -735,13 +780,18 @@ fn drive_camera(ctx: &mut EngineContext, orbit: &mut Orbit, seeded: &mut bool, t
 /// Build the whole world: the ground, the meadow, then the goat.
 fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     spawn_terrain(ctx);
+    // The water table samples the ground, so it is built once the terrain is up and
+    // before the meadow, which culls the tufts the table stands over.
+    let water = water::Water::new();
     let meadow = grass::Meadow::default();
-    spawn_grass(ctx, &meadow);
+    spawn_grass(ctx, &meadow, &water);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,
         meadow,
         weather: weather::Weather::default(),
+        water_level: water.level(),
+        water,
         grass_cell: (0, 0),
     })
 }
@@ -779,10 +829,10 @@ fn spawn_terrain(ctx: &mut EngineContext) {
 
 /// Build the meadow: its mesh and material, under one entity. The mesh is rebuilt
 /// in place by [`update_meadow`] as the goat moves or grazes.
-fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow) {
+fn spawn_grass(ctx: &mut EngineContext, meadow: &grass::Meadow, water: &water::Water) {
     let mesh = ctx.assets.meshes.insert_named(
         "grass/meadow",
-        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0),
+        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0, Some(water)),
     );
     let material = ctx.assets.materials.insert_named(
         "grass/tuft",
@@ -822,8 +872,12 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
         (world.goat.x / grass::CELL).floor() as i32,
         (world.goat.z / grass::CELL).floor() as i32,
     );
-    if ate || regrew || cell != world.grass_cell {
+    // A rising table hides the tufts it reaches, so the field is rebuilt when it
+    // moves enough to matter — the original culls live, per frame.
+    let rose = (world.water.level() - world.water_level).abs() > WATER_MARK;
+    if ate || regrew || rose || cell != world.grass_cell {
         world.grass_cell = cell;
+        world.water_level = world.water.level();
         ctx.assets.meshes.insert_named(
             "grass/meadow",
             grass::build_mesh(
@@ -834,6 +888,7 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool) {
                 // The grass's own wind sway waits on the shader seam (M5); the
                 // field is a rebuilt mesh, so it would only lean on a rebuild.
                 0.0,
+                Some(&world.water),
             ),
         );
     }
@@ -1631,6 +1686,74 @@ mod tests {
             "the camera is above the ground: y {} vs {}",
             pos.y,
             terrain::height(pos.x, pos.z)
+        );
+    }
+
+    /// The vertex count of the meadow mesh currently registered.
+    fn meadow_vertices(app: &App) -> usize {
+        let handle = app
+            .context
+            .assets
+            .meshes
+            .handle("grass/meadow")
+            .expect("the meadow mesh");
+        app.context
+            .assets
+            .meshes
+            .get(handle)
+            .expect("the meadow mesh is registered")
+            .vertices
+            .len()
+    }
+
+    /// The weather line the plugin published this frame.
+    fn weather_line(app: &App) -> String {
+        app.context.screen_text.get(1).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn rain_raises_the_water_and_hides_the_tufts_it_reaches() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0); // build the world on a clear day
+        let dry = meadow_vertices(&app);
+
+        // Force the weather through to rain (Clear -> Cloudy -> Rain)...
+        app.context.input.press_key(key('C'));
+        app.tick(1.0 / 60.0);
+        app.context.input.release_key(key('C'));
+        app.context.input.press_key(key('C'));
+        // ...and let the rain ease up and fill the table.
+        for _ in 0..(8 * 60) {
+            app.tick(1.0 / 60.0);
+        }
+
+        let wet = meadow_vertices(&app);
+        assert!(
+            wet < dry,
+            "the water hid the tufts it reached: {dry} -> {wet}"
+        );
+    }
+
+    #[test]
+    fn the_spawn_bowl_stays_dry_under_the_heaviest_rain() {
+        // The bowl the goat spawns in sits at the table's own ceiling, so even a
+        // downpour leaves the goat's feet dry — the HUD never reports water there.
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+        app.context.input.press_key(key('C'));
+        app.tick(1.0 / 60.0);
+        app.context.input.release_key(key('C'));
+        app.context.input.press_key(key('C'));
+        for _ in 0..(8 * 60) {
+            app.tick(1.0 / 60.0);
+        }
+
+        assert!(
+            !weather_line(&app).contains("water"),
+            "the spawn bowl is dry: {}",
+            weather_line(&app)
         );
     }
 }
