@@ -326,7 +326,19 @@ pub fn create_shader_pipeline(
                 bias: wgpu::DepthBiasState::default(),
             }),
         ),
-        ShadeForm::Screen => ("vs_fullscreen", &screen_buffers, None),
+        ShadeForm::Screen => (
+            "vs_fullscreen",
+            &screen_buffers,
+            // A depth state is required to share the scene's depth-attached pass;
+            // `Always` with no write means the sky never rejects and never occludes.
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+        ),
     };
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

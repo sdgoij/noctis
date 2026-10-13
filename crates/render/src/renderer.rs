@@ -39,7 +39,7 @@
 //! than fail.
 
 use crate::camera::{CameraView, extract_camera};
-use crate::draw_list::{DrawItem, extract_draw_list};
+use crate::draw_list::{DrawItem, ScreenDraw, ShaderDraw, extract_draw_list};
 use crate::error::RenderError;
 use crate::gizmo::{GizmoGeometry, GizmoVertex};
 use crate::gpu::ibl_gpu::IblGpu;
@@ -48,6 +48,7 @@ use crate::gpu::pipelines::{
     create_pipelines, create_present_pipeline, pick_surface_format,
 };
 use crate::gpu::resources::ResourceCache;
+use crate::gpu::shader_seam::ShaderSeam;
 use crate::gpu::shadow::ShadowResources;
 use crate::gpu::targets::RenderTargets;
 use crate::gpu::uniforms::{
@@ -184,6 +185,26 @@ struct PreparedDraw {
     skin: Option<(u32, wgpu::Buffer)>,
 }
 
+/// A custom-shader mesh draw prepared for the frame (`.notes/shaders.md`).
+struct PreparedShaderDraw {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    offset: u32,
+    pipeline: wgpu::RenderPipeline,
+    /// Group 2: the material's texture array.
+    textures: wgpu::BindGroup,
+    /// Group 3: the material's user block.
+    user: wgpu::BindGroup,
+}
+
+/// A full-screen shader pass prepared for the frame (`.notes/shaders.md`).
+struct PreparedScreenDraw {
+    pipeline: wgpu::RenderPipeline,
+    textures: wgpu::BindGroup,
+    user: wgpu::BindGroup,
+}
+
 /// A font atlas uploaded to the GPU, with the CPU atlas kept for layout.
 struct TextAtlas {
     _texture: wgpu::Texture,
@@ -206,6 +227,8 @@ pub struct Renderer {
     /// The joint matrices of skinned draws, bound with a dynamic offset.
     skins: SkinBindings,
     cache: ResourceCache,
+    /// The shader seam's per-shader pipelines and per-material bind groups.
+    seam: ShaderSeam,
     material_sampler: wgpu::Sampler,
     material_sampler_nearest: wgpu::Sampler,
     camera_view_buffer: wgpu::Buffer,
@@ -473,6 +496,7 @@ impl Renderer {
             objects,
             skins,
             cache,
+            seam: ShaderSeam::default(),
             material_sampler,
             material_sampler_nearest,
             camera_view_buffer,
@@ -872,11 +896,16 @@ impl Renderer {
         );
 
         // ---- prepare draws -------------------------------------------------
-        let total = draw_list.len() as u32;
+        let total = (draw_list.len()
+            + draw_list.shader_opaque.len()
+            + draw_list.shader_transparent.len()) as u32;
         self.objects.ensure(&self.device, total.max(1));
         let default_material = Material::default();
         let mut prepared_opaque = Vec::with_capacity(draw_list.opaque.len());
         let mut prepared_transparent = Vec::with_capacity(draw_list.transparent.len());
+        let mut prepared_shader_opaque = Vec::with_capacity(draw_list.shader_opaque.len());
+        let mut prepared_shader_transparent =
+            Vec::with_capacity(draw_list.shader_transparent.len());
         let mut index = 0u32;
         for item in &draw_list.opaque {
             if let Some(draw) = self.prepare_draw(item, assets, &default_material, index) {
@@ -889,6 +918,25 @@ impl Renderer {
                 prepared_transparent.push(draw);
             }
             index += 1;
+        }
+        for item in &draw_list.shader_opaque {
+            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
+                prepared_shader_opaque.push(draw);
+            }
+            index += 1;
+        }
+        for item in &draw_list.shader_transparent {
+            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
+                prepared_shader_transparent.push(draw);
+            }
+            index += 1;
+        }
+        // Screen passes (a sky) run before the scene and need no object slot.
+        let mut prepared_screen = Vec::with_capacity(draw_list.screen.len());
+        for item in &draw_list.screen {
+            if let Some(draw) = self.prepare_screen_draw(item, assets) {
+                prepared_screen.push(draw);
+            }
         }
 
         // ---- record --------------------------------------------------------
@@ -1039,6 +1087,16 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.frame.bind_group, &[]);
+            // Screen passes (a sky) fill the background over the clear, before any
+            // scene geometry. Group 1 is bound because the prelude declares the
+            // object uniform; a screen shader never reads it.
+            for draw in &prepared_screen {
+                pass.set_pipeline(&draw.pipeline);
+                pass.set_bind_group(1, self.objects.bind_group(), &[0]);
+                pass.set_bind_group(2, &draw.textures, &[]);
+                pass.set_bind_group(3, &draw.user, &[]);
+                pass.draw(0..3, 0..1);
+            }
             if !prepared_opaque.is_empty() {
                 for draw in &prepared_opaque {
                     match &draw.skin {
@@ -1060,6 +1118,15 @@ impl Renderer {
                     pass.draw_indexed(0..draw.index_count, 0, 0..1);
                 }
             }
+            for draw in &prepared_shader_opaque {
+                pass.set_pipeline(&draw.pipeline);
+                pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
+                pass.set_bind_group(2, &draw.textures, &[]);
+                pass.set_bind_group(3, &draw.user, &[]);
+                pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+                pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..draw.index_count, 0, 0..1);
+            }
             if !prepared_transparent.is_empty() {
                 for draw in &prepared_transparent {
                     match &draw.skin {
@@ -1080,6 +1147,15 @@ impl Renderer {
                     pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..draw.index_count, 0, 0..1);
                 }
+            }
+            for draw in &prepared_shader_transparent {
+                pass.set_pipeline(&draw.pipeline);
+                pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
+                pass.set_bind_group(2, &draw.textures, &[]);
+                pass.set_bind_group(3, &draw.user, &[]);
+                pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+                pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..draw.index_count, 0, 0..1);
             }
         }
 
@@ -1918,6 +1994,117 @@ impl Renderer {
         })
     }
 
+    /// Prepare a custom-shader mesh draw: its object uniform, its mesh buffers,
+    /// its pipeline (opaque or blended) and its texture/user bind groups.
+    fn prepare_shader_draw(
+        &mut self,
+        draw: &ShaderDraw,
+        assets: &AssetRegistry,
+        index: u32,
+    ) -> Option<PreparedShaderDraw> {
+        let mesh = assets.meshes.get(draw.mesh)?;
+        let material = assets.shader_materials.get(draw.material)?;
+        let shader = assets.shaders.get(material.shader)?;
+
+        self.objects
+            .write(&self.queue, index, &shader_object_uniform(draw));
+
+        let gpu_mesh = self.cache.mesh(
+            &self.device,
+            draw.mesh.id(),
+            assets.meshes.revision(draw.mesh).unwrap_or(0),
+            mesh,
+        );
+        let vertex_buffer = gpu_mesh.vertex_buffer.clone();
+        let index_buffer = gpu_mesh.index_buffer.clone();
+        let index_count = gpu_mesh.index_count;
+
+        let sample_count = self.config.sample_count;
+        let pipeline = {
+            let pipelines = self.seam.mesh_pipelines(
+                &self.device,
+                &self.layouts,
+                shader,
+                material.shader.id(),
+                assets.shaders.revision(material.shader).unwrap_or(0),
+                sample_count,
+            );
+            if draw.transparent {
+                pipelines.transparent.clone()
+            } else {
+                pipelines.opaque.clone()
+            }
+        };
+
+        let material_rev = assets.shader_materials.revision(draw.material).unwrap_or(0);
+        let seam = self.seam.material(
+            &self.device,
+            &self.queue,
+            &mut self.cache,
+            assets,
+            draw.material.id(),
+            material,
+            material_rev,
+            &self.layouts.shader_textures,
+            &self.layouts.shader_user,
+            &self.material_sampler,
+        );
+
+        Some(PreparedShaderDraw {
+            vertex_buffer,
+            index_buffer,
+            index_count,
+            offset: index * self.objects.stride(),
+            pipeline,
+            textures: seam.textures.clone(),
+            user: seam.user.clone(),
+        })
+    }
+
+    /// Prepare a full-screen shader pass: its pipeline and bind groups.
+    fn prepare_screen_draw(
+        &mut self,
+        draw: &ScreenDraw,
+        assets: &AssetRegistry,
+    ) -> Option<PreparedScreenDraw> {
+        let material = assets.shader_materials.get(draw.material)?;
+        let shader = assets.shaders.get(material.shader)?;
+
+        let sample_count = self.config.sample_count;
+        let pipeline = self
+            .seam
+            .screen_pipeline(
+                &self.device,
+                &self.layouts,
+                shader,
+                material.shader.id(),
+                assets.shaders.revision(material.shader).unwrap_or(0),
+                sample_count,
+            )
+            .pipeline
+            .clone();
+
+        let material_rev = assets.shader_materials.revision(draw.material).unwrap_or(0);
+        let seam = self.seam.material(
+            &self.device,
+            &self.queue,
+            &mut self.cache,
+            assets,
+            draw.material.id(),
+            material,
+            material_rev,
+            &self.layouts.shader_textures,
+            &self.layouts.shader_user,
+            &self.material_sampler,
+        );
+
+        Some(PreparedScreenDraw {
+            pipeline,
+            textures: seam.textures.clone(),
+            user: seam.user.clone(),
+        })
+    }
+
     fn read_back(&self) -> Result<Frame, RenderError> {
         let slice = self.targets.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
@@ -1959,6 +2146,24 @@ fn make_view_bind_group(
             resource: buffer.as_entire_binding(),
         }],
     })
+}
+
+/// The object uniform for a custom-shader mesh draw: the transform, and neutral
+/// material parameters (a custom shader reads its own `user` block instead).
+fn shader_object_uniform(draw: &ShaderDraw) -> ObjectUniform {
+    let model = math::to_cols_array(&draw.world_matrix);
+    let normal_matrix = math::inverse(&draw.world_matrix)
+        .map(|inv| math::to_cols_array(&math::transpose(&inv)))
+        .unwrap_or_else(|| math::to_cols_array(&math::identity()));
+    ObjectUniform {
+        model,
+        normal_matrix,
+        base_color: [1.0, 1.0, 1.0, 1.0],
+        params: [0.0, 0.5, 1.0, 0.0],
+        emissive: [0.0, 0.0, 0.0, 0.0],
+        flags: [0.0, 0.0, 0.0, 0.0],
+        flags2: [0.0, 0.0, 0.0, 0.0],
+    }
 }
 
 fn object_uniform(item: &DrawItem, material: &Material) -> ObjectUniform {
@@ -2231,6 +2436,61 @@ mod tests {
             matches!(result, Err(RenderError::Unsupported(_))),
             "{result:?}"
         );
+    }
+
+    /// A screen shader (a sky) paints the frame: the seam's screen pipeline and its
+    /// material bind groups run end to end. Skips when no adapter is present.
+    #[test]
+    fn a_screen_shader_paints_the_frame_or_reports_no_adapter() {
+        use ecs::assets::{Shader, ShaderMaterial};
+        use ecs::components::{Camera, ScreenShaderMaterial};
+
+        let config = RendererConfig {
+            width: 8,
+            height: 8,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut assets = AssetRegistry::new();
+        let shader = assets.shaders.insert_named(
+            "skies/test",
+            Shader::new(
+                "test sky",
+                "@fragment fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {\n\
+                 \x20   return vec4<f32>(0.2, 0.5, 0.9, 1.0);\n\
+                 }",
+            ),
+        );
+        let material = assets.shader_materials.insert_named(
+            "skies/test",
+            ShaderMaterial {
+                name: "test sky".into(),
+                shader,
+                ..ShaderMaterial::default()
+            },
+        );
+
+        let mut world = World::new();
+        let camera = world.spawn_with(Camera::default());
+        let pass = world.spawn();
+        world.insert(pass, ScreenShaderMaterial { material });
+
+        let frame = renderer
+            .render_frame(&world, &assets, camera)
+            .expect("render frame");
+        let [r, g, b, a] = frame.pixel(0, 0).expect("a pixel");
+        assert_eq!(a, 255);
+        // The tonemap is monotonic per channel, so the sky's ordering survives it.
+        assert!(r < g && g < b, "the sky is blueish: {r},{g},{b}");
+        assert!(b > 40, "the sky is bright: {r},{g},{b}");
     }
 
     /// The GPU path is exercised only when an adapter exists; otherwise the

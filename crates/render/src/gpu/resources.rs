@@ -335,6 +335,20 @@ impl ResourceCache {
         }
     }
 
+    /// The GPU view for a texture handle, or the shared white fallback when the
+    /// handle is empty or missing. The shader seam's texture array (`.notes/shaders.md`)
+    /// needs one view per slot, so every slot has something to bind.
+    pub fn texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetRegistry,
+        handle: ecs::assets::AssetHandle<Texture>,
+    ) -> wgpu::TextureView {
+        let white = self.white.view.clone();
+        self.view_for(device, queue, assets, handle, &white, 0)
+    }
+
     /// Get or create a material bind group, resolving its textures (with
     /// fallbacks) against `assets`.
     // The parameters are the device/queue plus the material and its texture
