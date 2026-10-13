@@ -60,6 +60,28 @@ mod tests {
     }
 
     #[test]
+    fn the_plugin_spawns_a_sky() {
+        let mut app = App::new("test");
+        Goats.build(&mut app);
+        app.tick(1.0 / 60.0);
+
+        // The sky is a full-screen shader pass — the seam's first consumer — with
+        // both its assets registered under the project's well-known path.
+        assert!(
+            app.context.scene.world.count::<ScreenShaderMaterial>() >= 1,
+            "the sky pass is spawned"
+        );
+        assert!(app.context.assets.shaders.handle("sky/meadow").is_some());
+        assert!(
+            app.context
+                .assets
+                .shader_materials
+                .handle("sky/meadow")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn holding_w_walks_the_goat_forward() {
         let mut app = App::new("test");
         Goats.build(&mut app);

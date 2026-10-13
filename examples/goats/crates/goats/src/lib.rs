@@ -39,6 +39,48 @@ use noctis::prelude::*;
 /// too, so the game needs no files on disk.
 const GOAT_GLB: &[u8] = include_bytes!("../content/goat_animated.glb");
 
+/// The sky, as a full-screen shader over the engine's prelude (`.notes/shaders.md`):
+/// a view ray from the engine's inverse view-projection, a vertical gradient, and a
+/// sun disc and glow. Its colours and sun are the material's `user` block, so it is
+/// retuned without any engine change. The prelude supplies `ScreenOut` and
+/// `vs_fullscreen`; the body provides only `fs_main`.
+const SKY_WGSL: &str = r#"
+fn sky_ray(uv: vec2<f32>) -> vec3<f32> {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let far = frame.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
+    let near = frame.inv_view_proj * vec4<f32>(ndc, 0.0, 1.0);
+    return normalize(far.xyz / far.w - near.xyz / near.w);
+}
+
+@fragment
+fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
+    let dir = sky_ray(in.uv);
+    let zenith = user[0].rgb;
+    let horizon = user[1].rgb;
+    let sun_dir = normalize(user[2].xyz);
+    let sun_col = user[3].rgb;
+    let sun_power = user[3].a;
+
+    let up = clamp(dir.y, 0.0, 1.0);
+    var col = mix(horizon, zenith, pow(up, 0.55));
+    // Below the horizon, darken toward the ground so the terrain seam is soft.
+    col = mix(col, horizon * 0.35, clamp(-dir.y * 3.0, 0.0, 1.0));
+
+    let sun = max(dot(dir, sun_dir), 0.0);
+    col = col + sun_col * pow(sun, 6.0) * 0.25 * sun_power;
+    col = col + sun_col * smoothstep(0.9995, 0.9999, sun) * 8.0 * sun_power;
+    return vec4<f32>(col, 1.0);
+}
+"#;
+
+/// The sky's `user` block: zenith, horizon, sun direction, then sun colour and power.
+const SKY_UNIFORMS: [f32; 16] = [
+    0.05, 0.13, 0.32, 1.0, // zenith
+    0.55, 0.66, 0.80, 1.0, // horizon
+    0.35, 0.55, -0.75, 0.0, // sun direction (normalized in the shader)
+    1.00, 0.96, 0.85, 1.0, // sun colour, then power
+];
+
 /// The ground's colour: the original's `T_GRASS` (`98,150,84` sRGB) in linear.
 const GRASS: [f32; 4] = [0.122, 0.311, 0.087, 1.0];
 
@@ -914,8 +956,31 @@ fn drive_camera(
     }
 }
 
-/// Build the whole world: the ground, the meadow, then the goat. Called by the
-/// plugin's frame system on the first tick, and by the harness directly.
+/// Spawn the sky: a full-screen shader pass over the engine's prelude
+/// (`.notes/shaders.md`), the seam's first consumer.
+fn spawn_sky(ctx: &mut EngineContext) {
+    let shader = ctx
+        .assets
+        .shaders
+        .insert_named("sky/meadow", Shader::new("goats sky", SKY_WGSL));
+    let material = ctx.assets.shader_materials.insert_named(
+        "sky/meadow",
+        ShaderMaterial {
+            name: "goats sky".into(),
+            shader,
+            uniforms: SKY_UNIFORMS.to_vec(),
+            ..ShaderMaterial::default()
+        },
+    );
+    let sky = ctx.scene.world.spawn();
+    ctx.scene.world.insert(sky, Name::new("Sky"));
+    ctx.scene
+        .world
+        .insert(sky, ScreenShaderMaterial { material });
+}
+
+/// Build the whole world: the ground, the meadow, the sky, then the goat. Called
+/// by the plugin's frame system on the first tick, and by the harness directly.
 pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let craters = terrain::Craters::default();
     spawn_terrain(ctx, &craters);
@@ -925,6 +990,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let water_level = water.level();
     let meadow = grass::Meadow::default();
     spawn_grass(ctx, &meadow, &water, &craters);
+    spawn_sky(ctx);
     let goat = spawn_goat(ctx)?;
     Some(World {
         goat,

@@ -193,8 +193,11 @@ Single-player sandbox first; each milestone is playable.
    flash light, the camera's knock and the red damage pulse — is the presentation
    layer (M5).
 5. **M4 — herd.** Bot AI and collision.
-6. **M5 — presentation.** Day/night sky and lighting, then audio. **Needs** the
-   shader seam for the volumetric sky.
+6. **M5 — presentation.** *(Shipped: the sky — a `ScreenShaderMaterial` over the
+   engine's shader seam, a view ray plus a gradient and sun, tuned through the
+   material's `user` block; the seam's contract is [`.notes/shaders.md`](shaders.md).)*
+   Day/night lighting and audio follow, and the terrain and water — vertex
+   colours and a translucent surface — are the seam's next consumers.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.

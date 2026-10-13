@@ -14,13 +14,14 @@ two entry points against a **fixed** interface the engine generates, and it sets
 numbers and texture handles. That is what makes it safe to expose — a shader is
 data, not engine control flow.
 
-**Shipped so far:** the assets (`ecs::assets::Shader` / `ShaderMaterial`), the two
+**Shipped:** the assets (`ecs::assets::Shader` / `ShaderMaterial`), the two
 components (`ShaderMeshRenderer` / `ScreenShaderMaterial`) with their scene
-serialization, the WGSL prelude generator (`render::shader`), and the extraction
-stages (`render::draw_list`). **Not yet:** the GPU pipelines and bind groups, and
-the sky/terrain/water built on them. The two components are addressable by name
-but deliberately absent from `ComponentKind::ALL` until the draw path is proven
-(the `SkinnedMeshRenderer`/`Animator` precedent).
+serialization, the WGSL prelude generator (`render::shader`), the extraction
+stages (`render::draw_list`), and the GPU pipelines and bind groups drawn by the
+frame (`render::gpu::shader_seam`) — validated by a GPU test that renders a screen
+pass. The seam's first consumer is the goats sky (`examples/goats`). **Not yet:**
+the terrain and water, and a per-frame uniform update (so a sky's sun and weather
+animate). The two components remain out of `ComponentKind::ALL` for now.
 
 ## What the seam is
 
