@@ -2080,7 +2080,10 @@ fn goat_clips(loaded: &LoadedGltf, handles: &RegisteredGltf) -> Clips {
         jump: role("jump"),
         flung: first(role("flung")),
         sleep: role("sleep"),
-        eat: role("eat"),
+        // Keyed on the model's own `goateat`, not `eat`: "eat" is a substring of
+        // "death", so `role("eat")` would swallow GoatDeath and the goat would play
+        // the death pose on a meal (`model.js` guards this the same way).
+        eat: role("goateat"),
         death: first(role("death")),
     }
 }
@@ -2299,6 +2302,33 @@ mod tests {
             assert!(names.contains(&wanted), "missing clip {wanted}: {names:?}");
         }
         assert!(loaded.animations.iter().all(|clip| clip.duration > 0.0));
+    }
+
+    #[test]
+    fn the_eat_role_is_not_the_death_clip() {
+        // "eat" is a substring of "death", so a meal that keyed the role on the
+        // shorter word would play the death pose: the goat lies down with its health
+        // untouched, then "comes back" when the clip ends.
+        let mut ctx = EngineContext::new("test");
+        let loaded = load_gltf_bytes(GOAT_GLB).expect("the embedded goat imports");
+        let handles = loaded.register(&mut ctx.assets);
+        let clips = goat_clips(&loaded, &handles);
+        let name = |handle| {
+            ctx.assets
+                .animations
+                .get(handle)
+                .map(|clip| clip.name.to_ascii_lowercase())
+                .unwrap_or_default()
+        };
+
+        assert!(!clips.eat.is_empty(), "the model has eat takes");
+        for &handle in &clips.eat {
+            let take = name(handle);
+            assert!(take.contains("goateat"), "an eat take: {take}");
+            assert!(!take.contains("death"), "death is not an eat take: {take}");
+        }
+        let death = name(clips.death);
+        assert!(death.contains("death"), "death is the death clip: {death}");
     }
 
     #[test]
