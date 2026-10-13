@@ -111,6 +111,51 @@ const WATER_UNIFORMS: [f32; 12] = [
     40.0, 0.62, 0.0, 0.0, // view distance, alpha
 ];
 
+/// The meadow's wind sway (`.notes/shaders.md`, mesh form). The field is a rebuilt
+/// mesh, so it cannot lean by rebuilding without paying a per-frame upload; instead
+/// each vertex carries a lean weight in its colour (the lower cube least, the upper
+/// most) and this shader bends it with the clock and the wind. It is lit cheaply —
+/// the sun and the ambient from the frame uniform — since grass needs no PBR.
+const GRASS_WGSL: &str = r#"
+struct GrassOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+};
+
+@vertex
+fn vs_main(in: VsIn) -> GrassOut {
+    let time = user[0].x;
+    let wind = user[0].y;
+    // The tuft's cell, so its phase is its own; both cubes of a tuft share it.
+    let cell = floor(in.position.xz * 0.5);
+    let phase = fract(sin(dot(cell, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    let off = sin(time * 3.0 + phase * 6.2831853) * 0.11 * wind;
+    var world = in.position;
+    world.x = world.x + off * in.color.r;
+    world.z = world.z + off * 0.4 * in.color.r;
+
+    var out: GrassOut;
+    out.clip = frame.view_proj * object.model * vec4<f32>(world, 1.0);
+    out.normal = (object.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz;
+    return out;
+}
+
+@fragment
+fn fs_main(in: GrassOut) -> @location(0) vec4<f32> {
+    let n = normalize(in.normal);
+    let sun_dir = normalize(user[1].xyz);
+    let ndl = max(dot(n, -sun_dir), 0.0);
+    let ambient = frame.ambient.rgb * frame.ambient.a;
+    let sun = user[2].rgb * user[1].w * ndl;
+    let base = user[3].rgb;
+    return vec4<f32>(base * (ambient + sun), 1.0);
+}
+"#;
+
+/// The grass's sun strength (a shade under the terrain's, so the tufts read green
+/// rather than blown out).
+const GRASS_SUN: f32 = 0.9;
+
 /// How far the goat may walk from the origin before the mesh ends, in units.
 const FIELD: f32 = 44.0;
 /// The gaits' ground speeds, in metres per second (the original's stride maths).
@@ -803,6 +848,8 @@ pub struct World {
     seeded: bool,
     /// The sky's material, whose `user` block is animated each frame.
     sky: AssetHandle<ShaderMaterial>,
+    /// The meadow's shader material, whose `user` block drives the wind sway.
+    grass: AssetHandle<ShaderMaterial>,
     /// Seconds since the world was built, for the sky's slow sun arc.
     sky_time: f32,
     /// The water surface entity, moved to the table's level each frame.
@@ -845,6 +892,16 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     world.sky_time += dt;
     if let Some(material) = ctx.assets.shader_materials.get_mut(world.sky) {
         material.uniforms = sky_uniforms(world.sky_time, world.weather.rain());
+    }
+    // The meadow leans on the wind: its shader's `user` block carries the sway clock,
+    // the wind and the sun, so the field sits at rest and bends on the GPU.
+    if let Some(material) = ctx.assets.shader_materials.get_mut(world.grass) {
+        material.uniforms = grass_uniforms(
+            world.weather.sway_time(),
+            world.weather.sway(),
+            sun_direction(world.sky_time),
+            world.weather.rain(),
+        );
     }
     // The water surface follows the table.
     if let Some(transform) = ctx
@@ -1368,16 +1425,40 @@ fn spawn_sky(ctx: &mut EngineContext) -> AssetHandle<ShaderMaterial> {
     material
 }
 
+/// The sky's sun direction, from its slow arc — shared by the sky and the grass.
+fn sun_direction(time: f32) -> Vec3 {
+    let angle = time * 0.08;
+    math::normalize(math::vec3(
+        angle.cos() * 0.7,
+        0.30 + 0.45 * (0.5 + 0.5 * (angle * 0.5).sin()),
+        angle.sin() * 0.7,
+    ))
+}
+
+/// The sun's colour, drained toward grey by the rain — shared by the sky and the
+/// grass.
+fn sun_colour(rain: f32) -> Vec3 {
+    math::vec3(1.0, 0.95, 0.82) * (1.0 - 0.8 * rain)
+}
+
+/// The grass's `user` block: the sway clock and wind, the sun (direction, strength,
+/// colour), and the tuft base colour. Recomputed each frame; the renderer writes it
+/// in place. `sway` is the weather's wind sway (the original's `windSway`).
+fn grass_uniforms(time: f32, sway: f32, sun: Vec3, rain: f32) -> Vec<f32> {
+    let colour = sun_colour(rain);
+    vec![
+        time, sway, 0.0, 0.0, // the sway clock and wind
+        sun.x, sun.y, sun.z, GRASS_SUN, // the sun direction and strength
+        colour.x, colour.y, colour.z, 0.0, // its colour
+        TUFT[0], TUFT[1], TUFT[2], 0.0, // the tuft base
+    ]
+}
+
 /// The sky's animated `user` block: a slowly arcing sun, and colours drained toward
 /// grey by the rain. Recomputed each frame it is cheap — the renderer writes it into
 /// the material's user buffer without rebuilding anything.
 fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
-    let angle = time * 0.08;
-    let sun = math::normalize(math::vec3(
-        angle.cos() * 0.7,
-        0.30 + 0.45 * (0.5 + 0.5 * (angle * 0.5).sin()),
-        angle.sin() * 0.7,
-    ));
+    let sun = sun_direction(time);
     let mix = |a: Vec3, b: Vec3, t: f32| a + (b - a) * t;
     let zenith = mix(
         math::vec3(0.015, 0.05, 0.15),
@@ -1389,7 +1470,7 @@ fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
         math::vec3(0.17, 0.18, 0.21),
         rain,
     );
-    let sun_color = math::vec3(1.0, 0.95, 0.82) * (1.0 - 0.8 * rain);
+    let sun_col = sun_colour(rain);
     vec![
         zenith.x,
         zenith.y,
@@ -1403,9 +1484,9 @@ fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
         sun.y,
         sun.z,
         0.0, //
-        sun_color.x,
-        sun_color.y,
-        sun_color.z,
+        sun_col.x,
+        sun_col.y,
+        sun_col.z,
         1.0 - 0.7 * rain,
     ]
 }
@@ -1508,7 +1589,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
     let water = water::Water::new(&craters);
     let water_level = water.level();
     let meadow = grass::Meadow::default();
-    spawn_grass(ctx, &meadow, &water, &craters);
+    let grass_material = spawn_grass(ctx, &meadow, &water, &craters);
     let sky = spawn_sky(ctx);
     let water_surface = spawn_water(ctx);
     let flash = spawn_flash(ctx);
@@ -1546,6 +1627,7 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         orbit: Orbit::default(),
         seeded: false,
         sky,
+        grass: grass_material,
         sky_time: 0.0,
         water_surface,
         fx: fx::Fx::new(fx_textures),
@@ -1627,26 +1709,31 @@ fn rebuild_terrain(ctx: &mut EngineContext, craters: &terrain::Craters) {
         .insert_named("terrain/meadow", terrain::build_mesh(craters));
 }
 
-/// Build the meadow: its mesh and material, under one entity. The mesh is rebuilt
-/// in place by [`update_meadow`] as the goat moves or grazes.
+/// Build the meadow: its mesh and shader material, under one entity. The mesh leans
+/// on the wind through a seam shader ([`GRASS_WGSL`]) and is rebuilt in place by
+/// [`update_meadow`] as the goat moves or grazes. Returns the material handle, whose
+/// `user` block [`apply_frame`] animates.
 fn spawn_grass(
     ctx: &mut EngineContext,
     meadow: &grass::Meadow,
     water: &water::Water,
     craters: &terrain::Craters,
-) {
+) -> AssetHandle<ShaderMaterial> {
     let mesh = ctx.assets.meshes.insert_named(
         "grass/meadow",
-        grass::build_mesh(meadow, 0.0, 0.0, 0.0, 0.0, Some(water), craters),
+        grass::build_mesh(meadow, 0.0, 0.0, Some(water), craters),
     );
-    let material = ctx.assets.materials.insert_named(
+    let shader = ctx
+        .assets
+        .shaders
+        .insert_named("grass/tuft", Shader::new("goats grass", GRASS_WGSL));
+    let material = ctx.assets.shader_materials.insert_named(
         "grass/tuft",
-        Material {
-            name: "grass tuft".to_string(),
-            base_color: TUFT,
-            metallic: 0.0,
-            roughness: 0.9,
-            ..Material::default()
+        ShaderMaterial {
+            name: "goats grass".into(),
+            shader,
+            uniforms: grass_uniforms(0.0, 0.0, math::vec3(0.0, 1.0, 0.0), 0.0),
+            ..ShaderMaterial::default()
         },
     );
 
@@ -1655,13 +1742,14 @@ fn spawn_grass(
     ctx.scene.world.insert(field, LocalTransform::default());
     ctx.scene.world.insert(
         field,
-        MeshRenderer {
+        ShaderMeshRenderer {
             mesh,
             material,
             cast_shadows: false,
             receive_shadows: true,
         },
     );
+    material
 }
 
 /// Empty the belly and regrow eaten tufts each frame, and rebuild the grass field
@@ -1689,10 +1777,6 @@ fn update_meadow(ctx: &mut EngineContext, world: &mut World, ate: bool, ground_c
                 &world.meadow,
                 world.goat.x,
                 world.goat.z,
-                world.weather.sway_time(),
-                // The grass's own wind sway waits on the shader seam (M5); the
-                // field is a rebuilt mesh, so it would only lean on a rebuild.
-                0.0,
                 Some(&world.water),
                 &world.craters,
             ),
@@ -2035,5 +2119,32 @@ mod tests {
         // handle that names nothing would silently bind the white fallback).
         assert!(assets.textures.get(fur.base_color_texture).is_some());
         assert!(assets.textures.get(fur.normal_texture).is_some());
+    }
+
+    /// The seam shaders the goats scenes author (the sky, the water, the grass) must
+    /// compile against the engine prelude. One frame of the real world builds every
+    /// pipeline, so an invalid body fails here. Skips without an adapter.
+    #[test]
+    fn the_scene_shaders_compile_or_report_no_adapter() {
+        let config = RendererConfig {
+            width: 32,
+            height: 32,
+            ..Default::default()
+        };
+        let mut renderer = match Renderer::headless(config) {
+            Ok(renderer) => renderer,
+            Err(RenderError::NoAdapter) => {
+                eprintln!("skipping GPU test: no adapter");
+                return;
+            }
+            Err(other) => panic!("unexpected renderer error: {other}"),
+        };
+
+        let mut ctx = EngineContext::new("shaders");
+        let _world = spawn_world(&mut ctx).expect("the world builds");
+        let camera = ctx.scene.world.spawn_with(Camera::default());
+        renderer
+            .render_frame(&ctx.scene.world, &ctx.assets, camera)
+            .expect("the scene shaders compile and draw");
     }
 }

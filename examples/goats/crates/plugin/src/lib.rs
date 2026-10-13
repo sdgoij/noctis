@@ -505,7 +505,14 @@ mod tests {
                 .any(|(_, name)| name.as_str() == "Meadow"),
             "the meadow entity was spawned"
         );
-        assert!(app.context.assets.materials.handle("grass/tuft").is_some());
+        assert!(
+            app.context
+                .assets
+                .shader_materials
+                .handle("grass/tuft")
+                .is_some(),
+            "the meadow's shader material was registered"
+        );
         let mesh = app
             .context
             .assets

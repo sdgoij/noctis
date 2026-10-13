@@ -209,7 +209,8 @@ Single-player sandbox first; each milestone is playable.
    billboards whose atlases are generated at boot (the engine's billboard path,
    [`.notes/billboards.md`](billboards.md)); an armed mine in reach shows its
    "tell". The weather's clouds drift and its rain falls, both as billboards. The
-   grass does not sway yet. Reflections and the red damage pulse remain.
+   **meadow** leans on the wind through the shader seam (the sway weight rides in
+   the vertex colour). Reflections remain.
 7. **M6 — UI.** Main / settings / mods / keymap and the console. **Needs** the
    screen-UI seam.
 8. **M7 — mods.** Reuse the `mods` crate; re-expose a `goats`-style host API.
@@ -267,14 +268,12 @@ deliberately deferred — the systems come first.
 - **The grass tufts read as thin sticks**, not the original's two stacked cubes.
   The sizes and segments match `tuftField`, so this is a look/scale question (the
   0.14-unit cube against the view distance) rather than the field maths.
-- **No grass sway yet**: the weather's clouds and rain are in (M5), as are the
-  sky tint and the water surface, but the grass tufts do not sway in the wind —
-  the field is a rebuilt mesh, so the sway wants the shader seam.
-- **No red damage pulse yet**: the flash light, the camera knock and the bang's
-  fire / smoke / grit are in (M5), and an armed mine in reach shows its "tell" —
-  but a bang that hurts *this* goat does not yet tint the frame red. The crater
-  *is* drawn — it is a term in the ground's height, so the dished terrain mesh
-  shows it.
+- **The weather's look is in** (M5): clouds and rain as billboards, the sky tint,
+  the water surface, and the grass swaying on the wind through the shader seam.
+- **The bang's look is complete** (M5): the flash light, the camera knock, the
+  fire / smoke / grit billboards, the red damage pulse, and the mine "tell". The
+  crater *is* drawn — it is a term in the ground's height, so the dished terrain
+  mesh shows it.
 
 ## Open questions
 

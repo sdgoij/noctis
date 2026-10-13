@@ -21,10 +21,12 @@ stages (`render::draw_list`), and the GPU pipelines and bind groups drawn by the
 frame (`render::gpu::shader_seam`) — validated by a GPU test that renders a screen
 pass. The seam's first consumer is the goats sky (`examples/goats`), whose sun and
 colour animate through the **dynamic user block** (written in place, no rebuild).
-Both forms are now drawn by a real consumer: the goats sky (screen) and the water
-surface (mesh). **Not yet:** water reflections and the bang's fire/light. (The
-terrain uses the engine's vertex colour, not the seam.) The two components remain
-out of `ComponentKind::ALL` for now.
+Both forms are drawn by real consumers: the goats sky (screen) and the water
+surface (mesh), while the goats **meadow** uses the mesh form for its wind sway —
+the field is a rebuilt mesh, so a per-frame CPU lean would pay an upload, and the
+sway rides in the vertex colour instead. **Not yet:** water reflections and the
+bang's fire/light. (The terrain uses the engine's vertex colour, not the seam.)
+The two components remain out of `ComponentKind::ALL` for now.
 
 ## What the seam is
 

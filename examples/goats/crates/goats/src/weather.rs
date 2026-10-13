@@ -156,6 +156,11 @@ impl Weather {
         self.cloudiness
     }
 
+    /// The wind's sway strength (`windSway`), which the grass bends by.
+    pub fn sway(&self) -> f32 {
+        self.sway
+    }
+
     /// The eased rain strength, `0..=1` — the water table's level is a function of
     /// this and nothing else.
     pub fn rain(&self) -> f32 {

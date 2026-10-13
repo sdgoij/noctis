@@ -174,8 +174,6 @@ pub fn build_mesh(
     meadow: &Meadow,
     gx: f32,
     gz: f32,
-    sway: f32,
-    wind: f32,
     water: Option<&water::Water>,
     craters: &terrain::Craters,
 ) -> Mesh {
@@ -200,33 +198,34 @@ pub fn build_mesh(
             if d2 > cull2 {
                 continue;
             }
-            let phase =
-                mix(sway_seed(i, j), 16, 3_266_489_917u32 as i32, 16) as f32 / 4_294_967_296.0;
-            // The original uses `6.28`; `TAU` is the same phase to the eye.
-            let off = (sway * 3.0 + phase * std::f32::consts::TAU).sin() * 0.11 * wind;
-            // The cull is tested at the tuft's *drawn* position, as the original does.
+            // A tuft in water or under a crater is gone; the field is culled live.
             if let Some(water) = water
-                && water.submerged_at(tuft.x + off, tuft.z + off * 0.4)
+                && water.submerged_at(tuft.x, tuft.z)
             {
                 continue;
             }
-            // A tuft the ground swallowed is gone until the crater heals.
             if craters.covers(tuft.x, tuft.z) {
                 continue;
             }
             let gy = craters.surface(tuft.x, tuft.z);
+            // The wind sway rides in the vertex colour as a lean weight: the lower
+            // cube least, the upper most (the original's `off` and `off * 1.7`). The
+            // clock and the wind are the grass shader's (`GRASS_WGSL`), so the field
+            // sits at rest here and sways on the GPU instead of on every rebuild.
             push_cube(
                 &mut vertices,
                 &mut indices,
-                [tuft.x + off, gy + 0.06, tuft.z + off * 0.4],
+                [tuft.x, gy + 0.06, tuft.z],
                 [0.07, 0.08, 0.07],
+                SWAY_LOWER,
             );
             if d2 < DETAIL2 {
                 push_cube(
                     &mut vertices,
                     &mut indices,
-                    [tuft.x + off * 1.7, gy + 0.20, tuft.z + off * 0.7],
+                    [tuft.x, gy + 0.20, tuft.z],
                     [0.055, 0.08, 0.055],
+                    SWAY_UPPER,
                 );
             }
         }
@@ -276,16 +275,22 @@ fn x_seed(cx: i32, cz: i32) -> i32 {
         .wrapping_add(cz.wrapping_mul(12_345))
 }
 
-/// `tuftField`'s sway seed: `cx * 2654435761 + cz * 40503`.
-fn sway_seed(cx: i32, cz: i32) -> i32 {
-    cx.wrapping_mul(2_654_435_761u32 as i32)
-        .wrapping_add(cz.wrapping_mul(40_503))
-}
+/// The lean weight of a tuft's lower and upper cubes, in the vertex colour's red
+/// channel (the original's `off` and `off * 1.7`): the shader sways by the weight.
+const SWAY_LOWER: f32 = 1.0;
+const SWAY_UPPER: f32 = 1.7;
 
 /// Append an axis-aligned box centred at `center` with half-extents `half`: four
 /// vertices per face, wound counter-clockwise from outside so it is lit and culled
-/// like any other solid.
-fn push_cube(v: &mut Vec<Vertex>, indices: &mut Vec<u32>, center: [f32; 3], half: [f32; 3]) {
+/// like any other solid. `sway` is the cube's lean weight, written to the vertex
+/// colour's red channel.
+fn push_cube(
+    v: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    center: [f32; 3],
+    half: [f32; 3],
+    sway: f32,
+) {
     // Each face's outward normal and an in-face tangent; the bitangent is
     // `n × t`, and the corners are `±t ± bitangent` in CCW order.
     let faces = [
@@ -319,7 +324,7 @@ fn push_cube(v: &mut Vec<Vertex>, indices: &mut Vec<u32>, center: [f32; 3], half
                 normal,
                 uv: [0.0, 0.0],
                 tangent: [1.0, 0.0, 0.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
+                color: [sway, 0.0, 0.0, 1.0],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -423,18 +428,15 @@ mod tests {
         assert!(!meadow.is_eaten(tuft.cx, tuft.cz));
     }
 
+    /// The meadow mesh at the origin — the shape every mesh case here builds.
+    fn mesh(meadow: &Meadow, water: Option<&water::Water>, craters: &terrain::Craters) -> Mesh {
+        build_mesh(meadow, 0.0, 0.0, water, craters)
+    }
+
     #[test]
     fn the_mesh_holds_the_visible_tufts_on_the_ground() {
         let meadow = Meadow::default();
-        let mesh = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        );
+        let mesh = mesh(&meadow, None, &terrain::Craters::default());
         assert!(!mesh.vertices.is_empty(), "the spawn meadow has tufts");
         assert_eq!(mesh.indices.len() % 3, 0);
         assert!(mesh.bounds.is_some());
@@ -452,16 +454,18 @@ mod tests {
     }
 
     #[test]
+    fn the_upper_cube_carries_the_lean_weight() {
+        // The sway weight rides in the vertex colour's red channel: every vertex is a
+        // lower cube (1.0) or an upper one (1.7), so the shader leans the top more.
+        let mesh = mesh(&Meadow::default(), None, &terrain::Craters::default());
+        let weights: Vec<f32> = mesh.vertices.iter().map(|v| v.color[0]).collect();
+        assert!(weights.iter().all(|w| *w == SWAY_LOWER || *w == SWAY_UPPER));
+        assert!(weights.contains(&SWAY_LOWER) && weights.contains(&SWAY_UPPER));
+    }
+
+    #[test]
     fn every_cube_face_winds_outward() {
-        let mesh = build_mesh(
-            &Meadow::default(),
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        );
+        let mesh = mesh(&Meadow::default(), None, &terrain::Craters::default());
         for tri in mesh.indices.as_chunks::<3>().0 {
             let normal = mesh.vertices[tri[0] as usize].normal;
             let p = |k: usize| mesh.vertices[tri[k] as usize].position;
@@ -476,17 +480,9 @@ mod tests {
     #[test]
     fn an_eaten_tuft_leaves_the_mesh() {
         let mut meadow = Meadow::default();
-        let before = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        )
-        .vertices
-        .len();
+        let before = mesh(&meadow, None, &terrain::Craters::default())
+            .vertices
+            .len();
 
         // Eat every tuft inside a tight radius of the origin.
         let mut eaten = 0;
@@ -501,66 +497,34 @@ mod tests {
             }
         }
         assert!(eaten > 0, "there was something to eat");
-        let after = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        )
-        .vertices
-        .len();
+        let after = mesh(&meadow, None, &terrain::Craters::default())
+            .vertices
+            .len();
         assert!(after < before, "the meadow thinned: {before} -> {after}");
     }
 
     #[test]
     fn a_tuft_under_the_water_leaves_the_mesh() {
         let meadow = Meadow::default();
-        let dry = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        )
-        .vertices
-        .len();
+        let dry = mesh(&meadow, None, &terrain::Craters::default())
+            .vertices
+            .len();
 
         // A downpour fills the table; the tufts in the hollows go under.
         let mut flood = water::Water::new(&terrain::Craters::default());
         flood.update(1.0 / 60.0, 1.0);
-        let wet = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            Some(&flood),
-            &terrain::Craters::default(),
-        )
-        .vertices
-        .len();
+        let wet = mesh(&meadow, Some(&flood), &terrain::Craters::default())
+            .vertices
+            .len();
         assert!(wet < dry, "the flood hid some tufts: {dry} -> {wet}");
     }
 
     #[test]
     fn a_tuft_inside_a_crater_leaves_the_mesh() {
         let meadow = Meadow::default();
-        let whole = build_mesh(
-            &meadow,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            None,
-            &terrain::Craters::default(),
-        )
-        .vertices
-        .len();
+        let whole = mesh(&meadow, None, &terrain::Craters::default())
+            .vertices
+            .len();
 
         // Dig the hole over an actual tuft, so its dish swallows it.
         let mut tuft = None;
@@ -577,9 +541,7 @@ mod tests {
         craters.add(tuft.x, tuft.z, 1.0);
         assert!(craters.covers(tuft.x, tuft.z));
 
-        let holed = build_mesh(&meadow, 0.0, 0.0, 0.0, 0.0, None, &craters)
-            .vertices
-            .len();
+        let holed = mesh(&meadow, None, &craters).vertices.len();
         assert!(
             holed < whole,
             "the crater hid some tufts: {whole} -> {holed}"
