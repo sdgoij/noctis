@@ -154,6 +154,9 @@ pub struct ProjectInfo {
     /// The project's source or homepage URL, linked beside the authors.
     #[serde(default)]
     pub homepage: Option<String>,
+    /// The project's license, shown with the credit (`"MIT"`, `"Apache-2.0"`).
+    #[serde(default)]
+    pub license: Option<String>,
     /// Project-wide settings (`[project.settings]`).
     #[serde(default)]
     pub settings: Settings,
@@ -572,7 +575,7 @@ platform = "linux"
     fn parses_authors_and_homepage() {
         let manifest = ProjectManifest::from_toml(
             "[project]\nname = \"T\"\nauthors = [\"A\", \"B\"]\n\
-             homepage = \"https://example.com\"\n",
+             homepage = \"https://example.com\"\nlicense = \"MIT\"\n",
         )
         .unwrap();
         manifest.validate().unwrap();
@@ -581,11 +584,13 @@ platform = "linux"
             manifest.project.homepage.as_deref(),
             Some("https://example.com")
         );
+        assert_eq!(manifest.project.license.as_deref(), Some("MIT"));
 
-        // Both are optional: a project that credits nobody parses clean.
+        // All three are optional: a project that credits nobody parses clean.
         let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
         assert!(none.project.authors.is_empty());
         assert_eq!(none.project.homepage, None);
+        assert_eq!(none.project.license, None);
     }
 
     #[test]

@@ -402,10 +402,16 @@ struct WebEntry {
     label: String,
     /// The plugin, when the project carries Rust (`None` runs the stock client).
     plugin: Option<PluginLink>,
-    /// The project's authors, joined — empty means the page shows no credit.
+    /// The project version, shown beside its name.
+    version: Option<String>,
+    /// The one-line description.
+    description: Option<String>,
+    /// The project's authors, joined — empty means no `by` line.
     authors: String,
     /// The source/homepage URL to link the authors to, if the manifest names one.
     homepage: Option<String>,
+    /// The project's license ("MIT", …).
+    license: Option<String>,
 }
 
 /// A project's plugin, as the generated crate needs it.
@@ -435,8 +441,11 @@ fn web_entries(projects: &[Project]) -> Result<Vec<WebEntry>, String> {
             key,
             label: project.name().to_string(),
             plugin,
+            version: project.version().map(str::to_string),
+            description: project.description().map(str::to_string),
             authors: project.authors().join(", "),
             homepage: project.homepage().map(str::to_string),
+            license: project.license().map(str::to_string),
         });
     }
     Ok(entries)
@@ -667,27 +676,14 @@ fn web_lib(entries: &[WebEntry]) -> String {
 /// bundles, so a rebuild is not served from a stale cache.
 fn index_html(entries: &[WebEntry], version: &str) -> String {
     let mut options = String::new();
-    let mut credits = String::new();
+    let mut info = String::new();
     for entry in entries {
         options.push_str(&format!(
             "        <option value=\"{}\">{}</option>\n",
             entry.key,
             escape_html(&entry.label)
         ));
-        // A project whose manifest names its authors gets a credit line; the page
-        // renders it, linking the homepage when there is one.
-        if !entry.authors.is_empty() {
-            credits.push_str(&format!(
-                "        {}: {{ by: {}, url: {} }},\n",
-                json_string(&entry.key),
-                json_string(&entry.authors),
-                entry
-                    .homepage
-                    .as_deref()
-                    .map(json_string)
-                    .unwrap_or_else(|| "null".to_string()),
-            ));
-        }
+        info.push_str(&info_object(entry));
     }
     let mut page = String::new();
     page.push_str(PAGE_HEAD);
@@ -695,18 +691,41 @@ fn index_html(entries: &[WebEntry], version: &str) -> String {
     page.push_str(PAGE_MID);
     page.push_str(version);
     page.push_str(PAGE_SCRIPT_OPEN);
-    page.push_str(&credits);
+    page.push_str(&info);
     page.push_str(PAGE_SCRIPT);
     page.push_str(&entries[0].key);
     page.push_str(PAGE_TAIL);
     page
 }
 
-/// Opens the module script's credit table (the project's authors, keyed by the
-/// bundle key), which the loop above fills.
+/// One project's display data, as a JS object literal for the page's info block.
+/// Every field is present; the ones the manifest does not name are `null`, and
+/// the page skips them.
+fn info_object(entry: &WebEntry) -> String {
+    let field = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string())
+    };
+    format!(
+        "        {}: {{ name: {}, version: {}, description: {}, by: {}, \
+         url: {}, license: {} }},\n",
+        json_string(&entry.key),
+        json_string(&entry.label),
+        field(&entry.version),
+        field(&entry.description),
+        json_string(&entry.authors),
+        field(&entry.homepage),
+        field(&entry.license),
+    )
+}
+
+/// Opens the module script's info table (each project's manifest display data,
+/// keyed by the bundle key), which the loop in `index_html` fills.
 const PAGE_SCRIPT_OPEN: &str = r#"";
-      // The authors a project's manifest names, so the page can credit them.
-      const CREDITS = {
+      // Each project's display info, from its manifest, for the page's info block.
+      const INFO = {
 "#;
 
 /// The generated page, split around the project list, the version, and the
@@ -721,7 +740,7 @@ const PAGE_HEAD: &str = r#"<!doctype html>
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; background: #0b0d10; color: #8a93a0;
         font: 13px/1.4 ui-monospace, monospace; display: grid;
-        grid-template-rows: auto 1fr; }
+        grid-template-rows: auto 1fr auto; }
       header { display: flex; gap: 12px; align-items: center; padding: 10px 16px;
         border-bottom: 1px solid #1c2128; }
       label { display: inline-flex; gap: 6px; align-items: center; }
@@ -732,9 +751,14 @@ const PAGE_HEAD: &str = r#"<!doctype html>
         max-height: 100%; background: #000; border-radius: 8px;
         box-shadow: 0 8px 40px rgb(0 0 0 / 60%); outline: none; }
       #noctis-canvas:focus-visible { box-shadow: 0 8px 40px rgb(0 0 0 / 60%), 0 0 0 2px #4c8dff; }
-      #credit { margin-left: auto; }
-      #credit a { color: #4c8dff; text-decoration: none; }
-      #credit a:hover { text-decoration: underline; }
+      footer { padding: 0 16px 20px; }
+      footer .info { width: min(100%, 1280px); margin: 0 auto; }
+      footer h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: #c8d0da; }
+      footer .ver { color: #6b7480; font-weight: 400; margin-left: 8px; }
+      footer p { margin: 3px 0; }
+      footer .engine { margin-top: 10px; color: #5b6470; }
+      footer a { color: #4c8dff; text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -745,9 +769,9 @@ const PAGE_HEAD: &str = r#"<!doctype html>
 
 const PAGE_MID: &str = r#"        </select>
       </label>
-      <span id="credit"></span>
     </header>
     <main><canvas id="noctis-canvas" tabindex="0"></canvas></main>
+    <footer id="info"></footer>
 
     <!-- Slag (the script engine), compiled to wasm, imports its clock from a
          module named `env`; this map points it at the shim alongside. -->
@@ -759,6 +783,7 @@ const PAGE_MID: &str = r#"        </select>
       const V = ""#;
 
 const PAGE_SCRIPT: &str = r#"      };
+      const NOCTIS_URL = "https://github.com/sdgoij/noctis";
       // Everything is versioned by `V` so a rebuild is never served from cache.
       const { default: init, start } = await import("./web.js?v=" + V);
       const select = document.getElementById("project");
@@ -772,23 +797,58 @@ const PAGE_TAIL: &str = r#"";
       if ([...select.options].some((o) => o.value === picked)) select.value = picked;
       select.addEventListener("change", () => { location.search = "?p=" + select.value; });
 
-      // Credit the picked project's authors, when its manifest names them.
+      // Fill the info block: the picked project's manifest data, then what runs it.
       {
-        const credit = CREDITS[select.value];
-        if (credit) {
-          const span = document.getElementById("credit");
-          span.textContent = "by ";
-          if (credit.url) {
+        const info = INFO[select.value] ?? {};
+        const block = document.createElement("div");
+        block.className = "info";
+        if (info.name) document.title = info.name;
+
+        const heading = document.createElement("h1");
+        heading.append(document.createTextNode(info.name ?? "Noctis"));
+        if (info.version) {
+          const ver = document.createElement("span");
+          ver.className = "ver";
+          ver.textContent = "v" + info.version;
+          heading.append(ver);
+        }
+        block.append(heading);
+
+        if (info.description) {
+          const line = document.createElement("p");
+          line.textContent = info.description;
+          block.append(line);
+        }
+
+        if (info.by || info.url) {
+          const line = document.createElement("p");
+          if (info.by) line.append(document.createTextNode("by "));
+          if (info.url) {
             const link = document.createElement("a");
-            link.href = credit.url;
+            link.href = info.url;
             link.target = "_blank";
             link.rel = "noopener";
-            link.textContent = credit.by;
-            span.append(link);
+            link.textContent = info.by || info.url;
+            line.append(link);
           } else {
-            span.append(document.createTextNode(credit.by));
+            line.append(document.createTextNode(info.by));
           }
+          if (info.license) line.append(document.createTextNode("  ·  " + info.license));
+          block.append(line);
         }
+
+        const engine = document.createElement("p");
+        engine.className = "engine";
+        engine.append(document.createTextNode("Built with "));
+        const noctis = document.createElement("a");
+        noctis.href = NOCTIS_URL;
+        noctis.target = "_blank";
+        noctis.rel = "noopener";
+        noctis.textContent = "Noctis";
+        engine.append(noctis);
+        block.append(engine);
+
+        document.getElementById("info").append(block);
       }
 
       await init(new URL("./web_bg.wasm?v=" + V, import.meta.url));
@@ -879,16 +939,22 @@ mod tests {
                 dependency: dependency.to_string(),
                 call: call.to_string(),
             }),
+            version: None,
+            description: None,
             authors: String::new(),
             homepage: None,
+            license: None,
         }
     }
 
-    /// A web entry whose manifest credits its authors.
-    fn credited_entry(key: &str, label: &str, authors: &str, homepage: Option<&str>) -> WebEntry {
+    /// A web entry whose manifest carries a full credit.
+    fn credited_entry(key: &str, label: &str) -> WebEntry {
         WebEntry {
-            authors: authors.to_string(),
-            homepage: homepage.map(str::to_string),
+            version: Some("0.2.0".to_string()),
+            description: Some("A 2D platformer, ported to a Noctis window.".to_string()),
+            authors: "Dave Eddy (bahamas10)".to_string(),
+            homepage: Some("https://github.com/bahamas10/reverie-amidst-ruins".to_string()),
+            license: Some("MIT".to_string()),
             ..web_entry(key, label, None)
         }
     }
@@ -904,12 +970,7 @@ mod tests {
                     "my_game::noctis_plugin",
                 )),
             ),
-            credited_entry(
-                "reverie",
-                "Reverie Amidst Ruins",
-                "Dave Eddy (bahamas10)",
-                Some("https://github.com/bahamas10/reverie-amidst-ruins"),
-            ),
+            credited_entry("reverie", "Reverie Amidst Ruins"),
         ]
     }
 
@@ -980,23 +1041,28 @@ mod tests {
     }
 
     #[test]
-    fn the_page_credits_a_projects_authors() {
+    fn the_page_shows_each_projects_info() {
         let html = index_html(&web_fixtures(), "deadbeef");
-        // The authors and their link ride in the page's credit table...
+        // The full credit rides in the page's info table...
         assert!(
             html.contains(
-                r#""reverie": { by: "Dave Eddy (bahamas10)", url: "https://github.com/bahamas10/reverie-amidst-ruins" },"#
+                r#""reverie": { name: "Reverie Amidst Ruins", version: "0.2.0", description: "A 2D platformer, ported to a Noctis window.", by: "Dave Eddy (bahamas10)", url: "https://github.com/bahamas10/reverie-amidst-ruins", license: "MIT" },"#
             ),
             "{html}"
         );
-        // ...which the header span renders, and a project with no authors adds none.
-        assert!(html.contains(r#"<span id="credit"></span>"#), "{html}");
-        assert!(html.contains("const CREDITS = {"), "{html}");
+        // ...a project with no credit still gets a name, its other fields null...
         assert!(
-            html.contains("document.getElementById(\"credit\")"),
+            html.contains(r#""showcase": { name: "Noctis Showcase", version: null,"#),
             "{html}"
         );
-        assert!(!html.contains(r#""showcase": { by"#), "{html}");
+        // ...and the info block renders it, beside the engine's own credit.
+        assert!(html.contains(r#"<footer id="info"></footer>"#), "{html}");
+        assert!(html.contains("const INFO = {"), "{html}");
+        assert!(
+            html.contains(r#"document.getElementById("info")"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"noctis.textContent = "Noctis""#), "{html}");
     }
 
     #[test]

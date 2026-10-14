@@ -202,6 +202,21 @@ impl Project {
         self.manifest.project.homepage.as_deref()
     }
 
+    /// The project version (`[project].version`).
+    pub fn version(&self) -> Option<&str> {
+        self.manifest.project.version.as_deref()
+    }
+
+    /// A one-line description (`[project].description`).
+    pub fn description(&self) -> Option<&str> {
+        self.manifest.project.description.as_deref()
+    }
+
+    /// The project license (`[project].license`).
+    pub fn license(&self) -> Option<&str> {
+        self.manifest.project.license.as_deref()
+    }
+
     /// The default presentation mode for new scenes.
     pub fn mode(&self) -> SceneMode {
         self.manifest.project.settings.mode

@@ -49,11 +49,13 @@ may organise the tree however they like. The conventions exist so drag & drop an
 name = "MyGame"
 version = "0.1.0"
 description = "A small platformer."
-# Optional credit, shown by the browser page a wasm build generates: the authors,
-# linked to the homepage, so a playable build links back (a port credits its
-# original here).
+# Optional credit, shown by the browser page a wasm build generates: its info
+# block lists the name, version and description, links the authors to the
+# homepage, and prints the license, so a playable build links back (a port
+# credits its original here).
 authors = ["Whoever made it"]
 homepage = "https://example.com/mygame"
+license = "MIT"
 
 [project.settings]
 default_scene = "scenes/main.scene.json"
