@@ -147,6 +147,13 @@ pub struct ProjectInfo {
     /// A one-line description.
     #[serde(default)]
     pub description: Option<String>,
+    /// The project's authors, for a credit line (the web page shows them). Empty
+    /// means no credit.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// The project's source or homepage URL, linked beside the authors.
+    #[serde(default)]
+    pub homepage: Option<String>,
     /// Project-wide settings (`[project.settings]`).
     #[serde(default)]
     pub settings: Settings,
@@ -559,6 +566,26 @@ platform = "linux"
         // Absent, it defaults to the identity exposure.
         let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
         assert!((none.render.exposure - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_authors_and_homepage() {
+        let manifest = ProjectManifest::from_toml(
+            "[project]\nname = \"T\"\nauthors = [\"A\", \"B\"]\n\
+             homepage = \"https://example.com\"\n",
+        )
+        .unwrap();
+        manifest.validate().unwrap();
+        assert_eq!(manifest.project.authors, ["A", "B"]);
+        assert_eq!(
+            manifest.project.homepage.as_deref(),
+            Some("https://example.com")
+        );
+
+        // Both are optional: a project that credits nobody parses clean.
+        let none = ProjectManifest::from_toml("[project]\nname = \"T\"\n").unwrap();
+        assert!(none.project.authors.is_empty());
+        assert_eq!(none.project.homepage, None);
     }
 
     #[test]

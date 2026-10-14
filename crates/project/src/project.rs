@@ -192,6 +192,16 @@ impl Project {
         &self.manifest.project.name
     }
 
+    /// The project's authors (`[project].authors`), for a credit line.
+    pub fn authors(&self) -> &[String] {
+        &self.manifest.project.authors
+    }
+
+    /// The project's source or homepage URL (`[project].homepage`).
+    pub fn homepage(&self) -> Option<&str> {
+        self.manifest.project.homepage.as_deref()
+    }
+
     /// The default presentation mode for new scenes.
     pub fn mode(&self) -> SceneMode {
         self.manifest.project.settings.mode

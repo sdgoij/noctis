@@ -10,6 +10,10 @@
 name = "Reverie Amidst Ruins"
 version = "0.2.0"
 description = "A 2D platformer, ported from the terminal to a Noctis window."
+# The original game's author and source — the web page this is built into shows
+# them as a credit, so a playable build links back.
+authors = ["Dave Eddy (bahamas10)"]
+homepage = "https://github.com/bahamas10/reverie-amidst-ruins"
 
 [project.settings]
 # The plugin renders its own frame; the scene is only there to be loaded.
