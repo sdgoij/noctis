@@ -199,12 +199,36 @@ fn skin_matrices(
         .collect()
 }
 
+/// What [`extract_draw_list_filtered`] leaves out.
+///
+/// The mirror pass renders the scene from the surface's own reflection; the
+/// surface must not appear in it, so it names itself here
+/// (`.notes/reflections.md`, tier 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExtractFilter {
+    /// An entity that is never extracted.
+    pub exclude: Option<Entity>,
+}
+
 /// Extract, cull, and sort every drawable in `world`.
 pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraView) -> DrawList {
+    extract_draw_list_filtered(world, assets, view, ExtractFilter::default())
+}
+
+/// As [`extract_draw_list`], but leaving out whatever `filter` names.
+pub fn extract_draw_list_filtered(
+    world: &World,
+    assets: &AssetRegistry,
+    view: &CameraView,
+    filter: ExtractFilter,
+) -> DrawList {
     let frustum = Frustum::from_view_projection(&view.view_projection);
     let mut list = DrawList::default();
 
     for (entity, renderer) in world.query::<MeshRenderer>() {
+        if filter.exclude == Some(entity) {
+            continue;
+        }
         if renderer.mesh.is_none() {
             continue;
         }
@@ -251,6 +275,9 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
 
     // Skinned meshes: the same, plus each vertex's weighted joint matrices.
     for (entity, renderer) in world.query::<SkinnedMeshRenderer>() {
+        if filter.exclude == Some(entity) {
+            continue;
+        }
         if renderer.mesh.is_none() {
             continue;
         }
@@ -312,6 +339,9 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
     // Screen passes first (a sky runs before the scene), then custom-shader meshes,
     // culled and sorted exactly as the PBR items are.
     for (entity, screen) in world.query::<ScreenShaderMaterial>() {
+        if filter.exclude == Some(entity) {
+            continue;
+        }
         if screen.material.is_none() || !is_renderable(world, entity) {
             continue;
         }
@@ -325,6 +355,9 @@ pub fn extract_draw_list(world: &World, assets: &AssetRegistry, view: &CameraVie
     list.screen.sort_by_key(|item| item.entity.index());
 
     for (entity, renderer) in world.query::<ShaderMeshRenderer>() {
+        if filter.exclude == Some(entity) {
+            continue;
+        }
         if renderer.mesh.is_none() {
             continue;
         }
@@ -702,5 +735,76 @@ mod tests {
         assert_eq!(list.screen.len(), 2);
         assert_eq!(list.screen[0].entity, first);
         assert_eq!(list.screen[1].entity, second);
+    }
+
+    #[test]
+    fn an_excluded_renderable_is_left_out() {
+        let (mut world, registry, camera) = setup();
+        let water = spawn_renderable(&mut world, &registry, vec3(0.0, 0.0, -5.0));
+        let keep = spawn_renderable(&mut world, &registry, vec3(0.0, 0.0, -8.0));
+        let view = camera_view(&world, camera);
+        assert_eq!(extract_draw_list(&world, &registry, &view).opaque.len(), 2);
+
+        let list = extract_draw_list_filtered(
+            &world,
+            &registry,
+            &view,
+            ExtractFilter {
+                exclude: Some(water),
+            },
+        );
+        assert_eq!(list.opaque.len(), 1);
+        assert_eq!(list.opaque[0].entity, keep);
+        // An exclusion is not a cull: the entity is simply never considered.
+        assert_eq!(list.culled, 0);
+    }
+
+    #[test]
+    fn an_excluded_shader_mesh_is_left_out() {
+        // The water's own case: its shader mesh must not render into its reflection.
+        let (mut world, registry, camera) = setup_shader();
+        let water = spawn_shader_mesh(&mut world, &registry, vec3(0.0, 0.0, -5.0), "opaque");
+        let keep = spawn_shader_mesh(&mut world, &registry, vec3(0.0, 0.0, -8.0), "opaque");
+        let view = camera_view(&world, camera);
+
+        let list = extract_draw_list_filtered(
+            &world,
+            &registry,
+            &view,
+            ExtractFilter {
+                exclude: Some(water),
+            },
+        );
+        assert_eq!(list.shader_opaque.len(), 1);
+        assert_eq!(list.shader_opaque[0].entity, keep);
+    }
+
+    #[test]
+    fn an_excluded_screen_pass_is_left_out() {
+        let (mut world, registry, camera) = setup_shader();
+        let sky = world.spawn();
+        world.insert(
+            sky,
+            ScreenShaderMaterial {
+                material: registry.shader_materials.handle("opaque").unwrap(),
+            },
+        );
+        let keep = world.spawn();
+        world.insert(
+            keep,
+            ScreenShaderMaterial {
+                material: registry.shader_materials.handle("blend").unwrap(),
+            },
+        );
+        let view = camera_view(&world, camera);
+
+        let list = extract_draw_list_filtered(
+            &world,
+            &registry,
+            &view,
+            ExtractFilter { exclude: Some(sky) },
+        );
+        assert_eq!(list.screen.len(), 1);
+        assert_eq!(list.screen[0].entity, keep);
     }
 }

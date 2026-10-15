@@ -64,7 +64,9 @@ pub use billboard::BillboardVertex;
 pub use camera::{
     CameraUniform, CameraView, extract_camera, first_active_camera, projection_matrix,
 };
-pub use draw_list::{DrawItem, DrawList, extract_draw_list};
+pub use draw_list::{
+    DrawItem, DrawList, ExtractFilter, extract_draw_list, extract_draw_list_filtered,
+};
 pub use error::RenderError;
 pub use frustum::{Frustum, Plane, transform_aabb};
 pub use gizmo::{GizmoAxis, GizmoGeometry, GizmoMode, GizmoVertex, build_gizmo};
