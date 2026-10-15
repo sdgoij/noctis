@@ -60,6 +60,26 @@ pub struct ShadowUniform {
     pub direction: [f32; 4],
 }
 
+/// The reflection sampler's parameters (group 0, binding 12 of the PBR pass and
+/// of every seam shader).
+///
+/// A receiver's fragment samples the reflection at its own screen position, so it
+/// needs the screen size to turn `@builtin(position)` into a `0..1` coordinate.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable, PartialEq)]
+pub struct ReflectionUniform {
+    /// `xy` = the frame's size in pixels, `z` = the clip bias, `w` = enabled.
+    pub params: [f32; 4],
+}
+
+impl Default for ReflectionUniform {
+    fn default() -> Self {
+        Self {
+            params: [1.0, 1.0, 0.0, 0.0],
+        }
+    }
+}
+
 /// A single matrix used by the depth-only and gizmo passes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable, PartialEq)]
@@ -156,6 +176,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<ViewUniform>(), 64);
         assert_eq!(std::mem::size_of::<SsaoUniform>(), 416);
         assert_eq!(std::mem::size_of::<TonemapUniform>(), 16);
+        assert_eq!(std::mem::size_of::<ReflectionUniform>(), 16);
     }
 
     #[test]

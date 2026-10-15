@@ -83,6 +83,28 @@ pub fn reflect_view(view: &CameraView, point: Vec3, normal: Vec3) -> CameraView 
     }
 }
 
+/// The view the reflection pass renders from: `view` mirrored about the plane,
+/// with its near plane tilted onto the surface so the world beneath it is
+/// clipped away.
+///
+/// The plane the pass cuts at is the component's [`clip_point`](PlanarReflection::clip_point),
+/// a hair above the surface, so a surface never reflects its own edge. The tilt
+/// rewrites only the projection's depth row, so a point *on* the plane still
+/// projects to the pixel the primary view puts it at — which is what lets the
+/// receiver sample the reflection at its own position.
+pub fn reflection_view(view: &CameraView, reflection: &PlanarReflection) -> CameraView {
+    let mirrored = reflect_view(view, reflection.point, reflection.normal);
+    let clip = plane_in_view(&mirrored, reflection.clip_point(), reflection.normal);
+    let projection = oblique_near_plane(&mirrored.projection, clip);
+    let view_projection = projection * mirrored.view;
+    CameraView {
+        projection,
+        view_projection,
+        inverse_view_projection: math::inverse(&view_projection).unwrap_or_else(math::identity),
+        ..mirrored
+    }
+}
+
 /// The one reflection a frame renders: the first enabled [`PlanarReflection`] in
 /// entity order, with the entity carrying it — the *receiver*, which its own pass
 /// must not draw.
@@ -476,5 +498,66 @@ mod tests {
             vec3(1.5, 0.0, 0.0),
             1e-6
         ));
+    }
+
+    /// A camera above the water looking down into it.
+    fn camera_looking_down() -> CameraView {
+        let world = math::translation(vec3(0.0, 4.0, 0.0)) * math::rotation_x(-1.2);
+        camera_view(&Camera::default(), &world, 1280, 720)
+    }
+
+    #[test]
+    fn the_reflection_view_cuts_the_world_at_the_surface() {
+        let view = camera_looking_down();
+        let reflection = PlanarReflection {
+            clip_bias: 0.0,
+            ..PlanarReflection::water(0.0)
+        };
+        let mirrored = reflection_view(&view, &reflection);
+
+        // The mirrored camera is under the water, looking up out of it.
+        assert!(mirrored.eye.y < 0.0, "eye {:?}", mirrored.eye);
+        assert!(mirrored.forward.y > 0.0, "forward {:?}", mirrored.forward);
+
+        // A point on the surface lies on the tilted near plane...
+        let on = vec3(0.5, 0.0, -2.0);
+        assert!(
+            approx_eq(depth(&mirrored.view_projection, on), 0.0, 1e-4),
+            "{on:?}"
+        );
+        // ... and still lands at the pixel the primary view puts it at, because
+        // the tilt rewrites only the depth row.
+        let a = view.view_projection * vec4(on.x, on.y, on.z, 1.0);
+        let b = mirrored.view_projection * vec4(on.x, on.y, on.z, 1.0);
+        assert!(
+            approx_eq(a.x / a.w, b.x / b.w, 1e-4),
+            "{} vs {}",
+            a.x / a.w,
+            b.x / b.w
+        );
+        assert!(
+            approx_eq(a.y / a.w, b.y / b.w, 1e-4),
+            "{} vs {}",
+            a.y / a.w,
+            b.y / b.w
+        );
+
+        // Above the surface is kept; below it is behind the near plane.
+        let above = depth(&mirrored.view_projection, vec3(0.0, 1.5, -2.0));
+        let below = depth(&mirrored.view_projection, vec3(0.0, -1.0, -2.0));
+        assert!(above > 0.0 && above <= 1.0, "above {above}");
+        assert!(below < 0.0, "below {below}");
+    }
+
+    #[test]
+    fn the_clip_bias_raises_the_plane_the_pass_cuts_at() {
+        let view = camera_looking_down();
+        let biased = reflection_view(&view, &PlanarReflection::water(0.0));
+
+        // The surface itself is now just behind the near plane — the bias is what
+        // keeps a surface from reflecting its own edge — and a point above the
+        // bias is kept.
+        assert!(depth(&biased.view_projection, vec3(0.0, 0.0, -2.0)) < 0.0);
+        assert!(depth(&biased.view_projection, vec3(0.0, 0.05, -2.0)) > 0.0);
     }
 }

@@ -14,6 +14,7 @@
 
 pub mod ibl_gpu;
 pub mod pipelines;
+pub mod reflection;
 pub mod resources;
 pub mod shader_seam;
 pub mod shadow;

@@ -24,8 +24,11 @@ colour animate through the **dynamic user block** (written in place, no rebuild)
 Both forms are drawn by real consumers: the goats sky (screen) and the water
 surface (mesh), while the goats **meadow** uses the mesh form for its wind sway —
 the field is a rebuilt mesh, so a per-frame CPU lean would pay an upload, and the
-sway rides in the vertex colour instead. **Not yet:** water reflections and the
-bang's fire/light. (The terrain uses the engine's vertex colour, not the seam.)
+sway rides in the vertex colour instead. Water reflections reached the seam with the
+**planar reflection pass** ([`.notes/reflections.md`](reflections.md)): group 0 now
+carries the reflection texture, its sampler and its parameters at bindings 10–12,
+so a mesh shader can sample the mirrored scene. **Not yet:** the bang's
+fire/light. (The terrain uses the engine's vertex colour, not the seam.)
 The two components remain out of `ComponentKind::ALL` for now.
 
 ## What the seam is
@@ -130,8 +133,9 @@ of it, in the order goats.md gives:
    IBL exactly as the PBR pass does (the prelude exposes the same inputs);
 3. **water** — one translucent `ShaderMaterial` over the water table's plane.
 
-Reflections (sky/ground/mirror) are a later tier and need render targets the
-seam does not provide yet — see goats.md's capability map.
+Reflections (sky/ground/mirror) ride the seam as of the planar reflection pass —
+the mirror samples group 0's reflection binding ([`.notes/reflections.md`](reflections.md));
+see goats.md's capability map.
 
 ## Tests
 

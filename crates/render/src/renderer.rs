@@ -2,46 +2,56 @@
 //!
 //! [`Renderer::headless`] builds a GPU device without a window or surface and
 //! renders into offscreen textures. A frame runs the following passes, in order:
+//! A frame runs the following passes, in order:
 //!
 //! 1. **Shadow pass** — the primary shadow-casting directional/spot light
 //!    renders opaque geometry into a depth32float shadow map.
-//! 2. **Depth prepass** — opaque geometry into the camera depth buffer, giving
+//! 2. **Planar reflection** — when an entity carries a
+//!    [`PlanarReflection`](ecs::components::PlanarReflection), the scene is
+//!    rendered again from the camera that entity's plane mirrors the primary one
+//!    into, into an offscreen target the receiver's shader samples
+//!    (`.notes/reflections.md`, tier 2).
+//! 3. **Depth prepass** — opaque geometry into the camera depth buffer, giving
 //!    SSAO a full-depth source and the forward pass free early-z.
-//! 3. **SSAO** — reconstructs view-space positions from depth and writes the
+//! 4. **SSAO** — reconstructs view-space positions from depth and writes the
 //!    ambient occlusion term.
-//! 4. **Forward PBR** — opaque then transparent draws into the HDR target using
+//! 5. **Forward PBR** — opaque then transparent draws into the HDR target using
 //!    the Cook–Torrance GGX shader with IBL, PCF shadows and SSAO.
-//! 5. **Gizmo** — optional editor gizmo lines and triangles.
-//! 6. **Text** — world-space labels, depth-tested or drawn on top
+//! 6. **Gizmo** — optional editor gizmo lines and triangles.
+//! 7. **Text** — world-space labels, depth-tested or drawn on top
 //!    ([`ecs::components::Text::depth_test`]).
-//! 7. **Billboards** — camera-facing sprite quads, opaque, alpha or additive
+//! 8. **Billboards** — camera-facing sprite quads, opaque, alpha or additive
 //!    ([`ecs::components::Billboard`], `.notes/billboards.md`).
-//! 8. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
-//! 9. **Present** — the LDR target is blitted to the surface, or copied into the
-//!    readback buffer for a headless [`Frame`].
+//! 9. **Tonemap** — the HDR target is resolved to an sRGB-encoded LDR target.
+//! 10. **Present** — the LDR target is blitted to the surface, or copied into the
+//!     readback buffer for a headless [`Frame`].
 //!
 //! ## MSAA
 //!
-//! With [`RendererConfig::sample_count`] > 1 the forward passes (4–6) render into
+//! With [`RendererConfig::sample_count`] > 1 the forward passes (5–7) render into
 //! multisampled colour and depth targets that **resolve into the single-sampled
 //! HDR target**, so the resolve averages linear radiance before the tonemap —
 //! resolving the tonemapped colour instead would darken every edge.
 //!
-//! The depth prepass (2) stays single-sampled, because a screen-space pass cannot
+//! The depth prepass (3) stays single-sampled, because a screen-space pass cannot
 //! sample a multisampled depth texture; the forward passes carry their own
 //! multisampled depth, populated by the opaque pipeline. Since SSAO is then the
 //! prepass depth's only reader, under MSAA that target is allocated at **half
 //! resolution** (see [`camera_depth_size`](crate::gpu::targets::camera_depth_size)),
 //! quartering the prepass's fragment work. Sample counts the device cannot do for
 //! both the HDR colour and depth formats are rejected up front (see
-//! [`pick_sample_count`]), since MSAA is a format capability.
+//! [`pick_sample_count`]), since MSAA is a format capability. The reflection pass
+//! takes the frame's sample count too, with its own multisampled depth.
 //!
 //! If the machine has no usable adapter, [`Renderer::headless`] returns
 //! [`RenderError::NoAdapter`]; callers (and tests) should skip rendering rather
 //! than fail.
 
 use crate::camera::{CameraView, extract_camera};
-use crate::draw_list::{DrawItem, ScreenDraw, ShaderDraw, extract_draw_list};
+use crate::draw_list::{
+    DrawItem, DrawList, ExtractFilter, ScreenDraw, ShaderDraw, extract_draw_list,
+    extract_draw_list_filtered,
+};
 use crate::error::RenderError;
 use crate::gizmo::{GizmoGeometry, GizmoVertex};
 use crate::gpu::ibl_gpu::IblGpu;
@@ -49,16 +59,18 @@ use crate::gpu::pipelines::{
     BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, SkinBindings, create_layouts,
     create_pipelines, create_present_pipeline, pick_surface_format,
 };
+use crate::gpu::reflection::Reflection;
 use crate::gpu::resources::ResourceCache;
 use crate::gpu::shader_seam::ShaderSeam;
 use crate::gpu::shadow::ShadowResources;
 use crate::gpu::targets::RenderTargets;
 use crate::gpu::uniforms::{
-    FrameUniform, ObjectUniform, ShadowUniform, SsaoUniform, TonemapUniform, ViewUniform,
-    ssao_kernel,
+    FrameUniform, ObjectUniform, ReflectionUniform, ShadowUniform, SsaoUniform, TonemapUniform,
+    ViewUniform, ssao_kernel,
 };
 use crate::ibl::{IblConfig, IblData};
 use crate::lights::{LightsUniform, MAX_LIGHTS, extract_lights, primary_shadow_light};
+use crate::reflection::{primary_planar_reflection, reflection_view};
 use crate::tonemap::Tonemap;
 use ecs::assets::{AssetId, AssetRegistry, HdrTexture, Material};
 use ecs::components::{Billboard, GlobalTransform, LightKind, LocalTransform, Text};
@@ -207,6 +219,15 @@ struct PreparedScreenDraw {
     user: wgpu::BindGroup,
 }
 
+/// One draw list, prepared for recording: mesh buffers, object slots, pipelines
+/// and bind groups, grouped exactly as [`DrawList`] is.
+struct PreparedLists {
+    opaque: Vec<PreparedDraw>,
+    transparent: Vec<PreparedDraw>,
+    shader_opaque: Vec<PreparedShaderDraw>,
+    shader_transparent: Vec<PreparedShaderDraw>,
+}
+
 /// A font atlas uploaded to the GPU, with the CPU atlas kept for layout.
 struct TextAtlas {
     _texture: wgpu::Texture,
@@ -268,6 +289,9 @@ pub struct Renderer {
     billboard_batches: Vec<BillboardBatch>,
     /// Per-texture billboard bind groups, cached for the renderer's life.
     billboard_textures: HashMap<AssetId, wgpu::BindGroup>,
+    /// The planar reflection pass's target, group 0 and sampler
+    /// (`.notes/reflections.md`, tier 2).
+    reflection: Reflection,
     ambient: [f32; 4],
     exposure: f32,
     tonemap_mode: Tonemap,
@@ -370,13 +394,27 @@ impl Renderer {
         let layouts = create_layouts(&device);
         let pipelines = create_pipelines(&device, &layouts, config.sample_count);
         let ibl = IblGpu::create(&device, &queue, &IblData::neutral());
+        let reflection = Reflection::new(
+            &device,
+            &queue,
+            &layouts,
+            &ibl,
+            &shadow.view,
+            targets.width,
+            targets.height,
+            config.sample_count,
+        );
         let frame = FrameBindings::new(
             &device,
             &layouts.frame,
             &ibl,
             &shadow.view,
             &targets.ssao.view,
+            reflection.color_view(),
+            reflection.sampler(),
         );
+        // No reflection yet: disabled until a frame finds a `PlanarReflection`.
+        frame.write_reflection(&queue, &ReflectionUniform::default());
         let objects = ObjectBindings::new(&device, &layouts.object, 256);
         let skins = SkinBindings::new(&device, &layouts.skin, 16);
         let cache = ResourceCache::new(&device, &queue);
@@ -524,6 +562,7 @@ impl Renderer {
             ssao_bind_group,
             tonemap_buffer,
             tonemap_bind_group,
+            reflection,
             gizmo_view_buffer,
             gizmo_view_bind_group,
             gizmo_lines: None,
@@ -595,14 +634,12 @@ impl Renderer {
     pub fn set_environment(&mut self, hdr: &HdrTexture, config: IblConfig) {
         let data = IblData::generate(hdr, config);
         self.ibl = IblGpu::create(&self.device, &self.queue, &data);
-        // The frame bind group references the IBL views, so rebuild it.
-        self.frame = FrameBindings::new(
-            &self.device,
-            &self.layouts.frame,
-            &self.ibl,
-            &self.shadow.view,
-            &self.targets.ssao.view,
-        );
+        // Both group 0s reference the IBL views, so both are rebuilt.
+        self.reflection
+            .set_ibl(&self.device, &self.layouts, &self.ibl, &self.shadow.view);
+        self.frame = self.rebuild_frame_bindings();
+        self.frame
+            .write_reflection(&self.queue, &ReflectionUniform::default());
     }
 
     /// Replace the current editor gizmo with `geometry`, placed by `transform`.
@@ -968,6 +1005,25 @@ impl Renderer {
         self.build_text_batches(world, assets, &view);
         self.build_billboard_batches(world, assets, &view);
 
+        // ---- the planar reflection (`.notes/reflections.md`, tier 2) --------
+        // One reflection per frame. It gets its own draw list, culled against the
+        // mirrored view, because what a surface reflects is mostly what the primary
+        // camera cannot see; the receiver is left out of its own pass.
+        let primary = primary_planar_reflection(world);
+        let mirrored = primary
+            .as_ref()
+            .map(|(_, plane)| reflection_view(&view, plane));
+        let reflected_list = mirrored.as_ref().map(|mirrored| {
+            extract_draw_list_filtered(
+                world,
+                assets,
+                mirrored,
+                ExtractFilter {
+                    exclude: primary.as_ref().map(|(entity, _)| *entity),
+                },
+            )
+        });
+
         // ---- shadow matrix -------------------------------------------------
         let (shadow_uniform, shadow_matrix, has_shadow) = self.build_shadow(&lights, &draw_list);
 
@@ -1032,43 +1088,54 @@ impl Renderer {
             bytemuck::bytes_of(&tonemap_uniform),
         );
 
+        // The reflection target follows the component's `resolution`. When it is
+        // re-created its view changes, so group 0 — which holds it — is rebuilt.
+        if let Some((_, plane)) = &primary
+            && self.reflection.set_size(
+                &self.device,
+                self.targets.width,
+                self.targets.height,
+                plane.resolution,
+            )
+        {
+            self.frame = self.rebuild_frame_bindings();
+        }
+        // Group 0's reflection parameters: the frame's size (a receiver's fragment
+        // position over it is the coordinate to sample at), the clip bias and
+        // whether anything reflects this frame.
+        let reflection_uniform = ReflectionUniform {
+            params: [
+                width,
+                height,
+                primary.as_ref().map_or(0.0, |(_, plane)| plane.clip_bias),
+                if primary.is_some() { 1.0 } else { 0.0 },
+            ],
+        };
+        self.frame
+            .write_reflection(&self.queue, &reflection_uniform);
+
         // ---- prepare draws -------------------------------------------------
+        // Both lists share one object ring: the frame's draws first, then the
+        // reflection's.
         let total = (draw_list.len()
             + draw_list.shader_opaque.len()
             + draw_list.shader_transparent.len()) as u32;
-        self.objects.ensure(&self.device, total.max(1));
-        let default_material = Material::default();
-        let mut prepared_opaque = Vec::with_capacity(draw_list.opaque.len());
-        let mut prepared_transparent = Vec::with_capacity(draw_list.transparent.len());
-        let mut prepared_shader_opaque = Vec::with_capacity(draw_list.shader_opaque.len());
-        let mut prepared_shader_transparent =
-            Vec::with_capacity(draw_list.shader_transparent.len());
-        let mut index = 0u32;
-        for item in &draw_list.opaque {
-            if let Some(draw) = self.prepare_draw(item, assets, &default_material, index) {
-                prepared_opaque.push(draw);
-            }
-            index += 1;
-        }
-        for item in &draw_list.transparent {
-            if let Some(draw) = self.prepare_draw(item, assets, &default_material, index) {
-                prepared_transparent.push(draw);
-            }
-            index += 1;
-        }
-        for item in &draw_list.shader_opaque {
-            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
-                prepared_shader_opaque.push(draw);
-            }
-            index += 1;
-        }
-        for item in &draw_list.shader_transparent {
-            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
-                prepared_shader_transparent.push(draw);
-            }
-            index += 1;
-        }
-        // Screen passes (a sky) run before the scene and need no object slot.
+        let reflected_total = reflected_list.as_ref().map_or(0, |list| {
+            list.len() + list.shader_opaque.len() + list.shader_transparent.len()
+        }) as u32;
+        self.objects
+            .ensure(&self.device, (total + reflected_total).max(1));
+        let PreparedLists {
+            opaque: prepared_opaque,
+            transparent: prepared_transparent,
+            shader_opaque: prepared_shader_opaque,
+            shader_transparent: prepared_shader_transparent,
+        } = self.prepare_list(&draw_list, assets, 0);
+        let prepared_reflected = reflected_list
+            .as_ref()
+            .map(|list| self.prepare_list(list, assets, total));
+        // Screen passes (a sky) run before the scene, need no object slot, and are
+        // the same from either view.
         let mut prepared_screen = Vec::with_capacity(draw_list.screen.len());
         for item in &draw_list.screen {
             if let Some(draw) = self.prepare_screen_draw(item, assets) {
@@ -1121,7 +1188,99 @@ impl Renderer {
             }
         }
 
-        // 2. Depth prepass. This always runs: even an empty scene must leave the
+        // 2. Planar reflection. The same pipelines, draw list shape and object
+        // slots as the frame, from the mirror camera, into the pass's own target.
+        // The sky runs first, so a reflected ray that meets no geometry sees the
+        // sky rather than the clear colour.
+        if let (Some(mirrored), Some(reflected)) = (mirrored.as_ref(), prepared_reflected.as_ref())
+        {
+            let (reflected_width, reflected_height) = self.reflection.size();
+            let reflected_frame = FrameUniform {
+                view_proj: math::to_cols_array(&mirrored.view_projection),
+                inv_view_proj: math::to_cols_array(&mirrored.inverse_view_projection),
+                camera_pos: mirrored.eye4(),
+                ambient: self.ambient,
+                resolution: [
+                    reflected_width as f32,
+                    reflected_height as f32,
+                    1.0 / reflected_width as f32,
+                    1.0 / reflected_height as f32,
+                ],
+                params: [self.ssao_strength, 0.0, 0.0, 0.0],
+            };
+            self.reflection.write(
+                &self.queue,
+                &reflected_frame,
+                &lights_uniform,
+                &shadow_uniform,
+            );
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reflection.pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.reflection.color_target(),
+                    depth_slice: None,
+                    resolve_target: self.reflection.color_resolve(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.reflection.depth_target(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.reflection.frame().bind_group, &[]);
+            for draw in &prepared_screen {
+                pass.set_pipeline(&draw.pipeline);
+                pass.set_bind_group(1, self.objects.bind_group(), &[0]);
+                pass.set_bind_group(2, &draw.textures, &[]);
+                pass.set_bind_group(3, &draw.user, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            for draw in &reflected.opaque {
+                match &draw.skin {
+                    Some((slot, buffer)) => {
+                        pass.set_pipeline(&self.pipelines.pbr_opaque_skinned);
+                        pass.set_bind_group(
+                            3,
+                            self.skins.bind_group(),
+                            &[self.skins.offset(*slot)],
+                        );
+                        pass.set_vertex_buffer(1, buffer.slice(..));
+                    }
+                    None => pass.set_pipeline(&self.pipelines.pbr_opaque),
+                }
+                pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
+                pass.set_bind_group(2, &draw.material, &[]);
+                pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+                pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..draw.index_count, 0, 0..1);
+            }
+            for draw in reflected
+                .shader_opaque
+                .iter()
+                .chain(reflected.shader_transparent.iter())
+            {
+                pass.set_pipeline(&draw.pipeline);
+                pass.set_bind_group(1, self.objects.bind_group(), &[draw.offset]);
+                pass.set_bind_group(2, &draw.textures, &[]);
+                pass.set_bind_group(3, &draw.user, &[]);
+                pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+                pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..draw.index_count, 0, 0..1);
+            }
+        }
+
+        // 3. Depth prepass. This always runs: even an empty scene must leave the
         // depth buffer defined (cleared to far), or a later depth-tested pass (the
         // text pass) would compare against undefined depth. Under MSAA it fills the
         // half-resolution depth SSAO reads; the forward pass fills its own.
@@ -1162,7 +1321,7 @@ impl Renderer {
             }
         }
 
-        // 3. SSAO.
+        // 4. SSAO.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ssao.pass"),
@@ -1185,7 +1344,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // 4. Forward PBR.
+        // 5. Forward PBR.
         {
             let clear = wgpu::Color {
                 r: self.clear_color[0] as f64,
@@ -1296,7 +1455,7 @@ impl Renderer {
             }
         }
 
-        // 5. Gizmo.
+        // 6. Gizmo.
         if self.gizmo_lines.is_some() || self.gizmo_triangles.is_some() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("gizmo.pass"),
@@ -1337,7 +1496,7 @@ impl Renderer {
             }
         }
 
-        // 6. World-space text (alpha-blended, one batch per font and
+        // 7. World-space text (alpha-blended, one batch per font and
         // depth-test setting).
         if !self.text_batches.is_empty() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1386,7 +1545,7 @@ impl Renderer {
             }
         }
 
-        // 7. Billboards: camera-facing sprite quads (`.notes/billboards.md`),
+        // 8. Billboards: camera-facing sprite quads (`.notes/billboards.md`),
         // one batch per texture and (blend, depth-test) setting.
         if !self.billboard_batches.is_empty() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1425,7 +1584,7 @@ impl Renderer {
             }
         }
 
-        // 8. Tonemap.
+        // 9. Tonemap.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("tonemap.pass"),
@@ -1448,7 +1607,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
-        // 9. Present to the surface, or copy into the readback buffer.
+        // 10. Present to the surface, or copy into the readback buffer.
         match present_view {
             Some(view) => {
                 let pipeline = self.present_pipeline.as_ref().ok_or_else(|| {
@@ -1839,6 +1998,20 @@ impl Renderer {
         &self.queue
     }
 
+    /// Group 0 of the frame, rebuilt whenever a texture it binds is re-created — a
+    /// frame resize, or the reflection target changing size.
+    fn rebuild_frame_bindings(&self) -> FrameBindings {
+        FrameBindings::new(
+            &self.device,
+            &self.layouts.frame,
+            &self.ibl,
+            &self.shadow.view,
+            &self.targets.ssao.view,
+            self.reflection.color_view(),
+            self.reflection.sampler(),
+        )
+    }
+
     /// Resize the offscreen targets and, if present, the window surface.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), RenderError> {
         let width = width.max(1);
@@ -1849,13 +2022,12 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.targets = RenderTargets::create(&self.device, width, height, self.config.sample_count);
-        self.frame = FrameBindings::new(
-            &self.device,
-            &self.layouts.frame,
-            &self.ibl,
-            &self.shadow.view,
-            &self.targets.ssao.view,
-        );
+        // The reflection follows the frame at the scale it was last asked for.
+        self.reflection
+            .set_size(&self.device, width, height, self.reflection.scale());
+        self.frame = self.rebuild_frame_bindings();
+        self.frame
+            .write_reflection(&self.queue, &ReflectionUniform::default());
         let ssao = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssao.bind_group"),
             layout: &self.layouts.ssao,
@@ -2094,6 +2266,52 @@ impl Renderer {
             direction: [light.direction.x, light.direction.y, light.direction.z, 0.0],
         };
         (uniform, matrix, true)
+    }
+
+    /// Prepare every draw of `list`, placing its object uniforms at slots `index`
+    /// onwards.
+    ///
+    /// The frame and the reflection share one object ring, so the reflection's
+    /// list is prepared after the frame's, at the next free slot.
+    fn prepare_list(
+        &mut self,
+        list: &DrawList,
+        assets: &AssetRegistry,
+        index: u32,
+    ) -> PreparedLists {
+        let default_material = Material::default();
+        let mut prepared = PreparedLists {
+            opaque: Vec::with_capacity(list.opaque.len()),
+            transparent: Vec::with_capacity(list.transparent.len()),
+            shader_opaque: Vec::with_capacity(list.shader_opaque.len()),
+            shader_transparent: Vec::with_capacity(list.shader_transparent.len()),
+        };
+        let mut index = index;
+        for item in &list.opaque {
+            if let Some(draw) = self.prepare_draw(item, assets, &default_material, index) {
+                prepared.opaque.push(draw);
+            }
+            index += 1;
+        }
+        for item in &list.transparent {
+            if let Some(draw) = self.prepare_draw(item, assets, &default_material, index) {
+                prepared.transparent.push(draw);
+            }
+            index += 1;
+        }
+        for item in &list.shader_opaque {
+            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
+                prepared.shader_opaque.push(draw);
+            }
+            index += 1;
+        }
+        for item in &list.shader_transparent {
+            if let Some(draw) = self.prepare_shader_draw(item, assets, index) {
+                prepared.shader_transparent.push(draw);
+            }
+            index += 1;
+        }
+        prepared
     }
 
     fn prepare_draw(
@@ -3555,5 +3773,179 @@ mod tests {
             smoothed_step < aliased_step,
             "MSAA should soften the silhouette: worst step {aliased_step} -> {smoothed_step}"
         );
+    }
+
+    /// A quad of four vertices in the `z = 0` plane, spanning `±size`, with a
+    /// normal facing `+Z`.
+    fn quad(size: f32) -> ecs::assets::Mesh {
+        use ecs::assets::Vertex;
+        let v = |x: f32, y: f32| Vertex {
+            position: [x, y, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [(x / size + 1.0) * 0.5, (y / size + 1.0) * 0.5],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        ecs::assets::Mesh {
+            name: format!("quad {size}"),
+            vertices: vec![
+                v(-size, -size),
+                v(size, -size),
+                v(size, size),
+                v(-size, size),
+            ],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            ..Default::default()
+        }
+    }
+
+    /// The planar reflection feeds a receiver's shader (`.notes/reflections.md`,
+    /// tier 2). Skips when no adapter is present.
+    #[test]
+    fn a_planar_reflection_feeds_the_receiver_or_reports_no_adapter() {
+        use ecs::assets::{Shader, ShaderMaterial};
+        use ecs::components::{Camera, PlanarReflection, ShaderMeshRenderer};
+
+        let mut assets = AssetRegistry::with_defaults();
+        // The receiver paints the reflection at its own screen position; with no
+        // reflection it paints red, so the enabled flag is observable.
+        let receiver_shader = assets.shaders.insert_named(
+            "reflection.receiver",
+            Shader::new(
+                "reflection receiver",
+                "struct VsOut {\n\
+                 \x20   @builtin(position) pos: vec4<f32>,\n\
+                 }\n\
+                 @vertex fn vs_main(in: VsIn) -> VsOut {\n\
+                 \x20   var out: VsOut;\n\
+                 \x20   out.pos = frame.view_proj * object.model * vec4<f32>(in.position, 1.0);\n\
+                 \x20   return out;\n\
+                 }\n\
+                 @fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n\
+                 \x20   if (reflection_params.params.w < 0.5) {\n\
+                 \x20       return vec4<f32>(1.0, 0.0, 0.0, 1.0);\n\
+                 \x20   }\n\
+                 \x20   let uv = in.pos.xy / reflection_params.params.xy;\n\
+                 \x20   return textureSampleLevel(reflection, reflection_sampler, uv, 0.0);\n\
+                 }",
+            ),
+        );
+        let receiver_material = assets.shader_materials.insert_named(
+            "reflection.receiver",
+            ShaderMaterial {
+                name: "reflection receiver".into(),
+                shader: receiver_shader,
+                ..ShaderMaterial::default()
+            },
+        );
+        let green_shader = assets.shaders.insert_named(
+            "reflection.green",
+            Shader::new(
+                "reflection green",
+                "@vertex fn vs_main(in: VsIn) -> @builtin(position) vec4<f32> {\n\
+                 \x20   return frame.view_proj * object.model * vec4<f32>(in.position, 1.0);\n\
+                 }\n\
+                 @fragment fn fs_main() -> @location(0) vec4<f32> {\n\
+                 \x20   return vec4<f32>(0.0, 1.0, 0.0, 1.0);\n\
+                 }",
+            ),
+        );
+        let green_material = assets.shader_materials.insert_named(
+            "reflection.green",
+            ShaderMaterial {
+                name: "reflection green".into(),
+                shader: green_shader,
+                ..ShaderMaterial::default()
+            },
+        );
+        let big = assets.meshes.insert_named("quad.big", quad(3.0));
+        let small = assets.meshes.insert_named("quad.small", quad(0.5));
+
+        let mut world = World::new();
+        // A camera at the origin looking down `-Z`...
+        let camera = world.spawn_with(Camera::default());
+        // ...a mirror plane standing at `z = -3` with its normal facing the camera
+        // (the receiver), so the mirror camera sits at `z = -6` looking `+Z`...
+        let receiver = world.spawn_with(ShaderMeshRenderer {
+            mesh: big,
+            material: receiver_material,
+            ..ShaderMeshRenderer::default()
+        });
+        world.insert(
+            receiver,
+            math::Transform::from_translation(math::vec3(0.0, 0.0, -3.0)),
+        );
+        let reflection = PlanarReflection {
+            point: math::vec3(0.0, 0.0, -3.0),
+            normal: math::vec3(0.0, 0.0, 1.0),
+            clip_bias: 0.05,
+            ..PlanarReflection::default()
+        };
+        world.insert(receiver, reflection);
+        // ...and a green quad *behind* the camera, which only the reflection sees.
+        let green = world.spawn_with(ShaderMeshRenderer {
+            mesh: small,
+            material: green_material,
+            ..ShaderMeshRenderer::default()
+        });
+        world.insert(
+            green,
+            math::Transform::from_translation(math::vec3(0.0, 0.0, 2.0)),
+        );
+
+        // The pass must work single-sampled and under MSAA: its target takes the
+        // frame's sample count, or the pipelines and its attachments would disagree.
+        // One renderer at a time — the GPU tests share the device.
+        for sample_count in [1, 4] {
+            let mut renderer = match Renderer::headless(RendererConfig {
+                width: 64,
+                height: 64,
+                sample_count,
+                ..Default::default()
+            }) {
+                Ok(renderer) => renderer,
+                Err(RenderError::NoAdapter) => {
+                    eprintln!("skipping GPU test: no adapter");
+                    return;
+                }
+                Err(other) => panic!("unexpected renderer error: {other}"),
+            };
+
+            let frame = renderer
+                .render_frame(&world, &assets, camera)
+                .expect("render frame");
+            let [r, g, b, _] = frame.pixel(32, 32).expect("a centre pixel");
+            assert!(
+                g > r + 40 && g > b + 40,
+                "at {sample_count} samples the reflection should show the green quad: {r},{g},{b}"
+            );
+            // Off the reflected object the reflection is empty, so the receiver
+            // samples the pass's clear colour — the reflection really is an image,
+            // not a flood.
+            let [cr, cg, cb, _] = frame.pixel(2, 2).expect("a corner pixel");
+            assert!(
+                cr < 40 && cg < 40 && cb < 40,
+                "at {sample_count} samples, corner: {cr},{cg},{cb}"
+            );
+
+            // With the reflection disabled the receiver paints its "no reflection"
+            // red: the flag reaches the shader.
+            world.insert(
+                receiver,
+                PlanarReflection {
+                    enabled: false,
+                    ..reflection
+                },
+            );
+            let frame = renderer
+                .render_frame(&world, &assets, camera)
+                .expect("render frame");
+            let [r, g, b, _] = frame.pixel(32, 32).expect("a centre pixel");
+            assert!(
+                r > 150 && g < 80 && b < 80,
+                "at {sample_count} samples, disabled should be red: {r},{g},{b}"
+            );
+            world.insert(receiver, reflection);
+        }
     }
 }

@@ -10,7 +10,7 @@
 use crate::gpu::ibl_gpu::IblGpu;
 use crate::gpu::resources::{GpuVertex, SkinVertex};
 use crate::gpu::targets::align_up;
-use crate::gpu::uniforms::{FrameUniform, ObjectUniform, ShadowUniform};
+use crate::gpu::uniforms::{FrameUniform, ObjectUniform, ReflectionUniform, ShadowUniform};
 use crate::lights::LightsUniform;
 use crate::shader::ShadeForm;
 use bytemuck::Pod;
@@ -128,6 +128,13 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
             depth_texture(7),
             uniform(8, wgpu::ShaderStages::FRAGMENT),
             texture(9),
+            // The planar reflection (`.notes/reflections.md`, tier 2). It lives in
+            // group 0 because that group is already "the frame's shared resources"
+            // and is per-pass, which is exactly the reflection's granularity — and
+            // because a WebGPU device is only guaranteed four bind groups.
+            texture(10),
+            sampler(11, false),
+            uniform(12, wgpu::ShaderStages::FRAGMENT),
         ],
     });
 
@@ -983,18 +990,28 @@ pub struct FrameBindings {
     pub lights_buffer: wgpu::Buffer,
     /// Shadow uniform buffer.
     pub shadow_buffer: wgpu::Buffer,
+    /// The planar reflection's parameters (`.notes/reflections.md`).
+    pub reflection_buffer: wgpu::Buffer,
     /// The assembled bind group.
     pub bind_group: wgpu::BindGroup,
 }
 
 impl FrameBindings {
-    /// Create the buffers and bind group for the given IBL, shadow and SSAO views.
+    /// Create the buffers and bind group for the given IBL, shadow and SSAO views,
+    /// plus the planar reflection's texture and sampler.
+    ///
+    /// The reflection pass builds its *own* group 0 (its camera is the mirrored
+    /// one), pointing the reflection and SSAO bindings at a 1x1 white texture: a
+    /// pass must never sample the texture it is rendering into, and a reflection
+    /// wants no part of the frame's ambient occlusion.
     pub fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         ibl: &IblGpu,
         shadow_view: &wgpu::TextureView,
         ssao_view: &wgpu::TextureView,
+        reflection_view: &wgpu::TextureView,
+        reflection_sampler: &wgpu::Sampler,
     ) -> FrameBindings {
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame.camera"),
@@ -1011,6 +1028,12 @@ impl FrameBindings {
         let shadow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame.shadow"),
             size: std::mem::size_of::<ShadowUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let reflection_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame.reflection"),
+            size: std::mem::size_of::<ReflectionUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1059,6 +1082,18 @@ impl FrameBindings {
                     binding: 9,
                     resource: wgpu::BindingResource::TextureView(ssao_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(reflection_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(reflection_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: reflection_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -1066,6 +1101,7 @@ impl FrameBindings {
             camera_buffer,
             lights_buffer,
             shadow_buffer,
+            reflection_buffer,
             bind_group,
         }
     }
@@ -1081,6 +1117,11 @@ impl FrameBindings {
         queue.write_buffer(&self.camera_buffer, 0, as_bytes(frame));
         queue.write_buffer(&self.lights_buffer, 0, as_bytes(lights));
         queue.write_buffer(&self.shadow_buffer, 0, as_bytes(shadow));
+    }
+
+    /// Upload the planar reflection's parameters.
+    pub fn write_reflection(&self, queue: &wgpu::Queue, reflection: &ReflectionUniform) {
+        queue.write_buffer(&self.reflection_buffer, 0, as_bytes(reflection));
     }
 }
 

@@ -56,7 +56,7 @@ pub fn prelude(form: ShadeForm) -> String {
          \x20   flags2: vec4<f32>,\n\
          };\n\n\
          @group(0) @binding(0) var<uniform> frame: FrameUniform;\n\
-         @group(1) @binding(0) var<uniform> object: ObjectUniform;\n\n",
+         @group(1) @binding(0) var<uniform> object: ObjectUniform;\nstruct ReflectionUniform { params: vec4<f32>, };\n@group(0) @binding(10) var reflection: texture_2d<f32>;\n@group(0) @binding(11) var reflection_sampler: sampler;\n@group(0) @binding(12) var<uniform> reflection_params: ReflectionUniform;\n\n",
     );
 
     // Group 2: the material's textures, one binding each (portable across backends,
@@ -161,6 +161,20 @@ mod tests {
                 p.contains(&format!("@group(2) @binding({i}) var texture_{i}")),
                 "missing texture binding {i}"
             );
+        }
+    }
+
+    #[test]
+    fn the_prelude_declares_the_planar_reflection() {
+        // The reflection lives in group 0 (`.notes/reflections.md`): every seam
+        // shader sees it, and one that does not reflect ignores it.
+        for form in [ShadeForm::Mesh, ShadeForm::Screen] {
+            let p = prelude(form);
+            assert!(p.contains("@group(0) @binding(10) var reflection: texture_2d<f32>;"));
+            assert!(p.contains("@group(0) @binding(11) var reflection_sampler: sampler;"));
+            assert!(p.contains(
+                "@group(0) @binding(12) var<uniform> reflection_params: ReflectionUniform;"
+            ));
         }
     }
 

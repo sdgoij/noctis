@@ -17,9 +17,10 @@ engine to precompute a reflection cubemap from the scene.
 no reflections.
 *Designed:* [`.notes/reflections.md`](reflections.md) — a **planar reflection
 pass** (`PlanarReflection` component, a mirrored scene pass into an offscreen
-texture, and the seam's fourth bind group the receiver samples). Tiers 0 (sky) and
-1 (a baked ground texture) are **shipped** in the goats water, needing no engine
-change; tier 2 (the pass) remains.
+texture, and the seam's reflection binding the receiver samples). All three tiers
+are reachable now: tiers 0 (sky) and 1 (a baked ground texture) are **shipped** in
+the goats water and needed no engine change, and tier 2 — the pass — is **shipped
+in the engine**; the port only has to put a `PlanarReflection` on the water.
 
 ### Scene depth in the shader contract
 

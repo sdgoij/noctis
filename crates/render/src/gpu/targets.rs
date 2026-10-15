@@ -28,7 +28,11 @@ pub struct GpuTarget {
 }
 
 impl GpuTarget {
-    fn new(device: &wgpu::Device, label: &str, desc: &wgpu::TextureDescriptor<'_>) -> GpuTarget {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        label: &str,
+        desc: &wgpu::TextureDescriptor<'_>,
+    ) -> GpuTarget {
         let texture = device.create_texture(desc);
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: Some(label),
@@ -245,6 +249,121 @@ impl RenderTargets {
     /// The number of bytes needed for the unpadded RGBA8 frame.
     pub fn frame_byte_len(&self) -> usize {
         (self.width * self.height * 4) as usize
+    }
+}
+
+/// The colour and depth attachments for a second view of the scene — the planar
+/// reflection pass (`.notes/reflections.md`, tier 2).
+///
+/// It is the frame's colour/depth pairing with one difference: the depth is one
+/// texture at the pass's own sample count, because nothing samples a reflected
+/// depth (the frame's single-sampled depth exists for SSAO; a reflection has no
+/// such reader). The colour keeps the MSAA-plus-resolve pair, because the
+/// receiver's shader samples it.
+#[derive(Debug)]
+pub struct ViewTargets {
+    /// View width in pixels.
+    pub width: u32,
+    /// View height in pixels.
+    pub height: u32,
+    /// The MSAA sample count in use (`1` = no MSAA).
+    pub sample_count: u32,
+    /// Multisampled colour, when [`sample_count`](Self::sample_count) > 1.
+    pub color_msaa: Option<GpuTarget>,
+    /// The colour a shader samples: the resolve target under MSAA, else the
+    /// render target.
+    pub color: GpuTarget,
+    /// The depth attachment, at the pass's sample count.
+    pub depth: GpuTarget,
+}
+
+impl ViewTargets {
+    /// Create the attachments for a `width` x `height` view, with MSAA at
+    /// `sample_count` samples (`1` disables it).
+    pub fn create(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        sample_count: u32,
+    ) -> ViewTargets {
+        let width = width.max(1);
+        let height = height.max(1);
+        let samples = sample_count.max(1);
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let target =
+            |label: &str, format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages| {
+                GpuTarget::new(
+                    device,
+                    label,
+                    &wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size,
+                        mip_level_count: 1,
+                        sample_count: samples,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage,
+                        view_formats: &[],
+                    },
+                )
+            };
+
+        let color_msaa = (samples > 1).then(|| {
+            target(
+                "reflection.color.msaa",
+                wgpu::TextureFormat::Rgba16Float,
+                samples,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+        });
+        let color = target(
+            "reflection.color",
+            wgpu::TextureFormat::Rgba16Float,
+            1,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let depth = target(
+            "reflection.depth",
+            wgpu::TextureFormat::Depth32Float,
+            samples,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+
+        ViewTargets {
+            width,
+            height,
+            sample_count: samples,
+            color_msaa,
+            color,
+            depth,
+        }
+    }
+
+    /// `true` when the view is rendered with MSAA.
+    pub fn is_multisampled(&self) -> bool {
+        self.color_msaa.is_some()
+    }
+
+    /// The colour attachment the pass renders into (multisampled when MSAA is
+    /// on).
+    pub fn color_target(&self) -> &wgpu::TextureView {
+        self.color_msaa
+            .as_ref()
+            .map_or(&self.color.view, |msaa| &msaa.view)
+    }
+
+    /// The texture `color_target` resolves into, or `None` when single-sampled.
+    pub fn color_resolve(&self) -> Option<&wgpu::TextureView> {
+        self.color_msaa.as_ref().map(|_| &self.color.view)
+    }
+
+    /// The depth attachment the pass tests and writes.
+    pub fn depth_target(&self) -> &wgpu::TextureView {
+        &self.depth.view
     }
 }
 

@@ -13,7 +13,12 @@ bind groups and the layouts; the game supplies a plane and samples the result.
 **Shipped:** tiers 0 and 1 in the goats water (`WATER_WGSL`): a fresnel, a ripple
 normal from the wave field, a reflection of the sky (the shared `sky_colour`), and
 a march against the ground baked from the terrain grid (`terrain::bake_reflection`,
-re-baked with the ground on a crater). **Not yet:** tier 2, the planar pass below.
+re-baked with the ground on a crater). **Also shipped: tier 2's engine pass** —
+the `PlanarReflection` component and the mirrored scene render
+(`crates/render/src/reflection.rs` for the maths, `crates/render/src/gpu/reflection.rs`
+for the target), with a GPU test that drives a receiver's shader; the port's next
+step is to put the component on the goats water. **Not yet:** billboards are left
+out of the pass ("What the pass draws").
 
 ## What the original does
 
@@ -87,10 +92,11 @@ is the precedent).
 1. **Mirror the view.** `view' = view · reflect(plane)` — the world is reflected
    about the plane, so the mirrored camera sees what the surface would.
 2. **Oblique clip.** The near plane is tilted onto the mirror plane (the
-   classic oblique-projection trick, as a plane in clip space), so geometry
+   classic oblique-projection trick, as a plane in view space), so geometry
    *below* the water does not leak into the reflection.
-3. **Render the scene** — opaque, seam meshes and billboards — into an offscreen
-   colour+depth target at `resolution` of the frame. The **receiver is skipped**
+3. **Render the scene** — the sky, opaque and seam meshes — into an offscreen
+   colour+depth target at `resolution` of the frame (taken by the receiver's own
+   entity). The **receiver is skipped**
    (the water must not reflect itself), by the same rule the shadow pass uses to
    skip a caster: an entity with the component is not drawn into its own pass.
    The **sky** runs first, as it does in the main pass, so the reflected ray that
@@ -101,20 +107,31 @@ tier: the setting can fall back to tier 0/1 on a weak device.
 
 ### The sampler
 
-The seam's WGSL prelude gains a fourth group the engine fills (`shaders.md`
-records the three it has):
+The seam's WGSL prelude gains three bindings on **group 0** — the frame's shared
+resources, which are already per-pass:
 
 ```
-@group(4) @binding(0) var reflection: texture_2d<f32>;
-@group(4) @binding(1) var reflection_sampler: sampler;
-@group(4) @binding(2) var<uniform> reflection_params: vec4<f32>; // screen w, h, clip_bias, enabled
+struct ReflectionUniform { params: vec4<f32>, };
+@group(0) @binding(10) var reflection: texture_2d<f32>;
+@group(0) @binding(11) var reflection_sampler: sampler;
+@group(0) @binding(12) var<uniform> reflection_params: ReflectionUniform; // screen w, h, clip_bias, enabled
 ```
 
-Every seam shader gets the binding; one that does not reflect ignores it. A
-receiver's fragment samples it at its own `@builtin(position).xy / screen` — the
-same arithmetic as the original — and mixes by the pass's alpha. The frame's
-screen size is already in `FrameUniform.resolution`, so `reflection_params` may
-only need the enabled flag and the bias.
+Every seam shader gets the bindings; one that does not reflect ignores them. A
+receiver's fragment samples them at its own `@builtin(position).xy / params.xy` —
+the same arithmetic as the original — and mixes by the pass's alpha (a ray that met
+nothing shows the sky, not the clear colour).
+
+The note this replaces proposed a fourth bind group (`@group(4)`). It is group 0
+instead: a WebGPU device is only *guaranteed* four bind groups, so a fifth would
+have to be requested as a raised limit, and the browser target could refuse it —
+whereas group 0 is already the frame's shared, per-pass bundle, which is exactly
+the reflection's granularity. The pass builds its **own** group 0 (its camera is
+the mirrored one), pointing these bindings at a 1x1 white texture: a pass must not
+sample the texture it writes, and a reflection wants no part of the frame's
+ambient occlusion. The frame's group 0 holds the real target, which the receiver's
+draw binds. Nothing else moves — the PBR pipelines declare group 0 too and simply
+ignore the three entries.
 
 **Alternative considered:** a reflection *cubemap* probe (render six faces from a
 point, sample by the reflected direction). Rejected for the water: a flat plane
@@ -124,20 +141,46 @@ or curved reflector, which the port has none of yet — record it, do not build 
 
 ## Extraction and the draw list
 
-The reflection pass reuses the frame's draw list: it filters out the receiver
-entity and re-sorts by the mirrored `CameraView`. So `extract_draw_list` is the
-same pure function with a different view and one exclusion — no second
-extraction path.
+The pass calls the *same* pure extraction, `extract_draw_list_filtered`, with the
+mirrored `CameraView` and one exclusion (the receiver). A second call, not a second
+implementation — and the cull has to be redone, because what a surface reflects is
+mostly what the primary camera cannot see. The frame and the reflection then share
+one object-uniform ring: the frame's draws take the first slots, the reflection's
+the next.
+
+## What the pass draws
+
+The sky (the frame's screen passes, drawn first so a reflected ray that meets no
+geometry sees the sky), opaque PBR meshes, and the seam's mesh draws (opaque and
+blended). The receiver is excluded, and the near plane is the surface, so nothing
+beneath it is drawn.
+
+**Not yet drawn:** transparent PBR meshes, world-space text, gizmos, and
+**billboards** — the last because billboard quads are built CPU-side against the
+primary camera, so a reflection needs a second per-frame build, which is real work
+rather than a line. The port's scenes use meshes, so nothing looks wrong yet.
+Recorded here rather than hidden.
 
 ## Tests
 
-- **Pure:** the mirror matrix (`reflect_view(view, plane)`) maps the plane to
-  itself and the camera to its mirror; the oblique clip keeps a point above the
-  plane in front of the near plane and drops a point below it; the receiver is
-  excluded from its own pass.
-- **GPU:** the pass renders a known scene into the target and the receiver's
-  fragment samples it — a read-back proves a coloured object appears in the
-  reflection where the shader says it should (behind the `NoAdapter` skip).
+- **Pure** (`crates/render/src/reflection.rs`): the mirror matrix fixes its plane
+  and flips the rest, and the mirrored view reflects the eye and the basis; the
+  oblique clip is a re-parameterised near plane (a plane parallel to the view
+  reproduces `perspective(.., d, ..)` exactly), puts a point on the plane exactly on
+  the new near plane, keeps the kept side in front and clips the camera side, and
+  degenerates to the untouched projection for a singular matrix or a plane sitting
+  on the far corner; a point on the plane projects to the same pixel from either
+  view; `reflection_view` looks out of the surface with the world beneath it
+  clipped; the first enabled component wins; the clip bias lifts the plane the pass
+  cuts at.
+- **Extraction** (`crates/render/src/draw_list.rs`): an excluded PBR mesh, shader
+  mesh or screen pass drops out of its list while its neighbours stay, and an
+  exclusion is not a cull.
+- **GPU** (`crates/render/src/renderer.rs`): a receiver's shader samples the pass,
+  and the frame shows a green quad that stands *behind* the camera — visible in the
+  reflection alone, which proves both the mirrored pass and its own cull — with the
+  disabled flag turning the same fragment red. It runs once single-sampled and once
+  under MSAA (behind the `NoAdapter` skip).
 
 ## What the port does meanwhile
 
@@ -148,22 +191,30 @@ extraction path.
    (`terrain::bake_reflection`, one texel per grid vertex, colour in `rgb`, a
    packed height in `a`), and the fragment marches the reflected ray against it,
    keeping the sky wherever the ray escapes.
-3. **Tier 2 when the pass lands** — the mirror, setting `PlanarReflection` on the
-   water to the table's level.
+3. **Tier 2, engine side — shipped.** A `PlanarReflection` on a receiver with a
+   seam shader turns the pass on. What remains is the port's own step: put the
+   component on the goats water at the table's level and have `WATER_WGSL` sample
+   the group-0 reflection instead of (or over) tiers 0 and 1.
 
-## Open questions
+## Settled, and still open
 
-- **Where the receiver's exclusion lives.** A rule (a component marks it) or an
-  explicit entity on the reflection. The shadow pass's own-caster skip is the
-  precedent to follow; a second component (`NotReflected`) is the escape hatch.
-- **The target's format.** Linear `rgba16float` (the HDR target's own format) so
-  the reflection is tonemapped with the frame, or an LDR target for half the
-  bandwidth. The HDR target is the correct default; the half-res tier is the
-  cost knob.
-- **Half-resolution and MSAA.** At half res the reflection is softer and cheaper;
-  whether it takes the frame's MSAA is a quality call the pass's own test pins.
-- **Sky in the mirror.** The original's mirror pass draws the sky (a screen pass
-  first). The port could instead evaluate the sky shader on the reflected ray and
-  leave the sky out of the pass — cheaper, but then two sky implementations must
-  agree. Draw it in the pass, as the original does.
+Settled by the implementation, for the record:
+
+- **Where the receiver's exclusion lives.** The rule: an entity carrying the
+  component is not drawn into its own pass, exactly as the shadow pass skips a
+  caster. The pass names it in `ExtractFilter::exclude`. A second component
+  (`NotReflected`) remains the escape hatch if a scene ever wants one.
+- **The target's format.** Linear `rgba16float`, the frame's own HDR format, so the
+  reflection is tonemapped with the frame. `resolution` is the cost knob.
+- **Half-resolution and MSAA.** The target takes the frame's sample count (its own
+  multisampled colour and depth, resolving into the colour the receiver samples),
+  because the pipelines are built for that count and would otherwise be rejected.
+  A GPU test pins both cases.
+- **Sky in the mirror.** Drawn in the pass, as the original does.
+
+Still open:
+
 - **A cubemap probe** for a future rough/curved reflector, noted above.
+- **Draw counters.** The harness's draw-side checks want a way to count what a pass
+  drew; the reflection pass is one more caller of that seam when it lands
+  ([`.notes/harness.md`](harness.md)).
