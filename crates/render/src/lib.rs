@@ -72,7 +72,7 @@ pub use gltf_loader::{LoadedGltf, NodeDesc, RegisteredGltf, load_gltf, load_gltf
 pub use ibl::{IblConfig, IblData};
 pub use lights::{ExtractedLight, LightsUniform, MAX_LIGHTS, extract_lights};
 pub use pcf::{DEFAULT_PCF_KERNEL, pcf_kernel_offsets};
-pub use reflection::{mirror_matrix, reflect_view};
+pub use reflection::{ViewPlane, mirror_matrix, oblique_near_plane, plane_in_view, reflect_view};
 pub use renderer::{Frame, Renderer, RendererConfig};
 pub use shader::{ShadeForm, compose, prelude};
 pub use text::{DEFAULT_CHARS, DEFAULT_PX_SIZE, FontAtlas, Glyph, Placement, TextError};
