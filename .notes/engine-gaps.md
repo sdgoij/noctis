@@ -38,8 +38,14 @@ test alone confines it to the pools.
 weather, so every shader agrees without each repeating them.
 *For:* the sky's day/night and the weather's grey-out, and anything else that should
 follow the clock (a wet sheen, the grass's sway).
-*Meanwhile:* each material carries its own `user` block, and the goats code writes
-the sky's sun each frame — the sky animates, but nothing else can read that sun.
+*Shipped, partly:* the **ambient** is drivable per frame — a plugin publishes
+`EngineContext::frame_ambient` and the runtime applies it to the renderer, so the
+frame uniform's `ambient` (which the PBR pass *and* every seam shader already read)
+follows a clock (`crates/ecs/src/app.rs`, `crates/runtime/src/runtime.rs`). The sun
+needs no seam: it is a scene `Light`, and a plugin driving that component reaches the
+PBR pass and the shadow map at once. *Still open:* `time`, the sun's direction and
+the weather in the uniform itself — the goats port keeps them in each material's own
+`user` block, which works but repeats the sun per shader.
 
 ### A billboard / particle path
 

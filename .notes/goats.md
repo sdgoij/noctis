@@ -10,7 +10,7 @@ is the contract for that port; the engine features it depends on are designed in
 (the screen-UI seam). **M0 (the render-path spike), M1
 (locomotion), M2 (the world sim), M3 (hazards), M4 (the herd), M5 (presentation)
 and M6 (the menus) are largely shipped** as `examples/goats`; what remains inside
-them (day/night lighting, tier-2 water reflections, the mods screen) and M7–M9 are
+them (the mods screen) and M7–M9 are
 not. The port's test harness — the headless driver and its
 seed/observe seams — is designed in [`.notes/harness.md`](harness.md).
 
@@ -218,7 +218,13 @@ Single-player sandbox first; each milestone is playable.
    **Audio** has since shipped — the engine's `AudioEngine` (rodio on native, the
    browser's WebAudio on `wasm32`) plays the original's own samples: looping
    music, the rain and wind beds tied to the weather, goat bleats, and blasts
-   attenuated by distance from the goat. Day/night lighting still follows; the
+   attenuated by distance from the goat. **Day/night has shipped too**: a clock the
+   original's `SKY_KEYS`/`updateLight` curve drives (`celestial`), four minutes to
+   the day, so the scene's own sun follows the arc — the sun by day, the moon after
+   dusk — and the sky, the ambient and the meadow follow it down; the ambient rides
+   the engine's `frame_ambient` seam, and the console's `time <hours>` jumps the
+   clock. The port keeps its own **daytime** tuning (the sky palette, the scene
+   light, the exposure) and the curve scales *that*: every factor is 1 at noon. The
    **terrain** carries per-vertex
    grass / sand / rock through the engine's vertex colour, and the **water** is a
    translucent surface drawn through the seam's mesh form. The **bang** has its
@@ -233,11 +239,12 @@ Single-player sandbox first; each milestone is playable.
    (tier 0), a march against the baked ground (tier 1), and the engine's planar
    mirror (tier 2), sampled at the fragment's own position so it reflects the goat
    and its herd. The tier rides in the water's `user` block; the port uses 2.
+   **Not yet:** a moon disc and stars (the night sky is dark and bare).
 7. **M6 — UI.** *(Shipped: the menus.)* On the screen-UI seam
    ([`.notes/ui.md`](ui.md)): the **main menu** (Continue/Play, Restart, Settings,
    Keymap, Console, Quit), **settings** (volume, mute, the herd size, the water, a
    weather button), the **keymap** table, and the **console** (`help`, `weather`,
-   `flood`, `water`, `herd`, `restart`, `mute`, `volume`, `clear`, `quit`). A
+   `flood`, `water`, `herd`, `time`, `restart`, `mute`, `volume`, `clear`, `quit`). A
    screen freezes the world and the game's input, as the original's `uiScreen`
    does; a setting applies at once, even behind the menu; `Esc`/`P` opens it,
    `Enter` runs the console line. The **mods** screen waits on M7.
@@ -291,11 +298,17 @@ deliberately deferred — the systems come first.
 
 - **The goat reads grey.** Its fur texture is applied (and, since the importer
   fix, its normal and metallic-roughness maps too), but the placeholder sky's
-  neutral ambient washes the colour out. A real sky (M5) is the fix; the fur's
-  sRGB handling and filtering are worth a look at the same time.
+  neutral ambient washed the colour out. The ambient is now the *day's* (the
+  original's curve over the port's tuning), so the fur can finally be judged
+  against the original's own lighting; a directional sun does reach it. The fur's
+  sRGB handling and filtering are still worth a look.
 - **The grass tufts read as thin sticks**, not the original's two stacked cubes.
   The sizes and segments match `tuftField`, so this is a look/scale question (the
-  0.14-unit cube against the view distance) rather than the field maths.
+  0.14-unit cube against the view distance) rather than the field maths. Its
+  *lighting* is fixed with the day/night pass: the meadow's shader negates the
+  direction it is given, so it was lit by the anti-sun (which read as no sun at
+  all); it now takes the direction the light travels in, like the engine's own
+  light.
 - **The weather's look is in** (M5): clouds and rain as billboards, the sky tint,
   the water surface, and the grass swaying on the wind through the shader seam.
 - **The bang's look is complete** (M5): the flash light, the camera knock, the

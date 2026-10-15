@@ -84,6 +84,8 @@ pub(crate) enum WorldCommand {
     Flood(Option<f32>),
     /// Turn the whole water system on or off (`J`).
     Water(bool),
+    /// Jump the clock to an hour, or report it with no hour (the console's `time`).
+    Time(Option<f32>),
 }
 
 /// The parse of one console line.
@@ -326,6 +328,7 @@ const VERBS: &[(&str, &str)] = &[
         "pin the water table, or hand it back to the rain",
     ),
     ("water [on|off]", "turn the whole water system on or off"),
+    ("time [0-24]", "jump the clock, or report it"),
     ("mute", "mute or unmute the audio"),
     ("volume [0-100]", "set the master volume"),
     ("quit", "leave the game"),
@@ -374,6 +377,14 @@ fn parse(line: &str) -> Verb {
             Some("on") | Some("1") | Some("true") => Verb::World(WorldCommand::Water(true)),
             Some("off") | Some("0") | Some("false") => Verb::World(WorldCommand::Water(false)),
             Some(other) => Verb::Error(format!("water needs on or off, not '{other}'")),
+        },
+        // The original's `ctl.js time`: with no hour it reports the clock.
+        "time" | "t" => match arg {
+            None => Verb::World(WorldCommand::Time(None)),
+            Some(a) => match a.parse::<f32>() {
+                Ok(hour) => Verb::World(WorldCommand::Time(Some(hour))),
+                Err(_) => Verb::Error(format!("time needs an hour, 0-24, not '{a}'")),
+            },
         },
         other => Verb::Error(format!("unknown verb '{other}' — try `help`")),
     }

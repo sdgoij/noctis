@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio;
+mod celestial;
 mod fx;
 mod grass;
 mod hazards;
@@ -954,8 +955,15 @@ pub struct World {
     sky: AssetHandle<ShaderMaterial>,
     /// The meadow's shader material, whose `user` block drives the wind sway.
     grass: AssetHandle<ShaderMaterial>,
-    /// Seconds since the world was built, for the sky's slow sun arc.
-    sky_time: f32,
+    /// The hour of the day, `[0, 24)` — the clock the sky, the light and the ambient
+    /// all read ([`celestial`]).
+    world_time: f32,
+    /// The water's own clock, in seconds and deliberately not `world_time`: the waves
+    /// keep moving smoothly while the day clock wraps (`water.js`'s `waterClock`).
+    wave_clock: f32,
+    /// The scene's directional light, driven by the clock: the entity, the colour and
+    /// the intensity the scene authored — the noon reference every curve scales.
+    sun: Option<(Entity, Vec3, f32)>,
     /// The water surface entity, moved to the table's level each frame.
     water_surface: Entity,
     /// The water's shader material, whose `user` block drives the reflection.
@@ -1004,11 +1012,43 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     world.sounds.clear();
     world.weather.update(dt);
     world.water.update(dt, world.weather.rain());
-    // The sky follows the clock and the rain: the sun arcs and the colour drains
-    // toward grey. The renderer writes it into the material's user buffer, no rebuild.
-    world.sky_time += dt;
+
+    // The day/night clock (`celestial`). One sample of it feeds the sky, the scene's
+    // sun and the ambient, so the three can never disagree about the hour.
+    world.world_time = celestial::advance(world.world_time, dt, false);
+    world.wave_clock += dt;
+    let day = celestial::daylight(world.world_time);
+    // The sun follows it — by day the sun's arc, after dusk the moon on the same line,
+    // cooler and dim (the original's `updateLight`). What the scene authored is the
+    // noon reference the curve scales, so high noon plays exactly as tuned.
+    if let Some((entity, colour, intensity)) = world.sun
+        && let Some(light) = ctx.scene.world.get_mut::<Light>(entity)
+    {
+        light.kind = LightKind::Directional {
+            // The engine's `direction` is the one the light *travels* in (towards the
+            // scene), the negation of the model's "at the light".
+            direction: -day.light_direction,
+        };
+        light.color = math::vec3(
+            colour.x * day.light_tint.x,
+            colour.y * day.light_tint.y,
+            colour.z * day.light_tint.z,
+        );
+        light.intensity = intensity * day.light_level;
+    }
+    // The same curve reaches the engine's frame uniform, so every lit surface — the
+    // engine's PBR and the seam shaders alike — dims together at dusk.
+    ctx.frame_ambient = Some([
+        day.ambient_scale.x,
+        day.ambient_scale.y,
+        day.ambient_scale.z,
+        1.0,
+    ]);
+
+    // The sky's colours drain toward grey with the rain, then follow the hour. The
+    // renderer writes it into the material's user buffer, no rebuild.
     if let Some(material) = ctx.assets.shader_materials.get_mut(world.sky) {
-        material.uniforms = sky_uniforms(world.sky_time, world.weather.rain());
+        material.uniforms = sky_uniforms(&day, world.weather.rain());
     }
     // The meadow leans on the wind: its shader's `user` block carries the sway clock,
     // the wind and the sun, so the field sits at rest and bends on the GPU.
@@ -1016,7 +1056,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         material.uniforms = grass_uniforms(
             world.weather.sway_time(),
             world.weather.sway(),
-            sun_direction(world.sky_time),
+            &day,
             world.weather.rain(),
         );
     }
@@ -1040,7 +1080,8 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     }
     if let Some(material) = ctx.assets.shader_materials.get_mut(world.water_material) {
         material.uniforms = water_uniforms(
-            world.sky_time,
+            world.wave_clock,
+            &day,
             world.weather.rain(),
             world.weather.wind(),
             world.reflection,
@@ -1055,6 +1096,7 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         &world.craters,
         &mut world.hazards,
         &mut world.sounds,
+        day.light,
     );
     // The hazards own the ground too: a bang dishes a crater, and the ground heals
     // on its own clock whatever else is happening. Each bang that lands this frame
@@ -1164,9 +1206,10 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
     world.menus.water_on = water_on;
     ctx.screen_text = vec![
         format!(
-            "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {}  |  \
+            "Goats  |  {fps:.0} fps  |  {:.2} ms  |  {}  |  {}  |  \
              health {:.0}  energy {:.0}  belly {:.0}%{}",
             dt * 1000.0,
+            celestial::clock_text(world.world_time),
             goat.mode.label(),
             goat.health,
             goat.energy,
@@ -1191,6 +1234,16 @@ impl World {
     /// The sounds the last frame asked for, for the plugin to play ([`audio`]).
     pub fn sounds(&self) -> &[Sound] {
         &self.sounds
+    }
+
+    /// The hour of the day, `[0, 24)`.
+    pub fn hour(&self) -> f32 {
+        self.world_time
+    }
+
+    /// Jump the clock, as the console's `time <hours>` does.
+    pub fn set_hour(&mut self, hour: f32) {
+        self.world_time = celestial::wrap(hour);
     }
 
     /// The goat's world `(x, z)`, so a sound falls off with the distance to it.
@@ -1236,6 +1289,20 @@ impl World {
                     self.water.set_enabled(on);
                 }
                 ui::WorldCommand::Herd(count) => self.set_herd_size(ctx, count),
+                // The console's `time` / `time <hours>` (the original's `ctl.js`):
+                // with no argument it reports the clock, otherwise it jumps to the
+                // hour, which is how the night is inspected without waiting for it.
+                ui::WorldCommand::Time(hour) => {
+                    if let Some(hour) = hour {
+                        self.set_hour(hour);
+                    }
+                    let day = celestial::daylight(self.world_time);
+                    self.menus.log.push(format!(
+                        "time {} ({})",
+                        celestial::clock_text(self.world_time),
+                        day_night_line(&day),
+                    ));
+                }
             }
         }
     }
@@ -1271,7 +1338,7 @@ impl World {
 /// Advance the goat one frame: turn, run the locomotion state machine, step the
 /// root and play the state's clip. The `water` table it stands in slows it, burns its
 /// energy and gates its sleep; `craters` is the ground it stands on and, after a
-/// blast, the arc it flies.
+/// blast, the arc it flies; `light` is the day's light factor, which bites in the cold.
 #[allow(clippy::too_many_arguments)]
 fn drive_goat(
     ctx: &mut EngineContext,
@@ -1282,6 +1349,7 @@ fn drive_goat(
     craters: &terrain::Craters,
     hazards: &mut hazards::Hazards,
     sounds: &mut Vec<Sound>,
+    light: f32,
 ) -> bool {
     let dt = ctx.time.delta();
     let input = &ctx.input;
@@ -1404,8 +1472,9 @@ fn drive_goat(
     }
 
     // Health and energy for the frame; at zero health the goat dies. Wading burns
-    // extra energy (the original's `waterDrainFactor`).
-    let drain = weather.drain() * water.drain_factor(goat.x, goat.z);
+    // extra energy (the original's `waterDrainFactor`), and a cold night more.
+    let drain =
+        weather.drain() * water.drain_factor(goat.x, goat.z) * celestial::cold_multiplier(light);
     if goat.update_stats(dt, drain) {
         goat.die();
         sounds.push(Sound::Bleat { gain: 1.0 });
@@ -1689,7 +1758,7 @@ fn spawn_sky(ctx: &mut EngineContext) -> AssetHandle<ShaderMaterial> {
         ShaderMaterial {
             name: "goats sky".into(),
             shader,
-            uniforms: sky_uniforms(0.0, 0.0),
+            uniforms: sky_uniforms(&celestial::daylight(celestial::START_HOUR), 0.0),
             ..ShaderMaterial::default()
         },
     );
@@ -1701,32 +1770,53 @@ fn spawn_sky(ctx: &mut EngineContext) -> AssetHandle<ShaderMaterial> {
     material
 }
 
-/// The sky's sun direction, from its slow arc — shared by the sky and the grass.
-fn sun_direction(time: f32) -> Vec3 {
-    let angle = time * 0.08;
-    math::normalize(math::vec3(
-        angle.cos() * 0.7,
-        0.30 + 0.45 * (0.5 + 0.5 * (angle * 0.5).sin()),
-        angle.sin() * 0.7,
-    ))
-}
-
 /// The sun's colour, drained toward grey by the rain — shared by the sky and the
 /// grass.
 fn sun_colour(rain: f32) -> Vec3 {
     math::vec3(1.0, 0.95, 0.82) * (1.0 - 0.8 * rain)
 }
 
+/// `c` scaled per channel by `f` — how the day/night curve scales the port's own
+/// daytime tuning (every factor of `f` is `1` at noon).
+fn scaled(c: Vec3, f: Vec3) -> Vec3 {
+    math::vec3(c.x * f.x, c.y * f.y, c.z * f.z)
+}
+
+/// A one-line report of the hour for the console: which body is up and how bright the
+/// day is.
+fn day_night_line(day: &celestial::Daylight) -> String {
+    format!(
+        "{} up, light {:.2}",
+        if day.day { "sun" } else { "moon" },
+        day.light
+    )
+}
+
 /// The grass's `user` block: the sway clock and wind, the sun (direction, strength,
 /// colour), and the tuft base colour. Recomputed each frame; the renderer writes it
 /// in place. `sway` is the weather's wind sway (the original's `windSway`).
-fn grass_uniforms(time: f32, sway: f32, sun: Vec3, rain: f32) -> Vec<f32> {
-    let colour = sun_colour(rain);
+fn grass_uniforms(time: f32, sway: f32, day: &celestial::Daylight, rain: f32) -> Vec<f32> {
+    let colour = scaled(sun_colour(rain), day.light_tint);
+    // The grass shader negates this, so it wants the direction the light *travels* in
+    // (towards the meadow), like the engine's own light.
+    let sun = -day.light_direction;
     vec![
-        time, sway, 0.0, 0.0, // the sway clock and wind
-        sun.x, sun.y, sun.z, GRASS_SUN, // the sun direction and strength
-        colour.x, colour.y, colour.z, 0.0, // its colour
-        TUFT[0], TUFT[1], TUFT[2], 0.0, // the tuft base
+        time,
+        sway,
+        0.0,
+        0.0, // the sway clock and wind
+        sun.x,
+        sun.y,
+        sun.z,
+        GRASS_SUN * day.light_level, // the light direction and strength
+        colour.x,
+        colour.y,
+        colour.z,
+        0.0, // its colour
+        TUFT[0],
+        TUFT[1],
+        TUFT[2],
+        0.0, // the tuft base
     ]
 }
 
@@ -1749,11 +1839,19 @@ fn sky_palette(rain: f32) -> (Vec3, Vec3) {
 }
 
 /// The water's `user` block: its colours, the view distance / alpha / fresnel, the sky
-/// its reflection samples (zenith, horizon, sun), and the wind and clock for the
-/// ripple. Recomputed each frame; the renderer writes it in place.
-fn water_uniforms(time: f32, rain: f32, wind: (f32, f32), map: terrain::ReflectionMap) -> Vec<f32> {
+/// its reflection samples (zenith, horizon, sun), and the wind and the wave clock for
+/// the ripple. Recomputed each frame; the renderer writes it in place.
+fn water_uniforms(
+    clock: f32,
+    day: &celestial::Daylight,
+    rain: f32,
+    wind: (f32, f32),
+    map: terrain::ReflectionMap,
+) -> Vec<f32> {
     let (zenith, horizon) = sky_palette(rain);
-    let sun = sun_direction(time);
+    let zenith = scaled(zenith, day.zenith_scale);
+    let horizon = scaled(horizon, day.horizon_scale);
+    let sun = day.light_direction;
     let colour = sun_colour(rain);
     vec![
         WATER_DEEP[0],
@@ -1779,12 +1877,12 @@ fn water_uniforms(time: f32, rain: f32, wind: (f32, f32), map: terrain::Reflecti
         sun.x,
         sun.y,
         sun.z,
-        1.0 - 0.7 * rain, // sun direction and power
+        day.light * (1.0 - 0.7 * rain), // sun direction and power
         colour.x,
         colour.y,
         colour.z,
         0.0, // sun colour
-        time,
+        clock,
         wind.0,
         wind.1,
         WATER_WAVE, // the ripple clock and wind
@@ -1799,12 +1897,14 @@ fn water_uniforms(time: f32, rain: f32, wind: (f32, f32), map: terrain::Reflecti
     ]
 }
 
-/// The sky's animated `user` block: a slowly arcing sun, and colours drained toward
-/// grey by the rain. Recomputed each frame it is cheap — the renderer writes it into
-/// the material's user buffer without rebuilding anything.
-fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
-    let sun = sun_direction(time);
+/// The sky's `user` block: the hour's zenith and horizon, then the sun that glows
+/// through it. Recomputed each frame — the renderer writes it into the material's
+/// user buffer without rebuilding anything.
+fn sky_uniforms(day: &celestial::Daylight, rain: f32) -> Vec<f32> {
+    let sun = day.light_direction;
     let (zenith, horizon) = sky_palette(rain);
+    let zenith = scaled(zenith, day.zenith_scale);
+    let horizon = scaled(horizon, day.horizon_scale);
     let sun_col = sun_colour(rain);
     vec![
         zenith.x,
@@ -1822,7 +1922,7 @@ fn sky_uniforms(time: f32, rain: f32) -> Vec<f32> {
         sun_col.x,
         sun_col.y,
         sun_col.z,
-        1.0 - 0.7 * rain,
+        day.light * (1.0 - 0.7 * rain),
     ]
 }
 
@@ -1869,7 +1969,13 @@ fn spawn_water(
             shader,
             // The baked ground the reflection marches (`texture_0`).
             textures: vec![reflect],
-            uniforms: water_uniforms(0.0, 0.0, (0.0, 0.0), map),
+            uniforms: water_uniforms(
+                0.0,
+                &celestial::daylight(celestial::START_HOUR),
+                0.0,
+                (0.0, 0.0),
+                map,
+            ),
             alpha_mode: AlphaMode::Blend,
             double_sided: true,
         },
@@ -1976,6 +2082,15 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         HERD_COUNT,
         (goat.x, goat.z),
     );
+    // The scene's own sun: the `Sun` directional light the scene file authors. The
+    // clock drives its direction, colour and intensity, and what the scene set is the
+    // noon reference the day/night curve scales (`celestial`).
+    let sun = ctx
+        .scene
+        .world
+        .query::<Light>()
+        .find(|(_, light)| matches!(light.kind, LightKind::Directional { .. }))
+        .map(|(entity, light)| (entity, light.color, light.intensity));
     Some(World {
         goat,
         meadow,
@@ -1990,7 +2105,9 @@ pub fn spawn_world(ctx: &mut EngineContext) -> Option<World> {
         seeded: false,
         sky,
         grass: grass_material,
-        sky_time: 0.0,
+        world_time: celestial::START_HOUR,
+        wave_clock: 0.0,
+        sun,
         water_surface,
         water_material,
         reflection,
@@ -2112,7 +2229,7 @@ fn spawn_grass(
         ShaderMaterial {
             name: "goats grass".into(),
             shader,
-            uniforms: grass_uniforms(0.0, 0.0, math::vec3(0.0, 1.0, 0.0), 0.0),
+            uniforms: grass_uniforms(0.0, 0.0, &celestial::daylight(celestial::START_HOUR), 0.0),
             ..ShaderMaterial::default()
         },
     );
@@ -2328,7 +2445,10 @@ mod tests {
         let rain = 0.4;
         let (zenith, horizon) = sky_palette(rain);
         let map = terrain::bake_reflection(&terrain::Craters::default()).1;
-        let uniforms = water_uniforms(3.0, rain, (1.5, 0.25), map);
+        // At noon every day/night factor is 1, so the water's sky is the sky pass's own:
+        // the reflection it samples can never disagree with the sky drawn behind it.
+        let noon = celestial::daylight(12.0);
+        let uniforms = water_uniforms(3.0, &noon, rain, (1.5, 0.25), map);
 
         // The water's zenith and horizon are the sky pass's own, so the reflection it
         // samples can never disagree with the sky drawn behind it.
@@ -2347,6 +2467,14 @@ mod tests {
         assert_eq!(uniforms[36], map.floor);
         assert_eq!(uniforms[37], map.range);
         assert_eq!(uniforms[38], WATER_REFLECT);
+
+        // At night the sky it reflects is dark, the sun has no power to throw, and the
+        // light it glows around has flipped to the moon.
+        let night = celestial::daylight(22.0);
+        let dark = water_uniforms(3.0, &night, rain, (1.5, 0.25), map);
+        assert!(dark[12] < zenith.x, "the night zenith is darker");
+        assert_eq!(dark[23], 0.0, "no sun power at night");
+        assert_ne!(dark[20], uniforms[20], "the light direction moved");
     }
 
     #[test]

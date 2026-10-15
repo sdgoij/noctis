@@ -14,6 +14,7 @@
 // that exist yet — the same reason the original's `tests/support` opts out.
 #![allow(dead_code)]
 
+mod day;
 mod explosions;
 mod goat;
 mod herd;
@@ -34,8 +35,20 @@ pub struct Sim {
 impl Sim {
     /// Build the world (the terrain, the meadow, the water and the goat) and hold
     /// it, ready to drive.
+    ///
+    /// A project's scene authors its camera and its sun, and the harness's context
+    /// starts empty, so it seeds the same sun `scenes/meadow.scene.json` does: the
+    /// day/night clock drives that light, and a case can read what it did.
     pub fn start() -> Sim {
         let mut ctx = EngineContext::new("harness");
+        ctx.scene.world.spawn_with(Light {
+            kind: LightKind::Directional {
+                direction: Vec3::new(-0.5, -1.0, -0.35),
+            },
+            color: Vec3::new(1.0, 0.97, 0.9),
+            intensity: 2.6,
+            ..Light::default()
+        });
         let world = spawn_world(&mut ctx).expect("the harness world builds");
         Sim { ctx, world }
     }
@@ -224,6 +237,45 @@ impl Sim {
     /// The weather.
     pub fn weather(&self) -> &crate::weather::Weather {
         &self.world.weather
+    }
+
+    /// The hour of the day, `[0, 24)`.
+    pub fn hour(&self) -> f32 {
+        self.world.hour()
+    }
+
+    /// Jump the clock, as the console's `time <hours>` does — the seed a case about
+    /// the night needs, without running a day of frames.
+    pub fn set_hour(&mut self, hour: f32) {
+        self.world.set_hour(hour);
+    }
+
+    /// The scene's sun as the clock drove it this frame: the direction the light
+    /// *travels* in, its colour and its intensity.
+    pub fn sun(&self) -> Option<(Vec3, Vec3, f32)> {
+        let (entity, _, _) = self.world.sun?;
+        let light = self.ctx.scene.world.get::<Light>(entity)?;
+        let LightKind::Directional { direction } = light.kind else {
+            return None;
+        };
+        Some((direction, light.color, light.intensity))
+    }
+
+    /// The ambient the frame published for the host to apply: `rgb` colour, `a`
+    /// intensity. `None` when nothing drives it.
+    pub fn ambient(&self) -> Option<[f32; 4]> {
+        self.ctx.frame_ambient
+    }
+
+    /// The sky material's `user` block: zenith rgb, horizon rgb, the sun's direction
+    /// and power, its colour and power.
+    pub fn sky_uniforms(&self) -> Vec<f32> {
+        self.ctx
+            .assets
+            .shader_materials
+            .get(self.world.sky)
+            .map(|material| material.uniforms.clone())
+            .unwrap_or_default()
     }
 
     /// The hazard field — the mines, traps and fuses.
