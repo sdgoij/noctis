@@ -614,6 +614,11 @@ impl Renderer {
         self.ambient = [color[0], color[1], color[2], intensity];
     }
 
+    /// The ambient (indirect) light: `rgb` the colour, `a` the intensity.
+    pub fn ambient(&self) -> [f32; 4] {
+        self.ambient
+    }
+
     /// Set the tonemap exposure and operator.
     pub fn set_tonemap(&mut self, exposure: f32, mode: Tonemap) {
         self.exposure = exposure.max(0.0);

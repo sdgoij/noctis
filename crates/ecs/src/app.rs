@@ -65,6 +65,14 @@ pub struct EngineContext {
     /// it, the way it draws `screen_text` — the seam a plugin that owns the loop
     /// asks for mouse-look through, without a script.
     pub mouse_captured: Option<bool>,
+    /// A driver's frame lighting: the ambient (indirect) light the scene is lit with
+    /// this frame — `rgb` the colour, `a` the intensity, the frame uniform's own
+    /// `ambient`. `None` leaves the renderer's setting alone, the way
+    /// [`mouse_captured`](Self::mouse_captured) leaves the cursor to scripts; the
+    /// host applies it. It is the seam a plugin that owns the loop drives a day/night
+    /// ambient through, without a script and without reaching for the renderer — and
+    /// the sun a scene already sets as a `Light` component needs no seam at all.
+    pub frame_ambient: Option<[f32; 4]>,
     /// The plugin's screen-UI callback: the host calls it once a frame, when it
     /// has a UI layer, with a [`Ui`](crate::ui::Ui) it implements over its own
     /// toolkit (see [`crate::ui`]). `None` draws no plugin UI. A plugin sets it
@@ -86,6 +94,7 @@ impl EngineContext {
             frame: None,
             screen_text: Vec::new(),
             mouse_captured: None,
+            frame_ambient: None,
             ui: None,
         }
     }

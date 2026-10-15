@@ -677,6 +677,11 @@ impl<H: ScriptHost + 'static> Runtime<H> {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        // A driver's frame lighting wins, the way its `screen_text` does, so a plugin
+        // can drive a day/night ambient without a script or a manifest entry.
+        if let Some(ambient) = self.app.context.frame_ambient {
+            renderer.set_ambient([ambient[0], ambient[1], ambient[2]], ambient[3]);
+        }
         let Some(camera) = render::first_active_camera(&self.app.context.scene.world) else {
             log::debug!("no active camera; skipping render");
             return;
@@ -1053,6 +1058,36 @@ mod tests {
         });
         runtime.tick_once();
         assert!(!runtime.cursor_captured(), "the driver released the cursor");
+    }
+
+    #[test]
+    fn a_driver_can_set_the_frame_ambient_or_reports_no_adapter() {
+        // The ambient lands in the frame uniform, which every seam shader reads, so a
+        // plugin can drive a day/night without a script or a manifest entry.
+        let config = RuntimeConfig {
+            audio: false,
+            ..RuntimeConfig::default()
+        };
+        let mut runtime = Runtime::with_host(load_scene(), config, RecordingHost::new());
+        if runtime
+            .enable_renderer(render::RendererConfig::default())
+            .is_err()
+        {
+            eprintln!("skipping GPU test: no adapter");
+            return;
+        }
+
+        runtime.app_mut().on_update("test.ambient", |ctx| {
+            ctx.frame_ambient = Some([0.2, 0.25, 0.4, 1.0]);
+        });
+        runtime.tick_once();
+
+        let ambient = runtime.renderer().expect("a renderer").ambient();
+        assert_eq!(
+            ambient,
+            [0.2, 0.25, 0.4, 1.0],
+            "the driver's ambient reached the frame"
+        );
     }
 
     #[test]
