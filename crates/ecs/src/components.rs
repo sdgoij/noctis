@@ -338,6 +338,61 @@ pub struct ScreenShaderMaterial {
     pub material: AssetHandle<ShaderMaterial>,
 }
 
+/// A mirror plane on a **receiver** entity (a [`ShaderMeshRenderer`], such as the
+/// water): the renderer mirrors the primary camera about the plane and renders the
+/// scene into an offscreen target, which the receiver's shader samples
+/// ([`.notes/reflections.md`], tier 2).
+///
+/// A frame renders **one** reflection — the first enabled one — because it costs a
+/// whole extra scene pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanarReflection {
+    /// A point on the mirror plane, in world space (the water's level).
+    pub point: Vec3,
+    /// The plane's unit normal (the water's is `+Y`).
+    pub normal: Vec3,
+    /// The offscreen target's size as a fraction of the frame (`0.5` = half res).
+    pub resolution: f32,
+    /// Metres the clip plane is nudged above `point`, so a surface never reflects
+    /// its own edge.
+    pub clip_bias: f32,
+    /// Whether this reflection is rendered.
+    pub enabled: bool,
+}
+
+impl Default for PlanarReflection {
+    fn default() -> Self {
+        Self {
+            point: vec3(0.0, 0.0, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+            resolution: 1.0,
+            clip_bias: 0.02,
+            enabled: true,
+        }
+    }
+}
+
+impl PlanarReflection {
+    /// A horizontal mirror at `level` with its normal up — a water plane.
+    pub fn water(level: f32) -> Self {
+        Self {
+            point: vec3(0.0, level, 0.0),
+            ..Self::default()
+        }
+    }
+
+    /// `point` nudged `clip_bias` along the normal: the plane the pass clips
+    /// against, just above the surface.
+    pub fn clip_point(&self) -> Vec3 {
+        let b = self.clip_bias;
+        vec3(
+            self.point.x + self.normal.x * b,
+            self.point.y + self.normal.y * b,
+            self.point.z + self.normal.z * b,
+        )
+    }
+}
+
 /// A rigid body's simulation type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum BodyType {

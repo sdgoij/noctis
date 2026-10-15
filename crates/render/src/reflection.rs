@@ -5,6 +5,8 @@
 //! are unit-tested with no adapter. The pass itself (an offscreen target, the
 //! oblique clip and the seam's fourth bind group) is built on these.
 
+use ecs::components::PlanarReflection;
+use ecs::world::{Entity, World};
 use math::{Mat4, Vec3, vec4};
 
 use crate::camera::CameraView;
@@ -79,6 +81,20 @@ pub fn reflect_view(view: &CameraView, point: Vec3, normal: Vec3) -> CameraView 
         far: view.far,
         aspect: view.aspect,
     }
+}
+
+/// The one reflection a frame renders: the first enabled [`PlanarReflection`] in
+/// entity order, with the entity carrying it — the *receiver*, which its own pass
+/// must not draw.
+///
+/// One reflection per frame, because each costs a whole extra scene pass. `None`
+/// when nothing in the world asks to reflect.
+pub fn primary_planar_reflection(world: &World) -> Option<(Entity, PlanarReflection)> {
+    world
+        .query::<PlanarReflection>()
+        .filter(|(_, reflection)| reflection.enabled)
+        .min_by_key(|(entity, _)| entity.index())
+        .map(|(entity, reflection)| (entity, *reflection))
 }
 
 /// A plane in **view space**: the set of points `p` with
@@ -406,5 +422,59 @@ mod tests {
         let below = transform_point(&view.view, vec3(0.0, -1.0, 0.0));
         assert!(plane.signed_distance(above) > 0.0);
         assert!(plane.signed_distance(below) < 0.0);
+    }
+
+    #[test]
+    fn the_first_enabled_reflection_is_the_one_rendered() {
+        let mut world = World::new();
+        let first = world.spawn_with(PlanarReflection::water(0.0));
+        let second = world.spawn_with(PlanarReflection::water(2.0));
+
+        let (receiver, reflection) = primary_planar_reflection(&world).expect("a reflection");
+        assert_eq!(receiver, first);
+        assert!(approx_eq(reflection.point.y, 0.0, 1e-6));
+
+        // Disabling the first promotes the second.
+        world.insert(
+            first,
+            PlanarReflection {
+                enabled: false,
+                ..PlanarReflection::water(0.0)
+            },
+        );
+        let (receiver, reflection) = primary_planar_reflection(&world).expect("a reflection");
+        assert_eq!(receiver, second);
+        assert!(approx_eq(reflection.point.y, 2.0, 1e-6));
+    }
+
+    #[test]
+    fn no_enabled_reflection_yields_none() {
+        assert!(primary_planar_reflection(&World::new()).is_none());
+
+        let mut world = World::new();
+        world.spawn_with(PlanarReflection {
+            enabled: false,
+            ..PlanarReflection::water(1.0)
+        });
+        assert!(primary_planar_reflection(&world).is_none());
+    }
+
+    #[test]
+    fn the_clip_plane_sits_above_the_surface() {
+        let water = PlanarReflection::water(3.0);
+        assert!(approx_eq(water.clip_point().y, 3.0 + water.clip_bias, 1e-6));
+
+        // A tilted plane nudges along its own normal, not straight up.
+        let tilted = PlanarReflection {
+            point: vec3(1.0, 0.0, 0.0),
+            normal: math::unit_x(),
+            clip_bias: 0.5,
+            ..PlanarReflection::water(0.0)
+        };
+        assert!(vec3_approx_eq(
+            tilted.clip_point(),
+            vec3(1.5, 0.0, 0.0),
+            1e-6
+        ));
     }
 }
