@@ -1,7 +1,7 @@
 //! The water cases (`.notes/harness.md`): the *scene-level* behaviour the unit
 //! tests in `water.rs` do not already hold — the goat wades, it will not sleep in
-//! a pool, the HUD reads the depth, the meadow hides what the pool covers, and a
-//! crater holds the water it digs.
+//! a pool, the HUD reads the depth, the meadow hides what the pool covers, a
+//! crater holds the water it digs, and the surface carries the engine's mirror.
 //!
 //! The pure-logic cases (the level is monotone in the rain, a dry spell is exactly
 //! dry) are unit tests; these drive the *world* through the [`Sim`] harness.
@@ -152,6 +152,49 @@ fn a_crater_holds_the_water_it_digs() {
         "the crater holds more water than the ground it replaced",
         before > 0.0 && after > before,
         (before, after),
+    );
+    checks.finish();
+}
+
+#[test]
+fn the_water_carries_a_mirror_at_its_level() {
+    let mut checks = Checks::new();
+    let mut sim = Sim::start();
+    sim.set_rain(0.0);
+    sim.run(2);
+
+    // The surface is the engine's receiver, its plane horizontal at the table's level.
+    let start = sim.water_reflection().expect("the water is a mirror");
+    checks.check(
+        "the receiver's plane faces up",
+        (start.normal.x, start.normal.y, start.normal.z) == (0.0, 1.0, 0.0),
+        start.normal,
+    );
+    checks.check(
+        "the plane sits at the table's level",
+        (start.point.y - sim.water().level()).abs() < 1e-4,
+        (start.point.y, sim.water().level()),
+    );
+    checks.check(
+        "the clip plane rides just above the surface",
+        start.clip_bias > 0.0 && start.clip_point().y > start.point.y,
+        start.clip_bias,
+    );
+    checks.check(
+        "the whole frame is reflected",
+        start.resolution == 1.0,
+        start.resolution,
+    );
+    checks.check("the reflection is on", start.enabled, start.enabled);
+
+    // The table rises: the mirror rises with the surface it is drawn on.
+    sim.force_level(2.5);
+    sim.step(1.0 / 60.0);
+    let risen = sim.water_reflection().expect("the water is still a mirror");
+    checks.check(
+        "a rising table lifts the mirror with the surface",
+        (risen.point.y - sim.water().level()).abs() < 1e-4 && risen.point.y > start.point.y,
+        (risen.point.y, start.point.y, sim.water().level()),
     );
     checks.finish();
 }

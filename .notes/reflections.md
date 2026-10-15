@@ -10,15 +10,15 @@ reach without it.
 It is the sibling of [`shaders.md`](shaders.md): the engine owns the pass, the
 bind groups and the layouts; the game supplies a plane and samples the result.
 
-**Shipped:** tiers 0 and 1 in the goats water (`WATER_WGSL`): a fresnel, a ripple
-normal from the wave field, a reflection of the sky (the shared `sky_colour`), and
-a march against the ground baked from the terrain grid (`terrain::bake_reflection`,
-re-baked with the ground on a crater). **Also shipped: tier 2's engine pass** —
-the `PlanarReflection` component and the mirrored scene render
+**Shipped:** tiers 0, 1 and 2. Tiers 0 and 1 are the goats water's own (`WATER_WGSL`):
+a fresnel, a ripple normal from the wave field, a reflection of the sky (the shared
+`sky_colour`), and a march against the ground baked from the terrain grid
+(`terrain::bake_reflection`, re-baked with the ground on a crater). **Tier 2 is the
+engine's pass** — the `PlanarReflection` component and the mirrored scene render
 (`crates/render/src/reflection.rs` for the maths, `crates/render/src/gpu/reflection.rs`
-for the target), with a GPU test that drives a receiver's shader; the port's next
-step is to put the component on the goats water. **Not yet:** billboards are left
-out of the pass ("What the pass draws").
+for the target), with a GPU test that drives a receiver's shader — and the goats water
+is its receiver, sampling it as tier 2 (`WATER_REFLECT`). **Not yet:** billboards are
+left out of the pass ("What the pass draws").
 
 ## What the original does
 
@@ -191,10 +191,11 @@ Recorded here rather than hidden.
    (`terrain::bake_reflection`, one texel per grid vertex, colour in `rgb`, a
    packed height in `a`), and the fragment marches the reflected ray against it,
    keeping the sky wherever the ray escapes.
-3. **Tier 2, engine side — shipped.** A `PlanarReflection` on a receiver with a
-   seam shader turns the pass on. What remains is the port's own step: put the
-   component on the goats water at the table's level and have `WATER_WGSL` sample
-   the group-0 reflection instead of (or over) tiers 0 and 1.
+3. **Tier 2 — shipped, and in use.** A `PlanarReflection` on a receiver with a
+   seam shader turns the pass on. The goats water is that receiver: it carries the
+   component (its plane tracked to the table's level each frame) and its shader
+   samples the pass as tier 2, mixed by the pass's own alpha. `WATER_REFLECT` picks
+   the tier, so the settings can fall back to 0 or 1.
 
 ## Settled, and still open
 

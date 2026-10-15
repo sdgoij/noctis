@@ -205,6 +205,17 @@ impl Sim {
         &self.world.water
     }
 
+    /// The mirror plane on the water surface, as the engine's reflection pass reads
+    /// it ([`.notes/reflections.md`](reflections.md), tier 2). `None` if the surface
+    /// is not a receiver.
+    pub fn water_reflection(&self) -> Option<PlanarReflection> {
+        self.ctx
+            .scene
+            .world
+            .get::<PlanarReflection>(self.world.water_surface)
+            .copied()
+    }
+
     /// The craters on the ground.
     pub fn craters(&self) -> &crate::terrain::Craters {
         &self.world.craters

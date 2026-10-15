@@ -86,9 +86,11 @@ fn fs_main(in: ScreenOut) -> @location(0) vec4<f32> {
 /// The water surface (`.notes/shaders.md`, mesh form): a flat quad at the table's
 /// level, translucent, deeper toward the far edge. The terrain's depth test keeps it
 /// to the pools — over higher ground it fails and is not drawn. Its `user` block is
-/// the colours, the view distance and alpha, the sky (which its reflection samples)
-/// and the wind; the reflection tier is [`.notes/reflections.md`](reflections.md)
-/// tier 0 — a fresnel mixing in the sky the reflected ray sees.
+/// the colours, the view distance and alpha, the sky the reflection shares, the wind
+/// and the reflection tier; `texture_0` is the ground baked for tier 1. The
+/// reflection is [`.notes/reflections.md`](reflections.md): a fresnel mixing in the
+/// sky the reflected ray sees (tier 0), the baked ground it marches into (tier 1), or
+/// the engine's mirror pass (tier 2), which reflects the goat itself.
 const WATER_WGSL: &str = r#"
 struct WaterOut {
     @builtin(position) clip: vec4<f32>,
@@ -125,17 +127,30 @@ fn fs_main(in: WaterOut) -> @location(0) vec4<f32> {
     let ndv = max(dot(n, view_dir), 0.0);
     let fres = user[2].z + (1.0 - user[2].z) * pow(1.0 - ndv, 5.0);
     // What the reflection sees: the sky, plus (tier 1) the baked ground wherever the
-    // reflected ray meets it before it escapes the field.
+    // reflected ray meets it before it escapes the field. (`seen` — not `reflection`,
+    // which is the engine's mirror texture below.)
     let refl = reflect(-view_dir, n);
-    var reflection = sky_colour(refl, user[3].rgb, user[4].rgb,
+    var seen = sky_colour(refl, user[3].rgb, user[4].rgb,
         normalize(user[5].xyz), user[6].rgb, user[5].a);
-    if (user[9].z > 0.5 && refl.y > 0.01) {
+    // Tier 1: the ground baked into `texture_0`, marched along the reflected ray.
+    if (user[9].z > 0.5 && user[9].z < 1.5 && refl.y > 0.01) {
         let hit = ground_reflect(in.world, refl);
         if (hit.r >= 0.0) {
-            reflection = hit;
+            seen = hit;
         }
     }
-    col = mix(col, reflection, fres);
+    // Tier 2: the engine's mirror pass, sampled at this very fragment — the reflected
+    // ray leaves the pixel it entered. Mixed by the pass's own alpha, so a ray that
+    // met nothing keeps the sky above; the pass cuts at the table, so nothing beneath
+    // the surface leaks in.
+    if (user[9].z > 1.5 && reflection_params.params.w > 0.5) {
+        // In the fragment stage `@builtin(position)` is this fragment's pixel, and
+        // `params.xy` is the frame's size, so this is the reflection's own coordinate.
+        let uv = in.clip.xy / reflection_params.params.xy;
+        let mirror = textureSampleLevel(reflection, reflection_sampler, uv, 0.0);
+        seen = mix(seen, mirror.rgb, mirror.a);
+    }
+    col = mix(col, seen, fres);
 
     return vec4<f32>(col, user[2].y);
 }
@@ -176,8 +191,11 @@ const WATER_FRESNEL: f32 = 0.02;
 /// How hard the ripple tilts the normal (the wave's own strength).
 const WATER_WAVE: f32 = 0.06;
 /// The reflection tier the water uses ([`.notes/reflections.md`](reflections.md)):
-/// `0` is the sky alone, `1` marches the baked ground. The original's default is 1.
-const WATER_REFLECT: f32 = 1.0;
+/// `0` is the sky alone, `1` marches the baked ground, `2` samples the engine's mirror
+/// pass. The original's default was 1; the port uses 2 now that the pass exists — it is
+/// the tier that reflects the goat — and the tier stays in the shader's `user` block, so
+/// a settings toggle can pick one.
+const WATER_REFLECT: f32 = 2.0;
 
 /// The meadow's wind sway (`.notes/shaders.md`, mesh form). The field is a rebuilt
 /// mesh, so it cannot lean by rebuilding without paying a per-frame upload; instead
@@ -1010,6 +1028,15 @@ pub fn apply_frame(ctx: &mut EngineContext, world: &mut World) {
         .get_mut::<LocalTransform>(world.water_surface)
     {
         transform.translation.y = world.water.level();
+    }
+    // The mirror the engine renders for the surface is the same plane, so it rises
+    // with the table too (its resolution and clip bias stay as the component set them).
+    if let Some(planar) = ctx
+        .scene
+        .world
+        .get_mut::<PlanarReflection>(world.water_surface)
+    {
+        planar.point = math::vec3(0.0, world.water.level(), 0.0);
     }
     if let Some(material) = ctx.assets.shader_materials.get_mut(world.water_material) {
         material.uniforms = water_uniforms(
@@ -1870,6 +1897,10 @@ fn spawn_water(
             receive_shadows: false,
         },
     );
+    // The surface is also the engine's mirror: the reflection pass renders the scene
+    // from the camera this plane mirrors the camera into, and hands the result to the
+    // shader above. `apply_frame` tracks the table, moving the plane with the surface.
+    ctx.scene.world.insert(water, PlanarReflection::water(0.0));
     (water, material)
 }
 

@@ -76,7 +76,7 @@ Two-thirds of the Rust is reusable; essentially none of the JS is.
 | Runtime terrain / water / grass / FX meshes | `Mesh` / `Vertex` public, `AssetRegistry.meshes.insert` | works; a rebuild helper in the plugin |
 | Per-vertex terrain materials | `Vertex` has no colour | **Small add** — `Vertex::color`, `Material` opts in (see below) |
 | Volumetric sky, water, custom lit look | no shader seam | **Add** — "The shader seam" |
-| Water reflections (sky/ground/mirror) | engine has shadow maps, no user render targets | tiers 0/1 shipped on the seam; tier 2 needs the planar pass — [`.notes/reflections.md`](reflections.md) |
+| Water reflections (sky/ground/mirror) | engine has shadow maps, no user render targets | all three tiers shipped on the seam — the mirror is the engine's planar pass — [`.notes/reflections.md`](reflections.md) |
 | Physics over the heightfield | rapier3d, `ColliderShape` is box/ball/capsule/cylinder | reimplement the original's `terrainHeight` sampling in a system; a heightfield collider only if rapier is actually wanted |
 | raygui menus / settings / mods / keymap / console | `AppDriver::ui` draws `screen_text`; the screen-UI seam is shipped ([`.notes/ui.md`](ui.md)) | **Build the menus** on the `Ui` seam |
 | HUD bars/text | `ctx.screen_text` + the `Ui` overlay | ships as `screen_text`, upgraded with the menus |
@@ -228,9 +228,11 @@ Single-player sandbox first; each milestone is playable.
    [`.notes/billboards.md`](billboards.md)); an armed mine in reach shows its
    "tell". The weather's clouds drift and its rain falls, both as billboards. The
    **meadow** leans on the wind through the shader seam (the sway weight rides in
-   the vertex colour). The water **reflects** the sky and a baked ground (tiers 0
-   and 1 of [`.notes/reflections.md`](reflections.md)); tier 2, a planar mirror of
-   the whole scene, waits on the engine's pass.
+   the vertex colour). The water **reflects** through all three tiers of
+   [`.notes/reflections.md`](reflections.md): the sky it shares with the sky pass
+   (tier 0), a march against the baked ground (tier 1), and the engine's planar
+   mirror (tier 2), sampled at the fragment's own position so it reflects the goat
+   and its herd. The tier rides in the water's `user` block; the port uses 2.
 7. **M6 — UI.** *(Shipped: the menus.)* On the screen-UI seam
    ([`.notes/ui.md`](ui.md)): the **main menu** (Continue/Play, Restart, Settings,
    Keymap, Console, Quit), **settings** (volume, mute, the herd size, the water, a

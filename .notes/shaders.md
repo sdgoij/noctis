@@ -27,7 +27,10 @@ the field is a rebuilt mesh, so a per-frame CPU lean would pay an upload, and th
 sway rides in the vertex colour instead. Water reflections reached the seam with the
 **planar reflection pass** ([`.notes/reflections.md`](reflections.md)): group 0 now
 carries the reflection texture, its sampler and its parameters at bindings 10–12,
-so a mesh shader can sample the mirrored scene. **Not yet:** the bang's
+so a mesh shader can sample the mirrored scene. Those names (`reflection`,
+`reflection_sampler`, `reflection_params`) are the engine's like every other
+prelude binding, so a body must not shadow them — the goats water's accumulated
+reflection is `seen` for exactly that reason. **Not yet:** the bang's
 fire/light. (The terrain uses the engine's vertex colour, not the seam.)
 The two components remain out of `ComponentKind::ALL` for now.
 
