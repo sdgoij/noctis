@@ -54,11 +54,13 @@ platform, `C` coin, `S` spawn, `F` goal, `.` erase. Painting the spawn or the go
 
 ### Music, background and size
 
-The panel also sets the level's **music** and **background** — offered as exactly the
-names the game's own tables know (`SONGS` in `src/game/audio.rs`, the backgrounds
-`src/game/render.rs` draws), because the game *refuses to load* a level naming
-anything else. An unknown name is a structural error, so the editor will not let you
-save one.
+The panel also sets the level's **music** and **background**, each chosen from a menu
+of exactly the names the game's own tables know (`SONGS` in `src/game/audio.rs`, the
+backgrounds `src/game/render.rs` draws), because the game *refuses to load* a level
+naming anything else. An unknown name is a structural error, so the editor will not
+let you save one. The settings sit at the top of the panel, above the level list:
+a dock's height is capped (a long panel must not starve the viewport), so only the
+growing lists are ever scrolled out of sight.
 
 **New** makes a blank level at the panel's size, and **Resize** applies that size to
 the current level: growing pads the new space with air, and shrinking is refused

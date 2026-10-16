@@ -226,6 +226,7 @@ function new_level(width, height) {
   state.level = blank_level(width, height);
   state.newW = state.level.width;
   state.newH = state.level.height;
+  sync_metadata_menus(state.level);
   state.dirty = true;
   refresh_search(true);
 }
@@ -393,6 +394,38 @@ function named_in(names, value) {
     }
   }
   return false;
+}
+
+/// The index `names` holds `value` at, or 0 — a menu always names one of its
+/// options.
+function index_of(names, value) {
+  for (var i = 0; i < names.length; i++) {
+    if (names[i] === value) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+/// Point the panel's music and background menus at the level's own names.
+///
+/// The menus hold an index, and the level holds a name, so the one is derived from
+/// the other whenever the level changes — rather than the menu writing its own
+/// index back over a name the level already had (which would silently rewrite the
+/// file of a level that named something the game does not know).
+function sync_metadata_menus(level) {
+  state.musicIndex = index_of(MUSIC_NAMES, meta_value(level, "music"));
+  state.backgroundIndex = index_of(BACKGROUND_NAMES, meta_value(level, "background"));
+}
+
+/// Point a level at a song or background by name (see [`set_meta`]), keeping the
+/// panel's menus in step and adopting the new signature — metadata is not part of
+/// the search's records, so no arc is re-simulated for it.
+function choose_metadata(level, key, value) {
+  set_meta(level, key, value);
+  sync_metadata_menus(level);
+  touch();
+  refresh_search(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,9 +1558,12 @@ var state = {
   search: null,
   signature: null, // the grid signature of the current grid
   dirty: false,
-  // The size the panel's sliders hold, for `New level` and `Resize`.
+  // The size the panel's sliders hold, for `New level` and `Resize`, and the
+  // indices its music/background menus hold.
   newW: 40,
   newH: 14,
+  musicIndex: 0,
+  backgroundIndex: 0,
   active: true,
   showGrid: false,
   showReach: true,
@@ -1837,6 +1873,7 @@ function load_slot(name) {
   // from where the level already is.
   state.newW = parsed.level.width;
   state.newH = parsed.level.height;
+  sync_metadata_menus(parsed.level);
   state.view.zoom = 1;
   state.view.panX = 0;
   state.view.panY = 0;
@@ -2208,7 +2245,36 @@ function draw_panel(ui) {
   ui.label(status_line());
   ui.separator();
 
-  // The declared level slots.
+  // The level's settings come first so the controls a level is edited through stay
+  // in view: a dock's height is capped (a long panel must not starve the viewport),
+  // so only the growing lists below are ever scrolled out of sight.
+
+  // The size: the sliders (quantized so a size can be hit) drive both the `New`
+  // button below and `Resize` here, and start from the level just loaded.
+  state.newW = quantize(ui.slider("Width", state.newW, MIN_WIDTH, MAX_WIDTH), 4);
+  state.newH = quantize(ui.slider("Height", state.newH, MIN_HEIGHT, MAX_HEIGHT), 1);
+  ui.label("size: " + state.newW + " x " + state.newH);
+  if (ui.button("Resize to " + state.newW + "x" + state.newH)) {
+    noctis.run("level resize " + state.newW + " " + state.newH);
+  }
+  ui.separator();
+
+  // The level's music and background: exactly the names the game's own tables
+  // know (a name it does not know stops the game when it loads the level), chosen
+  // from a menu of them. A change here is a user action — the menus start from the
+  // level's own names (`sync_metadata_menus`), so drawing the panel never rewrites
+  // a level that names something else.
+  var music = ui.select("Music", state.musicIndex, MUSIC_NAMES);
+  if (music !== state.musicIndex) {
+    choose_metadata(level, "music", MUSIC_NAMES[music]);
+  }
+  var background = ui.select("Background", state.backgroundIndex, BACKGROUND_NAMES);
+  if (background !== state.backgroundIndex) {
+    choose_metadata(level, "background", BACKGROUND_NAMES[background]);
+  }
+  ui.separator();
+
+  // The declared level slots, and the level's own actions.
   var names = noctis.files.slots();
   for (var s = 0; s < names.length; s++) {
     if (ui.button((names[s] === state.slot ? "• " : "") + "Load " + names[s])) {
@@ -2226,40 +2292,6 @@ function draw_panel(ui) {
   }
   if (ui.button("Recheck reachability")) {
     refresh_search(true);
-  }
-  ui.separator();
-
-  // The level's size: the sliders (quantized so a size can be hit) drive both
-  // `New level` above and `Resize` here, and start from the level just loaded.
-  state.newW = quantize(ui.slider("Width", state.newW, MIN_WIDTH, MAX_WIDTH), 4);
-  state.newH = quantize(ui.slider("Height", state.newH, MIN_HEIGHT, MAX_HEIGHT), 1);
-  ui.label("size: " + state.newW + " x " + state.newH);
-  if (ui.button("Resize to " + state.newW + "x" + state.newH)) {
-    noctis.run("level resize " + state.newW + " " + state.newH);
-  }
-  ui.separator();
-
-  // The level's music and background: exactly the names the game's own tables
-  // know, picked with the same bullet-marked buttons as the slots and brushes.
-  ui.label("Music: " + (meta_value(level, "music") || "—"));
-  for (var m = 0; m < MUSIC_NAMES.length; m++) {
-    var musicMark = meta_value(level, "music") === MUSIC_NAMES[m] ? "• " : "";
-    if (ui.button(musicMark + MUSIC_NAMES[m])) {
-      set_meta(level, "music", MUSIC_NAMES[m]);
-      touch();
-      // Metadata is part of the grid's signature but not of the search's records,
-      // so this adopts the new signature without re-simulating anything.
-      refresh_search(false);
-    }
-  }
-  ui.label("Background: " + (meta_value(level, "background") || "—"));
-  for (var b2 = 0; b2 < BACKGROUND_NAMES.length; b2++) {
-    var backMark = meta_value(level, "background") === BACKGROUND_NAMES[b2] ? "• " : "";
-    if (ui.button(backMark + BACKGROUND_NAMES[b2])) {
-      set_meta(level, "background", BACKGROUND_NAMES[b2]);
-      touch();
-      refresh_search(false);
-    }
   }
   ui.separator();
 
@@ -2364,9 +2396,7 @@ noctis.command("level", function (parts) {
     if (!named_in(catalog, wanted)) {
       return "error: " + arg + " must be one of " + catalog.join(", ");
     }
-    set_meta(state.level, arg, wanted);
-    touch();
-    refresh_search(false);
+    choose_metadata(state.level, arg, wanted);
     return "ok " + arg + " " + wanted + " | " + status_line();
   }
   if (arg === "paint") {

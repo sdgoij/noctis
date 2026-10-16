@@ -1521,9 +1521,21 @@ impl EditorDriver {
         if self.layout.dock(dock).open.is_empty() {
             return;
         }
+        // A dock is sized to its content, and a view can be arbitrarily long — an
+        // extension's panel is as long as the extension draws it. So the dock grows to
+        // fit its view up to a cap, then its view scrolls: a long view cannot starve
+        // the viewport (or the window) around it. A size the user dragged (remembered
+        // across runs) still wins, clamped to the cap.
+        let window = ui.ctx().input(|input| input.viewport_rect());
+        let cap = match dock {
+            Dock::Left | Dock::Right => (window.width() * 0.4).max(120.0),
+            Dock::Bottom => (window.height() * 0.5).max(120.0),
+        };
         let default = match dock {
             Dock::Left | Dock::Right => 240.0,
-            Dock::Bottom => 200.0,
+            // The bottom dock starts at the cap: with its view scrolling, a short
+            // view shrinks it back down and a long one fills it.
+            Dock::Bottom => cap,
         };
         let panel = match dock {
             Dock::Left => egui::Panel::left("noctis_dock_left"),
@@ -1531,7 +1543,8 @@ impl EditorDriver {
             Dock::Bottom => egui::Panel::bottom("noctis_dock_bottom"),
         }
         .resizable(true)
-        .default_size(self.layout.dock(dock).size_or(default));
+        .max_size(cap)
+        .default_size(self.layout.dock(dock).size_or(default).min(cap));
         let response = panel.show(ui, |ui| {
             // Copy the open views out so the `&mut self` borrows inside
             // `dock_tabs` and `show_view` do not overlap `self.layout`.
@@ -1539,7 +1552,14 @@ impl EditorDriver {
             let active = self.layout.dock(dock).active;
             self.dock_tabs(ui, dock, &views, active);
             if let Some(view) = views.get(active).cloned() {
-                self.show_view(&view, ui);
+                // A `ScrollArea` bounds the view to the dock's capped height, so the
+                // content can no longer grow the panel past the cap and starve the
+                // viewport. It shrinks to the content vertically (`true`) so a short
+                // view keeps a small dock, and fills the width (`false`) so the view
+                // is laid out across the whole dock.
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| self.show_view(&view, ui));
             }
         });
         // Remember the drawn size so it survives a restart.
@@ -3141,6 +3161,76 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// A panel is as long as its extension draws it, and a long one must not grow
+    /// the bottom dock until it starves the viewport.
+    ///
+    /// A dock sizes itself to its content, so an unbounded view would take the
+    /// whole window and leave the viewport a sliver (and a click there would land
+    /// nowhere). The dock is capped and its view scrolls instead.
+    #[test]
+    fn a_long_extension_panel_cannot_starve_the_viewport() {
+        let root = extension_root("tall-panel");
+        let dir = root.join("tally");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            r#"{ "id": "com.example.tally", "name": "Tally", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extension.js"),
+            r#"noctis.ui.panel("Tally", function (ui) {
+              ui.label("tall-panel-top");
+              for (var i = 0; i < 200; i++) {
+                ui.label("tall-panel-row-" + i);
+              }
+              ui.label("tall-panel-bottom");
+            });
+            "#,
+        )
+        .unwrap();
+
+        let dirs = vec![root.clone()];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        let mut driver = EditorDriver::new(Editor::new()).with_extensions(
+            host,
+            ExtensionConfig::default(),
+            root.join("extensions.toml"),
+            dirs,
+            Vec::new(),
+            None,
+        );
+
+        // A few frames: the dock remembers the size it drew on the frame before.
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..5 {
+            texts = one_frame(&mut driver, &ctx);
+        }
+
+        // The dock is capped at half the 720pt window, so the viewport keeps the
+        // rest of it rather than the view taking the window.
+        let cap = 720.0 * 0.5;
+        assert!(
+            driver.layout.bottom.size <= cap + 1.0,
+            "a view 200 rows long left the bottom dock {} tall (cap {cap})",
+            driver.layout.bottom.size
+        );
+        // The head of the view is on screen and its tail has scrolled out of it:
+        // the content is confined and scrolls rather than growing the dock.
+        assert!(
+            texts.iter().any(|text| text.contains("tall-panel-top")),
+            "the panel's head drew: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("tall-panel-bottom")),
+            "a view longer than its capped dock scrolled out of sight: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn an_extension_viewport_overlay_paints_in_the_central_panel() {
         let root = extension_root("viewport");
@@ -3281,8 +3371,7 @@ mod tests {
             "the level editor loaded"
         );
 
-        // TEMP: mirror the windowed run exactly — one update, then the first UI
-        // pass, which is where a user's editor panicked.
+        // The driver the window runs, so the frame loop below is the shipped path.
         let mut driver = EditorDriver::new(editor)
             .with_project(Some(project))
             .with_extensions(
@@ -3323,15 +3412,17 @@ mod tests {
             texts.iter().any(|text| text.contains("Reverie level")),
             "the panel painted: {texts:?}"
         );
+        // The music and background are menus (`ui.select`): the label and the option
+        // the level holds are separate text runs.
         assert!(
-            texts
-                .iter()
-                .any(|text| text.contains("Music: echoes-of-solace")),
-            "the panel names the level's music: {texts:?}"
+            texts.iter().any(|text| text.contains("Music"))
+                && texts.iter().any(|text| text.contains("echoes-of-solace")),
+            "the panel's music menu names the level's song: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text.contains("Background: snow")),
-            "the panel names the level's background: {texts:?}"
+            texts.iter().any(|text| text.contains("Background"))
+                && texts.iter().any(|text| text.contains("snow")),
+            "the panel's background menu names the level's background: {texts:?}"
         );
         assert!(
             texts.iter().any(|text| text.contains("size: 72 x 17")),
@@ -3395,9 +3486,6 @@ mod tests {
             );
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
-        // A point in the central panel: the extension's own panel opens in the
-        // bottom dock, which leaves the viewport the strip under the title bar.
-        let at = egui::pos2(640.0, 100.0);
         let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -3423,25 +3511,35 @@ mod tests {
         for _ in 0..10 {
             frame(&mut driver, Vec::new());
         }
-        // Hover, then tap: press and release inside the viewport.
-        let _ = frame(&mut driver, vec![egui::Event::PointerMoved(at)]);
-        let _ = frame(
-            &mut driver,
-            vec![egui::Event::PointerMoved(at), button(at, true)],
-        );
-        let texts = frame(
-            &mut driver,
-            vec![egui::Event::PointerMoved(at), button(at, false)],
-        );
+        // The level's field is centred in the viewport, and how tall the viewport is
+        // depends on the dock layout — which the extension's own panel sizes — so walk
+        // the pointer down the middle until a tap lands in the field and paints. Each
+        // tap is a click over the viewport widget, which is the path that deadlocked.
+        let mut texts = Vec::new();
+        for step in 0..7 {
+            let at = egui::pos2(640.0, 60.0 + step as f32 * 55.0);
+            let _ = frame(&mut driver, vec![egui::Event::PointerMoved(at)]);
+            let _ = frame(
+                &mut driver,
+                vec![egui::Event::PointerMoved(at), button(at, true)],
+            );
+            texts = frame(
+                &mut driver,
+                vec![egui::Event::PointerMoved(at), button(at, false)],
+            );
+            if texts.iter().any(|text| text.contains("(unsaved)")) {
+                break;
+            }
+        }
 
-        // The header drew, and the tap painted: the level is now unsaved.
+        // The header drew, and a tap painted: the level is now unsaved.
         assert!(
             texts.iter().any(|text| text.contains("72x17")),
             "the level header painted: {texts:?}"
         );
         assert!(
             texts.iter().any(|text| text.contains("(unsaved)")),
-            "the tap in the viewport painted a tile: {texts:?}"
+            "a tap in the viewport painted a tile: {texts:?}"
         );
         std::fs::remove_dir_all(&root).ok();
     }

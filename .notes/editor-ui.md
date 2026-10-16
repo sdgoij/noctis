@@ -168,6 +168,12 @@ Semantics, kept deliberately small:
 - With several views open, a dock draws a small **tab strip** across its top and
   the active view beneath it — **tabs** are the chosen form (*Decisions*); stacked,
   collapsible sections were the alternative.
+- A dock is **sized to its content, capped**: a view is as long as its extension
+  draws it, so the dock grows to fit it up to a share of the window (half its height
+  for the bottom dock, two fifths of their width for the side docks) and then the
+  view **scrolls**. Without that, one long panel takes the whole window and leaves
+  the viewport a sliver. A size the user dragged is remembered (and clamped to the
+  cap), and a short view still keeps a small dock.
 
 Drawing a dock, with the panel-order rule that produces the layout above:
 
@@ -177,17 +183,28 @@ fn dock(&mut self, ui: &mut egui::Ui, dock: Dock) {
         return;
     }
     // `Panel` in egui 0.36 is one builder for all four sides; `top`/`bottom` are
-    // non-resizable by default, so the bottom dock opts in.
+    // non-resizable by default, so the bottom dock opts in. The dock grows to fit
+    // its view up to `cap`; past that the view scrolls, so a long panel cannot
+    // starve the viewport. (`default_size` alone does not bound a bottom panel —
+    // its range stays unbounded — so `max_size` is what caps it.)
+    let window = ui.ctx().input(|input| input.viewport_rect());
+    let cap = match dock {
+        Dock::Left | Dock::Right => (window.width() * 0.4).max(120.0),
+        Dock::Bottom => (window.height() * 0.5).max(120.0),
+    };
+    let default = match dock {
+        Dock::Left | Dock::Right => 240.0,
+        // A short view shrinks it back down; a long one fills it.
+        Dock::Bottom => cap,
+    };
     let panel = match dock {
         Dock::Left => egui::Panel::left("noctis_dock_left"),
         Dock::Right => egui::Panel::right("noctis_dock_right"),
         Dock::Bottom => egui::Panel::bottom("noctis_dock_bottom"),
     }
     .resizable(true)
-    .default_size(match dock {
-        Dock::Left | Dock::Right => 240.0,
-        Dock::Bottom => 200.0,
-    });
+    .max_size(cap)
+    .default_size(self.layout.dock(dock).size_or(default).min(cap));
     panel.show(ui, |ui| {
         // Tab strip, then the active view. Copy the views out first so the
         // `&mut self` borrow in `show_view` does not overlap `self.layout`.
@@ -195,7 +212,11 @@ fn dock(&mut self, ui: &mut egui::Ui, dock: Dock) {
         let active = self.layout.dock(dock).active;
         self.dock_tabs(ui, dock, &views, active);
         if let Some(view) = views.get(active) {
-            self.show_view(view, ui);
+            // Bounds the view to the dock, and shrinks to short content so a small
+            // view keeps a small dock.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, |ui| self.show_view(view, ui));
         }
     });
 }
