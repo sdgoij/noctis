@@ -16,11 +16,16 @@
 // crossed out; when the goal cannot be reached the viewport banners it.
 //
 // The sweep is an *approximation*: it takes off from three points in a standing
-// cell and over a small set of jump holds and running speeds, so it can miss a
-// route that needs frame-perfect timing (a long, hand-made maze can read as
+// cell and over a small set of jump holds and running speeds, and one arc holds a
+// single horizontal input from takeoff to landing, so it can miss a route that needs
+// frame-perfect timing or a mid-air reversal (a long, hand-made maze can read as
 // "no route found" when a player can still get through). Everything it *does*
 // accept is a trajectory the real game would produce, so a "playable" verdict and
-// every "unreachable coin" marker are trustworthy in that direction.
+// every "unreachable coin" marker are trustworthy in that direction — and a "no
+// route found" that the sweep could not settle is checked against
+// [`coarse_estimate`], a deliberately unsound tile-level second opinion that
+// overstates what is possible. When the two disagree, the report says so instead of
+// letting the narrow model have the last word.
 //
 // It is also not cheap: the editor's JavaScript engine runs the game's integrator
 // far slower than the game itself does, and a sweep of a 72x17 level simulates a
@@ -1414,6 +1419,162 @@ function search_eagerly(level, search, arcs) {
 }
 
 // ---------------------------------------------------------------------------
+// The coarse estimate
+// ---------------------------------------------------------------------------
+
+/// How far a coarse hop may rise and cross, in tiles. Derived from the throw — a
+/// full jump rises about 3.5 tiles and crosses about 5.5 at top speed — and rounded
+/// up, because this estimate is meant to be generous (see [`coarse_estimate`]).
+var COARSE = { up: 4, across: 6 };
+
+/// The estimate [`coarse_estimate`] fills in place.
+///
+/// Filled, not rebuilt, like [`REPORT`]: a freshly built map handed to a long-lived
+/// slot is what Slag's verifier reports (see [`warm_shapes`]).
+var COARSE_RESULT = { signature: null, route: false, cells: 0, coins: 0 };
+
+/// A coarse, deliberately *unsound* estimate of whether the level can be traversed.
+///
+/// The sweep in [`new_search`] is sound but narrow: it simulates real trajectories
+/// and gives up when its small policy set cannot thread a route, which reads as *no
+/// route found* for a level a player can beat (the README's `level3` is one). This is
+/// the second opinion, and it is a different kind of thing on purpose: a flood fill
+/// over the *tiles* the body can occupy, with gravity and one bounded hop — no arc,
+/// no momentum, no timing. It models a hop as a rise-then-cross rectangle rather than
+/// a parabola, so it overstates what is possible: a *possible* here never overrides
+/// the sweep's *playable*, it only ever softens a *no route found* into "the sweep's
+/// model is too narrow".
+///
+/// Fills [`COARSE_RESULT`] in place.
+function coarse_estimate(level, signature) {
+  var width = level.width;
+  var height = level.height;
+  var solid = level.solid;
+  var cells = width * height;
+  var seen = [];
+  var queue = [];
+  var head = 0;
+  var count = 0;
+  for (var i = 0; i < cells; i++) {
+    seen.push(0);
+  }
+  var spawn = level.spawn;
+  if (spawn !== null) {
+    var start = spawn[1] * width + spawn[0];
+    seen[start] = 1;
+    count++;
+    queue.push(start);
+  }
+
+  while (head < queue.length) {
+    var cell = queue[head];
+    head++;
+    var tx = cell % width;
+    var ty = (cell - tx) / width;
+    // Gravity: a body in the air falls straight down while the tile below is free.
+    var below = cell + width;
+    if (below < cells && solid[below] === 0 && seen[below] !== 1) {
+      seen[below] = 1;
+      count++;
+      queue.push(below);
+    }
+    // A hop needs a support to leave, which is exactly a solid tile below.
+    if (ty + 1 < height && solid[cell + width] === 0) {
+      continue;
+    }
+    // Rise up this column, then cross at the top row it reached, then fall from
+    // wherever it lands (the next iteration's gravity). The rise stops at a ceiling
+    // and the crossing stops at a wall, so a hop never passes through one.
+    var low = ty - COARSE.up;
+    if (low < 0) {
+      low = 0;
+    }
+    var rowBase = 0;
+    for (var ry = ty; ry >= low; ry--) {
+      rowBase = ry * width;
+      if (solid[rowBase + tx] !== 0) {
+        break;
+      }
+      if (ry < ty && seen[rowBase + tx] !== 1) {
+        seen[rowBase + tx] = 1;
+        count++;
+        queue.push(rowBase + tx);
+      }
+      for (var dir = -1; dir <= 1; dir += 2) {
+        for (var step = 1; step <= COARSE.across; step++) {
+          var nx = tx + dir * step;
+          if (nx < 0 || nx >= width || solid[rowBase + nx] !== 0) {
+            break;
+          }
+          var landing = rowBase + nx;
+          if (seen[landing] !== 1) {
+            seen[landing] = 1;
+            count++;
+            queue.push(landing);
+          }
+        }
+      }
+    }
+  }
+
+  var goal = level.goal;
+  var route = goal !== null && seen[goal[1] * width + goal[0]] === 1;
+  var coins = 0;
+  for (var c = 0; c < level.coins.length; c++) {
+    var coin = level.coins[c];
+    if (seen[coin[1] * width + coin[0]] === 1) {
+      coins++;
+    }
+  }
+  COARSE_RESULT.signature = signature;
+  COARSE_RESULT.route = route;
+  COARSE_RESULT.cells = count;
+  COARSE_RESULT.coins = coins;
+}
+
+/// The coarse estimate as a phrase, or `null` when it has nothing to add.
+///
+/// It only speaks when the sweep could not reach the goal: a *playable* verdict is
+/// sound and needs no second opinion, and a partial sweep is not a verdict at all.
+function coarse_note() {
+  var report = current_report();
+  var level = state.level;
+  if (report === null || level === null || !report.settled || report.reachedGoal) {
+    return null;
+  }
+  // A structurally invalid level is already reported as such — there is nothing to
+  // second-guess about a level the game would refuse to load (and no spawn to
+  // search from, which is itself an error).
+  if (report.errors.length > 0) {
+    return null;
+  }
+  var total = level.width * level.height;
+  if (COARSE_RESULT.signature === state.signature && COARSE_RESULT.route) {
+    var span = reached_span(report.search, level);
+    return (
+      "coarse estimate (tile-level, optimistic): a route to the goal looks possible — " +
+      COARSE_RESULT.cells +
+      " of " +
+      total +
+      " tiles and " +
+      COARSE_RESULT.coins +
+      " of " +
+      level.coins.length +
+      " coins, against the sweep's " +
+      span.count +
+      " cells"
+    );
+  }
+  return (
+    "coarse estimate (tile-level, optimistic): no route here either (" +
+    COARSE_RESULT.cells +
+    " of " +
+    total +
+    " tiles)"
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
@@ -1683,6 +1844,11 @@ function current_report() {
       }
     }
   }
+  // The coarse estimate describes the grid, so it is refreshed whenever the grid's
+  // signature changes — the same trigger the sweep uses.
+  if (COARSE_RESULT.signature !== state.signature) {
+    coarse_estimate(level, state.signature);
+  }
   return REPORT;
 }
 
@@ -1757,7 +1923,12 @@ function search_phrase() {
     return "partial: the search hit its " + SEARCH.limit + "-arc budget — " + where;
   }
   if (!search.goal) {
-    return "no route found to the goal (the sweep is a conservative approximation) — " + where;
+    var note = coarse_note();
+    return (
+      "no route found to the goal (the sweep is a conservative approximation) — " +
+      where +
+      (note === null ? "" : " | " + note)
+    );
   }
   if (report.unreachableCoins.length > 0) {
     return report.unreachableCoins.length + " coin(s) out of reach — " + where;
@@ -1788,11 +1959,14 @@ function verdict_short() {
   if (!search.goal) {
     // Name the coverage, not just the verdict: the sweep only searched what it
     // reached, so a fractional "64/3750 cells" says at a glance that it is a miss,
-    // not a proof.
+    // not a proof. The coarse estimate is the second opinion, when it has one.
     var span = reached_span(search, level);
-    return (
-      "no route found (sweep reached " + span.count + "/" + level.width * level.height + " cells)"
-    );
+    var noRoute =
+      "no route found (sweep reached " + span.count + "/" + level.width * level.height + " cells)";
+    if (COARSE_RESULT.signature === state.signature && COARSE_RESULT.route) {
+      return noRoute + " — a coarse estimate finds one";
+    }
+    return noRoute;
   }
   if (report.unreachableCoins.length > 0) {
     return report.unreachableCoins.length + " coin(s) out of reach";
@@ -2257,6 +2431,13 @@ function draw_panel(ui) {
   var report = current_report();
   ui.label(state.slot + (state.dirty ? "  (unsaved)" : ""));
   ui.label(status_line());
+  // The coarse estimate, when the sweep could not reach the goal: the sweep is a
+  // sound but narrow model, and this says when it is the model that gave up rather
+  // than the level being impassable.
+  var coarse = coarse_note();
+  if (coarse !== null) {
+    ui.label(coarse);
+  }
   ui.separator();
 
   // The level's settings come first so the controls a level is edited through stay

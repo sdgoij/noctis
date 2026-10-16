@@ -80,6 +80,12 @@ drops something you placed. (`level new [<width> <height>]`,
   `1/60` step) as a search over jump arcs from the spawn, and reports whether the
   goal and each coin can be reached. The cells it reached are tinted, the route it
   found is drawn, and a coin it could not reach is crossed out.
+- **A second opinion**, when the sweep gives up: a *deliberately unsound*,
+  tile-level estimate (`coarse_estimate`) floods the tiles the body could occupy, with
+  gravity and one bounded hop — no arc, no momentum, no timing. It overstates what is
+  possible, so it never overrules a *playable* verdict; it only softens a *no route
+  found* into "the sweep's model is too narrow", which is what it reports on
+  `level3.txt` (the sweep routes 64 of 3750 cells, the estimate 2073).
 - **Incremental**: the sweep records what every arc it simulated *did* — where it
   landed, the coins and goal it touched, and the box of tiles its body could have
   read. An edit can only change the arcs whose box it touched (the grid is the only
@@ -106,7 +112,8 @@ drops something you placed. (`level new [<width> <height>]`,
   arcs (minutes in the editor's engine) and still reaches only 82 of the level's
   3750 cells. Widening the default policy set instead is *worse*: doubling it to
   ~2x the cost truncates `level2` against the arc budget and still does not help
-  `level3`. So the set stays small and the verdict stays honestly hedged.
+  `level3`. So the set stays small, the verdict stays honestly hedged, and the
+  coarse estimate above is what says when the model — not the level — is what gave up.
 - It is **not free, but it is paid once**: the editor's JavaScript engine runs the
   integrator far slower than the game does, so the *first* sweep of a 72x17 level is
   a few thousand arcs spread across frames (a couple per frame) — up to half a minute

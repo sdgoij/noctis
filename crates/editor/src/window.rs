@@ -3630,6 +3630,68 @@ mod tests {
         // A fresh check of the blocked level agrees, and pays for a full sweep.
         let recheck = host.dispatch(&mut editor, "level check").expect("check");
         assert!(recheck.contains("no route found"), "{recheck}");
+        // The second opinion agrees here too: the coarse estimate cannot cross the
+        // wall either, so it does not paper over a level that really is sealed.
+        assert!(
+            recheck.contains("no route here either"),
+            "the coarse estimate agrees the wall seals the level: {recheck}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The sweep is a sound but narrow model, so a level it cannot route is not
+    /// necessarily impassable — and the report says which kind of "no" this is.
+    ///
+    /// `level3.txt`, the original game's 125x30 maze, is the known case: the sweep
+    /// gives up after 64 of its 3750 cells, and the deliberately unsound tile-level
+    /// estimate finds a route the sweep's model cannot express.
+    #[test]
+    fn the_level_editor_second_opinion_disagrees_with_the_sweep_on_level3() {
+        let root = extension_root("reverie-coarse");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        for level in ["level1", "level3"] {
+            std::fs::copy(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../../examples/reverie/levels/{level}.txt")),
+                project_dir.join(format!("levels/{level}.txt")),
+            )
+            .unwrap();
+        }
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+
+        host.dispatch(&mut editor, "level level3").expect("load");
+        let report = host.dispatch(&mut editor, "level check").expect("check");
+        assert!(report.contains("no route found"), "{report}");
+        assert!(
+            report.contains("no route found (sweep reached 64/3750 cells)"),
+            "the verdict names its own coverage: {report}"
+        );
+        assert!(
+            report.contains("— a coarse estimate finds one"),
+            "the verdict carries the second opinion: {report}"
+        );
+        assert!(
+            report.contains(
+                "coarse estimate (tile-level, optimistic): a route to the goal looks possible"
+            ),
+            "the note spells out what the estimate saw: {report}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
