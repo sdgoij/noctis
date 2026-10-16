@@ -93,10 +93,20 @@ drops something you placed. (`level new [<width> <height>]`,
 ### Limits, honestly
 
 - The sweep is a **conservative approximation**: it takes off from three points in
-  a standing cell and over a small set of jump holds and running speeds, so a route
-  that needs frame-perfect timing can be missed. A verdict of *playable*, and every
-  *unreachable coin* marker, is trustworthy in that direction; *no route found* is
-  a hint, not a proof (the big hand-made maze of `level3.txt` reads as no route).
+  a standing cell and over a small set of jump holds and running speeds, and one arc
+  holds a single horizontal input from takeoff to landing. A route that needs
+  frame-perfect timing — or a mid-air reversal — can be missed. A verdict of
+  *playable*, and every *unreachable coin* marker, is trustworthy in that direction;
+  *no route found* is a hint, not a proof, so it reports how much of the level it
+  actually searched ("sweep reached 64/3750 cells"). The big hand-made maze of
+  `level3.txt` reads as *no route found* this way, and it is a **false negative**:
+  sampling harder does not rescue it. Measured, a maximally-sampled sweep — every
+  pixel of the body's footprint as a takeoff, every jump hold 0–26 frames, jumps
+  that start from rest, 27 x 191 = 5157 arcs per standing cell — exhausts 428,000
+  arcs (minutes in the editor's engine) and still reaches only 82 of the level's
+  3750 cells. Widening the default policy set instead is *worse*: doubling it to
+  ~2x the cost truncates `level2` against the arc budget and still does not help
+  `level3`. So the set stays small and the verdict stays honestly hedged.
 - It is **not free, but it is paid once**: the editor's JavaScript engine runs the
   integrator far slower than the game does, so the *first* sweep of a 72x17 level is
   a few thousand arcs spread across frames (a couple per frame) — up to half a minute
@@ -125,7 +135,7 @@ spent. A headless run is a usable smoke test:
 
 ```sh
 cargo run -- editor --headless --project examples/reverie --run "level check"
-# ok level1 | 72x17 | 13 coins | 210 tiles | playable | playable — reached 99 cells ... over 3502 arcs
+# ok level1 | 72x17 | 13 coins | 210 tiles | playable | playable — reached 99 of 1224 cells ... over 3502 arcs
 ```
 
 ## Browser demo

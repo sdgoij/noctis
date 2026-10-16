@@ -1728,17 +1728,25 @@ function search_phrase() {
     return "no spawn to search from";
   }
   var span = reached_span(search, level);
+  // The level's extent, so a sweep that only searched part of it *reads* as partial:
+  // "reached 64 of 3750 cells (x 0-29 of 0-124)" is not a proof of impossibility.
   var where =
     "reached " +
     span.count +
+    " of " +
+    level.width * level.height +
     " cells (x " +
     span.minX +
     "-" +
     span.maxX +
+    " of 0-" +
+    (level.width - 1) +
     ", y " +
     span.minY +
     "-" +
     span.maxY +
+    " of 0-" +
+    (level.height - 1) +
     ") over " +
     search.spent +
     " arcs";
@@ -1778,7 +1786,13 @@ function verdict_short() {
     return "partial verdict (search budget)";
   }
   if (!search.goal) {
-    return "no route found (conservative sweep)";
+    // Name the coverage, not just the verdict: the sweep only searched what it
+    // reached, so a fractional "64/3750 cells" says at a glance that it is a miss,
+    // not a proof.
+    var span = reached_span(search, level);
+    return (
+      "no route found (sweep reached " + span.count + "/" + level.width * level.height + " cells)"
+    );
   }
   if (report.unreachableCoins.length > 0) {
     return report.unreachableCoins.length + " coin(s) out of reach";
