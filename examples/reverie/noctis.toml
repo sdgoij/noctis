@@ -36,6 +36,11 @@ sample_count = 1
 path = "scenes/main.scene.json"
 name = "Reverie"
 
+# The project's own editor extension: a visual editor for `levels/*.txt` that
+# validates a level's reachability as you paint. See `extensions/level-editor/`.
+[extensions]
+dirs = ["extensions"]
+
 [[build]]
 name = "reverie"
 scene = "scenes/main.scene.json"

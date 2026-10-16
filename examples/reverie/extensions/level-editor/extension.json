@@ -1,0 +1,14 @@
+{
+  "id": "reverie.level-editor",
+  "name": "Reverie Level Editor",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "Paint tiles, coins and the goal in the viewport, with live reachability validation.",
+  "author": "reverie example",
+  "entry": "extension.js",
+  "files": {
+    "level1": "levels/level1.txt",
+    "level2": "levels/level2.txt",
+    "level3": "levels/level3.txt"
+  }
+}
