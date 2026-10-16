@@ -256,8 +256,21 @@ needed.
   `--extensions`/`--no-extensions` scope discovery, `--run` dispatches a verb, and
   `--watch` rebuilds the host when a watched extension directory changes;
   the windowed editor draws extension panels, a console with a scrollback, and an
-  Extensions screen whose toggles persist to a config file. A worked example is
-  `examples/extensions`. A `.wasm` module links the `noctis` imports
+  Extensions screen whose toggles persist to a config file. An extension may also
+  register a **viewport overlay** (`noctis.ui.viewport`: a screen-space canvas in
+  the central panel, with pointer input, `capture` to suppress the editor's own
+  navigation, and rectangle/line/text primitives) and read or write the project
+  data its manifest names by slot (`noctis.files`, resolved against the project's
+  store — JavaScript names no path). Both are JavaScript-only for now; the WASM
+  ABI exposes neither. A worked example is `examples/extensions`, and
+  `examples/reverie` ships a level editor built on both (it also carries the
+  workaround for a Slag bug: a literal shape first evaluated after a minor
+  collection is cached without a write barrier — `set_composite_child` — which
+  trips the engine's verifier in a debug build; the host warms its own bootstrap
+  recorder shapes at load, and that extension warms the shapes it uses and fills
+  its long-lived objects in place instead of replacing them. The one-line fix
+  belongs in Slag, and the guard is the windowed-frame test in `editor::window`).
+  A `.wasm` module links the `noctis` imports
   (`log`/`editor_json`/`edit`/`run`) — default-deny by the linker, no WASI — and
   exports `noctis_abi`/`noctis_init`/`noctis_update`, driven once per frame, and
   draws panels through `noctis_alloc`/`noctis_ui` with `ui_panel` and

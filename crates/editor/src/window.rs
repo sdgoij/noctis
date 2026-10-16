@@ -17,7 +17,10 @@ use vfs::Store;
 
 use crate::camera::{CameraControls, PAN_SPEED, dolly_transform, orbit_transform, pan_transform};
 use crate::editor::Editor;
-use crate::extension::{ExtensionHost, ExtensionReload, Interactions, Panel as ExtPanel, Widget};
+use crate::extension::{
+    ExtensionHost, ExtensionReload, Interactions, Panel as ExtPanel, ViewportFrame, ViewportInput,
+    ViewportOp, Widget,
+};
 use crate::gizmo;
 use crate::inspector::InspectorState;
 use crate::{AssetRef, CameraParams, LightParams, MeshRendererParams, ProjectionSpec};
@@ -454,6 +457,8 @@ impl EditorDriver {
     pub fn with_project(mut self, project: Option<Project>) -> Self {
         self.scenes = project.as_ref().map(scene_choices).unwrap_or_default();
         self.project = project;
+        // An already-attached host reads and writes the project through this store.
+        self.attach_project_store();
         self
     }
 
@@ -514,7 +519,7 @@ impl EditorDriver {
     /// screen writes it to, and (under `--watch`) the reload inputs.
     pub fn with_extensions(
         mut self,
-        host: ExtensionHost,
+        mut host: ExtensionHost,
         config: ExtensionConfig,
         config_path: PathBuf,
         dirs: Vec<PathBuf>,
@@ -525,8 +530,21 @@ impl EditorDriver {
         self.extension_dirs = dirs;
         self.extension_disabled = disabled;
         self.extension_reload = reload;
+        // The `noctis.files` channel reads and writes the open project through its
+        // own store, so an extension never names a path.
+        if let Some(project) = self.project.as_ref() {
+            host.set_project(project.store().duplicate());
+        }
         self.extensions = Some(host);
         self
+    }
+
+    /// Hand the attached host a handle on the open project's store (a second
+    /// handle to the same data), for `noctis.files`.
+    fn attach_project_store(&mut self) {
+        if let (Some(host), Some(project)) = (self.extensions.as_mut(), self.project.as_ref()) {
+            host.set_project(project.store().duplicate());
+        }
     }
 
     /// The extension host, if any.
@@ -597,6 +615,7 @@ impl EditorDriver {
         self.console_log
             .extend(logs.into_iter().map(|log| format!("log: {log}")));
         self.extensions = Some(host);
+        self.attach_project_store();
         self.console_log.push("extensions reloaded".into());
     }
 
@@ -1873,6 +1892,41 @@ impl EditorDriver {
         }
     }
 
+    /// Hand the viewport to the extensions: build this frame's pointer input,
+    /// take the overlay ops the host drew, apply any work they queued (a click may
+    /// place a tile through `noctis.edit`), and paint them.
+    ///
+    /// Returns the overlay frame — whether one is registered, and whether it
+    /// claimed the pointer — and the viewport's interaction response, so the
+    /// caller can skip its own hints and navigation.
+    fn viewport_overlay(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+    ) -> (ViewportFrame, egui::Response) {
+        let response = ui.interact(
+            rect,
+            ui.id().with("viewport_pick"),
+            egui::Sense::click_and_drag(),
+        );
+        let input = viewport_input(ui.ctx(), rect, &response);
+        let overlay = match self.extensions.as_mut() {
+            Some(host) => host.draw_viewport(&self.editor, input),
+            None => ViewportFrame::default(),
+        };
+        // A viewport draw may have queued edits or logged; handle them the way a
+        // panel draw's are handled.
+        if let Some(host) = self.extensions.as_mut() {
+            let applied = host.apply_pending(&mut self.editor);
+            self.console_log.extend(applied);
+            let logs = host.take_logs();
+            self.console_log
+                .extend(logs.into_iter().map(|log| format!("log: {log}")));
+        }
+        paint_viewport(ui, rect, &overlay.ops);
+        (overlay, response)
+    }
+
     /// Handle camera navigation, gizmo hover, handle dragging, and click-to-select
     /// in the viewport.
     fn viewport_interaction(&mut self, ui: &egui::Ui, rect: egui::Rect, response: &egui::Response) {
@@ -2111,20 +2165,26 @@ impl AppDriver for EditorDriver {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(egui::Color32::TRANSPARENT))
             .show(ui, |ui| {
-                ui.label("Viewport");
-                ui.separator();
-                ui.label(
-                    "WASD and Q/E fly the camera; drag the middle mouse button to orbit \
-                     (hold Shift to pan); the wheel zooms.\n\
-                     Click to select. Drag a handle to transform.",
-                );
                 let rect = ui.max_rect();
-                let response = ui.interact(
-                    rect,
-                    ui.id().with("viewport_pick"),
-                    egui::Sense::click_and_drag(),
-                );
-                self.viewport_interaction(ui, rect, &response);
+                // An extension's viewport overlay paints here, in viewport pixels,
+                // and may claim the pointer for the frame.
+                let (overlay, response) = self.viewport_overlay(ui, rect);
+                // The overlay owns the viewport; the editor's own hints would only
+                // be in its way.
+                if !overlay.registered {
+                    ui.label("Viewport");
+                    ui.separator();
+                    ui.label(
+                        "WASD and Q/E fly the camera; drag the middle mouse button to orbit \
+                         (hold Shift to pan); the wheel zooms.\n\
+                         Click to select. Drag a handle to transform.",
+                    );
+                }
+                // An overlay that claimed the pointer takes the frame's input, so
+                // the camera stays put and a click paints rather than selects.
+                if !overlay.capture {
+                    self.viewport_interaction(ui, rect, &response);
+                }
             });
 
         // The resize grips go on top of everything, so the outermost pixels
@@ -2194,6 +2254,125 @@ impl EditorDriver {
             }
         }
     }
+}
+
+/// The pointer state an extension's viewport overlay reads, in pixels from the
+/// viewport rect's top-left corner.
+///
+/// Every `Response` question is asked *before* the context is locked: `clicked`
+/// goes through `clicked_by`, which takes the context's lock itself, so asking it
+/// from inside `ctx.input(..)` re-enters that lock and deadlocks the frame the
+/// user clicks in the viewport.
+fn viewport_input(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    response: &egui::Response,
+) -> ViewportInput {
+    let pointer = ctx.pointer_latest_pos().unwrap_or(rect.min);
+    let inside = response.contains_pointer();
+    let clicked = response.clicked();
+    let right_clicked = response.clicked_by(egui::PointerButton::Secondary);
+    ctx.input(|input| ViewportInput {
+        width: rect.width(),
+        height: rect.height(),
+        x: pointer.x - rect.min.x,
+        y: pointer.y - rect.min.y,
+        inside,
+        down: input.pointer.primary_down(),
+        clicked,
+        right_down: input.pointer.secondary_down(),
+        right_clicked,
+        wheel: input.smooth_scroll_delta.y,
+        dx: input.pointer.delta().x,
+        dy: input.pointer.delta().y,
+        shift: input.modifiers.shift,
+        ctrl: input.modifiers.command,
+        alt: input.modifiers.alt,
+    })
+}
+
+/// Paint a viewport overlay's ops, offset into `rect` and clipped to it, so an
+/// overlay cannot draw over the docks.
+fn paint_viewport(ui: &egui::Ui, rect: egui::Rect, ops: &[ViewportOp]) {
+    if ops.is_empty() {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    for op in ops {
+        match op {
+            ViewportOp::Rect {
+                x,
+                y,
+                w,
+                h,
+                color,
+                filled,
+                thickness,
+            } => {
+                let area = egui::Rect::from_min_size(
+                    egui::pos2(rect.min.x + x, rect.min.y + y),
+                    egui::vec2(*w, *h),
+                );
+                if *filled {
+                    painter.rect_filled(area, egui::CornerRadius::ZERO, paint_color(*color));
+                } else {
+                    painter.rect_stroke(
+                        area,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(*thickness, paint_color(*color)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+            ViewportOp::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                color,
+                thickness,
+            } => {
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.min.x + x1, rect.min.y + y1),
+                        egui::pos2(rect.min.x + x2, rect.min.y + y2),
+                    ],
+                    egui::Stroke::new(*thickness, paint_color(*color)),
+                );
+            }
+            ViewportOp::Text {
+                x,
+                y,
+                text,
+                color,
+                size,
+            } => {
+                painter.text(
+                    egui::pos2(rect.min.x + x, rect.min.y + y),
+                    egui::Align2::LEFT_TOP,
+                    text,
+                    egui::FontId::proportional(overlay_font_size(*size)),
+                    paint_color(*color),
+                );
+            }
+        }
+    }
+}
+
+/// The font size to paint an overlay's text at: rounded to a whole point and
+/// clamped, because egui bakes every distinct size into its font atlas and keeps
+/// it — an overlay that scales its text (a zoomable tile editor does) would
+/// otherwise add a baked size per zoom step for the life of the session.
+fn overlay_font_size(size: f32) -> f32 {
+    if !size.is_finite() {
+        return 12.0;
+    }
+    size.round().clamp(6.0, 48.0)
+}
+
+/// An 8-bit RGBA colour as egui's colour type.
+fn paint_color(color: [u8; 4]) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
 }
 
 /// The store key for `path` inside `project`: its path relative to the project
@@ -2917,6 +3096,540 @@ mod tests {
             View::Extension { .. }
         ));
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_extension_viewport_overlay_paints_in_the_central_panel() {
+        let root = extension_root("viewport");
+        let dir = root.join("overlay");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            r#"{ "id": "com.example.overlay", "name": "Overlay", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extension.js"),
+            r##"
+            noctis.ui.viewport(function (vui) {
+              var p = vui.pointer();
+              vui.capture();
+              vui.rect(0, 0, p.width, p.height, "#00000080");
+              vui.text(8, 8, "viewport-overlay-sentinel", "#ffffff", 12);
+            });
+            "##,
+        )
+        .unwrap();
+
+        let dirs = vec![root.clone()];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        let mut driver = EditorDriver::new(Editor::new()).with_extensions(
+            host,
+            ExtensionConfig::default(),
+            root.join("extensions.toml"),
+            dirs,
+            Vec::new(),
+            None,
+        );
+
+        let ctx = egui::Context::default();
+        let texts = one_frame(&mut driver, &ctx);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("viewport-overlay-sentinel")),
+            "the overlay painted over the viewport: {texts:?}"
+        );
+        // The overlay owns the viewport, so the editor's own hints step aside.
+        assert!(
+            !texts.iter().any(|text| text.contains("WASD and Q/E")),
+            "the editor's viewport hints are suppressed: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_declining_viewport_overlay_leaves_the_editor_its_viewport() {
+        let root = extension_root("declining-viewport");
+        let dir = root.join("hidden");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("extension.json"),
+            r#"{ "id": "com.example.hidden", "name": "Hidden", "version": "1.0.0", "api": 1, "entry": "extension.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("extension.js"),
+            "noctis.ui.viewport(function (vui) { vui.text(8, 8, 'never', '#ffffff', 12); return false; });",
+        )
+        .unwrap();
+
+        let dirs = vec![root.clone()];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        let mut driver = EditorDriver::new(Editor::new()).with_extensions(
+            host,
+            ExtensionConfig::default(),
+            root.join("extensions.toml"),
+            dirs,
+            Vec::new(),
+            None,
+        );
+
+        let ctx = egui::Context::default();
+        let texts = one_frame(&mut driver, &ctx);
+        assert!(
+            !texts.iter().any(|text| text.contains("never")),
+            "a declining overlay paints nothing: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("WASD and Q/E")),
+            "the editor keeps its viewport: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_reverie_level_editor_paints_and_validates_a_project_level() {
+        // The shipped level editor, driven for real: it reads its level through
+        // `noctis.files` from the open project, validates it, and paints the grid,
+        // its panel and its verdict as viewport ops over a windowed frame.
+        let root = extension_root("reverie-level");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        // The real level: a realistic frame loop needs a level big enough to
+        // allocate like the editor does (see the note on the shape warm-up).
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        assert!(loader.errors().is_empty(), "{:?}", loader.errors());
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        // The project's store is attached before the `"ready"` hook runs, exactly
+        // as the CLI does it, so the extension can read its level files.
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+        // A full sweep first, so a collection has promoted the shared shape map
+        // before the frames below: that is when a recorder shape built late trips
+        // Slag's write-barrier verifier in a debug build.
+        host.dispatch(&mut editor, "level check").expect("check");
+        assert!(
+            host.ids().iter().any(|id| id == "reverie.level-editor"),
+            "the level editor loaded"
+        );
+
+        // TEMP: mirror the windowed run exactly — one update, then the first UI
+        // pass, which is where a user's editor panicked.
+        let mut driver = EditorDriver::new(editor)
+            .with_project(Some(project))
+            .with_extensions(
+                host,
+                ExtensionConfig::default(),
+                root.join("extensions.toml"),
+                dirs,
+                Vec::new(),
+                None,
+            );
+        let ctx = egui::Context::default();
+
+        // A realistic frame loop. It is also the regression guard for the Slag
+        // write-barrier hazard: the search and the overlay allocate across many
+        // frames, which is what promotes the shared shape map — a recorder shape
+        // built only after that (without `ExtensionHost`'s warm-up) panics a debug
+        // build with "write-barrier miss".
+        for _ in 0..200 {
+            driver.update(1.0 / 60.0);
+            let _ = one_frame(&mut driver, &ctx);
+        }
+        let texts = one_frame(&mut driver, &ctx);
+
+        // The overlay: the level's header line, and the verdict it reached.
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("72x17") && text.contains("brush G")),
+            "the level header painted: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("playable")),
+            "the verdict painted: {texts:?}"
+        );
+        // The panel, opened in its dock: the level's own rows, its music and
+        // background (with the names the game knows), and its size controls.
+        assert!(
+            texts.iter().any(|text| text.contains("Reverie level")),
+            "the panel painted: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Music: echoes-of-solace")),
+            "the panel names the level's music: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("Background: snow")),
+            "the panel names the level's background: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("size: 72 x 17")),
+            "the size controls start from the loaded level: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A tap in the viewport paints a tile, without deadlocking the frame.
+    ///
+    /// `viewport_input` collects everything the overlay needs into a
+    /// [`ViewportInput`]. It reads `Response` flags and the egui context together,
+    /// which is a deadlock trap: `Response::clicked` goes through `clicked_by`,
+    /// which locks the context itself, so asking it from inside the `ctx.input(..)`
+    /// closure that already holds that lock re-enters it. A single-threaded
+    /// re-entrant lock never returns, and epaint's debug watchdog turns it into a
+    /// panic after ten seconds. Pressing the pointer in the viewport is exactly
+    /// what painting a tile is, so this test drives the shipped level editor, taps
+    /// the viewport, and requires the tap to paint and the frame to finish.
+    #[test]
+    fn a_tap_in_the_viewport_paints_a_tile() {
+        let root = extension_root("reverie-paint");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        // A copy of the real level: the editor paints into this project's store,
+        // never into the repository's `levels/`.
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+        host.dispatch(&mut editor, "level check").expect("check");
+
+        let mut driver = EditorDriver::new(editor)
+            .with_project(Some(project))
+            .with_extensions(
+                host,
+                ExtensionConfig::default(),
+                root.join("extensions.toml"),
+                dirs,
+                Vec::new(),
+                None,
+            );
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
+        // A point in the central panel: the extension's own panel opens in the
+        // bottom dock, which leaves the viewport the strip under the title bar.
+        let at = egui::pos2(640.0, 100.0);
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+
+        let frame = |driver: &mut EditorDriver, events: Vec<egui::Event>| {
+            driver.update(1.0 / 60.0);
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(raw, |ui| driver.ui(ui));
+            let texts = frame_texts(&output);
+            output.drop_without_applying_deltas();
+            texts
+        };
+
+        // Settle the editor (the extension opens its panel on the first frame or
+        // two, which is what claims the bottom dock).
+        for _ in 0..10 {
+            frame(&mut driver, Vec::new());
+        }
+        // Hover, then tap: press and release inside the viewport.
+        let _ = frame(&mut driver, vec![egui::Event::PointerMoved(at)]);
+        let _ = frame(
+            &mut driver,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        let texts = frame(
+            &mut driver,
+            vec![egui::Event::PointerMoved(at), button(at, false)],
+        );
+
+        // The header drew, and the tap painted: the level is now unsaved.
+        assert!(
+            texts.iter().any(|text| text.contains("72x17")),
+            "the level header painted: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("(unsaved)")),
+            "the tap in the viewport painted a tile: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Count the arcs a `level` reply reports ("… over N arcs").
+    fn arcs_in(reply: &str) -> u64 {
+        reply
+            .split(" over ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|count| count.parse().ok())
+            .unwrap_or_else(|| panic!("no arc count in {reply:?}"))
+    }
+
+    /// An edit re-validates the arcs it touches instead of replaying the level.
+    ///
+    /// `level paint` is the pointer's own path (`paint_cell`, then a re-validation),
+    /// so this drives the shipped extension headlessly and pins the three things the
+    /// incremental re-validation has to get right: an edit no recorded arc could have
+    /// read costs no simulation at all, a blocking edit still flips the verdict, and
+    /// nothing stale survives either one.
+    #[test]
+    fn a_level_edit_revalidates_without_replaying_the_level() {
+        let root = extension_root("reverie-incremental");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+
+        // A full check: the sweep that paints must never repeat.
+        let full = host.dispatch(&mut editor, "level check").expect("check");
+        assert!(full.contains("playable"), "{full}");
+        let sweep = arcs_in(&full);
+        assert!(sweep > 1000, "a full sweep is thousands of arcs: {full}");
+
+        // A tile in the open air, above everything the sweep reached: no recorded
+        // arc can have read it, so nothing is re-simulated.
+        let air = host
+            .dispatch(&mut editor, "level paint 40 1 G")
+            .expect("paint");
+        assert!(
+            air.contains("playable"),
+            "an untouched edit keeps the verdict: {air}"
+        );
+        assert!(
+            arcs_in(&air) < sweep / 8,
+            "an untouched edit replays almost nothing: {air}"
+        );
+
+        // Sealing the level off from the goal must still be *found*: the cells the
+        // sweep reached past the wall are re-derived, never trusted.
+        let mut blocked = String::new();
+        for y in 0..17 {
+            blocked = host
+                .dispatch(&mut editor, &format!("level paint 20 {y} G"))
+                .expect("paint");
+        }
+        assert!(
+            blocked.contains("no route found"),
+            "the wall is found without a full sweep: {blocked}"
+        );
+        assert!(
+            arcs_in(&blocked) < sweep / 4,
+            "and found cheaply: {blocked}"
+        );
+
+        // A fresh check of the blocked level agrees, and pays for a full sweep.
+        let recheck = host.dispatch(&mut editor, "level check").expect("check");
+        assert!(recheck.contains("no route found"), "{recheck}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The level editor's music, background and size controls.
+    ///
+    /// The music and background are the names the game's own tables know (it
+    /// refuses to load a level naming anything else), and a resize may not cut off
+    /// something the level already holds.
+    #[test]
+    fn the_level_editor_sets_music_background_and_size() {
+        let root = extension_root("reverie-metadata");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+
+        // The game's own tables decide these two.
+        let music = host
+            .dispatch(&mut editor, "level music colors")
+            .expect("music");
+        assert!(music.contains("ok music colors"), "{music}");
+        let background = host
+            .dispatch(&mut editor, "level background nebula")
+            .expect("background");
+        assert!(background.contains("ok background nebula"), "{background}");
+        let bad_music = host
+            .dispatch(&mut editor, "level music storm")
+            .expect("music");
+        assert!(
+            bad_music.contains("error") && bad_music.contains("colors"),
+            "a name the game does not know is refused, and the list is offered: {bad_music}"
+        );
+        let bad_background = host
+            .dispatch(&mut editor, "level background title")
+            .expect("background");
+        assert!(
+            bad_background.contains("error") && bad_background.contains("storm"),
+            "`title` is a screen, not a level background: {bad_background}"
+        );
+
+        // A resize that would drop a coin (or the goal) is refused, not obeyed.
+        let refused = host
+            .dispatch(&mut editor, "level resize 40 14")
+            .expect("resize");
+        assert!(
+            refused.contains("error") && refused.contains("cut off"),
+            "{refused}"
+        );
+        let grown = host
+            .dispatch(&mut editor, "level resize 80 20")
+            .expect("resize");
+        assert!(grown.contains("resized to 80x20"), "{grown}");
+        let status = host.dispatch(&mut editor, "level status").expect("status");
+        assert!(status.contains("80x20"), "{status}");
+
+        // A new level takes the size it is asked for.
+        let fresh = host.dispatch(&mut editor, "level new 48 12").expect("new");
+        assert!(fresh.contains("new 48x12"), "{fresh}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The unreachable-coin markers name the coin they mean, across an edit.
+    ///
+    /// Painting a coin inserts it into `level.coins` in row-major order, which
+    /// *renumbers* the coins below it — and the sweep's records outlive the edit, so
+    /// a coin has to be identified by the cell it sits in, not by its place in that
+    /// list. Painting one too, and a coin the sweep cannot reach, pins both halves:
+    /// a reachable coin must not be crossed out, and the unreachable one must be the
+    /// one actually named.
+    #[test]
+    fn the_level_editor_marks_the_right_coin_unreachable() {
+        let root = extension_root("reverie-coins");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+
+        // A blank 48x12 level: a floor, a spawn, a goal, no coins.
+        host.dispatch(&mut editor, "level new 48 12").expect("new");
+        // A coin on the floor is reachable, and must not be reported.
+        let floor = host
+            .dispatch(&mut editor, "level paint 30 10 C")
+            .expect("paint");
+        assert!(
+            !floor.contains("out of reach"),
+            "a coin on the floor is reachable: {floor}"
+        );
+        // A coin up in the air cannot be, and painting it renumbers the floor coin
+        // (row 1 sorts before row 10): the marker must stay on the air coin.
+        let air = host
+            .dispatch(&mut editor, "level paint 5 1 C")
+            .expect("paint");
+        assert!(
+            air.contains("unreachable coins: 5,1"),
+            "the air coin is the unreachable one: {air}"
+        );
+        assert!(
+            !air.contains("5,1 30,10") && !air.contains("30,10"),
+            "the floor coin is not crossed out as well: {air}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

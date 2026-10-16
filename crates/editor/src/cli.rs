@@ -50,6 +50,9 @@ OPTIONS:
                             the literal `-` for stdin, or inline JSON.
         --out <PATH>        Save the resulting scene to <PATH>
         --headless          Do not open a window (the window is the default)
+        --release, --debug  Choose the profile the project's plugin tool is built
+                            with (a Rust project; the outer `noctis` decides and
+                            passes the flag through, so the editor accepts it)
         --testscene         Load the engine's all-features test scene
         --save-prefabs      Write the prefab library to the project's prefabs/
                             directory (requires --project)
@@ -349,6 +352,11 @@ fn attach_extensions_with_config(
         CliError::Message(format!("failed to start the extension host: {error}"))
     })?;
     host.load(&loader, enabled);
+    // `noctis.files` reads and writes the open project through its own store, so
+    // an extension never names a path. Without a project the channel is closed.
+    if let Some(project) = project {
+        host.set_project(project.store().duplicate());
+    }
     for line in host.ready(editor) {
         eprintln!("{PROGRAM}: {line}");
     }
@@ -476,6 +484,12 @@ fn parse_args(args: &[String]) -> Result<Options, CliError> {
                 let (value, consumed) = value_for(&inline, args, index, &flag)?;
                 options.run.push(value);
                 index = consumed;
+            }
+            // Consumed by the outer `noctis` to pick the plugin tool's profile (a
+            // release `noctis`, or `--release`/`--debug` passed here); accepted so
+            // the generated tool's CLI does not reject them. See `wants_release`.
+            "--release" | "--debug" => {
+                reject_inline(&inline, &flag)?;
             }
             other if other.starts_with('-') => {
                 return Err(CliError::Usage(format!("unknown option {other:?}")));
@@ -911,6 +925,16 @@ mod tests {
     fn watch_is_parsed_and_needs_a_window() {
         assert!(parse_args(&args(&["--watch"])).unwrap().watch);
         assert!(parse_args(&args(&["--watch", "--headless"])).is_err());
+    }
+
+    #[test]
+    fn the_plugin_tool_profile_flags_are_accepted() {
+        // The outer `noctis` picks the project's plugin-tool profile from these and
+        // passes them through, so the generated tool's CLI must accept them (the
+        // runtime CLI does the same). They change nothing in the editor itself.
+        assert!(parse_args(&args(&["--release"])).is_ok());
+        assert!(parse_args(&args(&["--debug"])).is_ok());
+        assert!(parse_args(&args(&["--release=x"])).is_err());
     }
 
     #[test]

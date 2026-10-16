@@ -68,7 +68,8 @@ An extension is a directory containing `extension.json`, or a `.zip` archive wit
   "loadAfter": ["com.example.gridkit"],
   "entry": "extension.js",
   "wasm": { "module": "extension.wasm" },
-  "assets": { "grid": "assets/grid.png" }
+  "assets": { "grid": "assets/grid.png" },
+  "files": { "level1": "levels/level1.txt" }
 }
 ```
 
@@ -84,6 +85,7 @@ An extension is a directory containing `extension.json`, or a `.zip` archive wit
 | `entry` | no | JS entry, relative to the directory. |
 | `wasm` | no | A compiled module: `{ "module": "extension.wasm" }`. |
 | `assets` | no | Slot → file (relative), read by the host into opaque names. |
+| `files` | no | Slot → project-relative file the extension reads and writes (§ Project files). |
 
 An extension may have `entry`, `wasm`, both, or neither (a data-only extension
 is just assets). A relative path that escapes the extension directory, a missing
@@ -231,6 +233,28 @@ The host reads a declared asset into memory and registers it under an opaque nam
 (`ext:<id>:<slot>`); the editor's materials/meshes reference it by that name. A
 slot is not a closed set: an extension may invent one. JS never sees a path.
 
+### Project files
+
+```js
+noctis.files.read(slot)           // the file's text, or undefined
+noctis.files.write(slot, text)    // true when the write landed
+noctis.files.slots()              // the declared slot names
+```
+
+A manifest may declare `"files": { "level1": "levels/level1.txt" }`: a slot the
+extension reads and writes, resolved **relative to the open project** — not the
+extension directory, because this is the channel for editing project *data* (a
+level, a tile map, a dialogue script) rather than for shipping an asset. The host
+does the I/O through the project's own store, so the same extension works over a
+native directory or a bundle, and JavaScript still touches no filesystem: it
+names a slot, never a path. A path that escapes the project is refused at load,
+exactly as an asset path is.
+
+`read` is `undefined` for an undeclared slot, for a file that is missing, and
+when no project is open (`write` then fails and logs why). A write is
+**immediate**: it is not an `EditorCommand`, so it is not undoable and not part of
+an edit batch.
+
 ### UI (windowed)
 
 ```js
@@ -255,6 +279,70 @@ back to the passed default. `noctis.ui.menu(menu, label, run)` is a one-button
 panel. Panels are windowed-only; a headless run never calls `draw`. The WASM
 equivalent is the `ui_panel` import (§ WASM panels). The dock layout is designed in
 [`.notes/editor-ui.md`](editor-ui.md).
+
+### The viewport overlay (windowed)
+
+```js
+noctis.ui.viewport(function (vui) {
+  var p = vui.pointer();
+  if (p.inside) { vui.capture(); }
+  vui.rect(0, 0, p.width, p.height, "#000000c0");
+  vui.text(8, 8, "hello", "#ffffff", 14);
+});
+```
+
+`noctis.ui.viewport(draw)` registers an **overlay** drawn in the editor's central
+viewport, over the rendered scene (or over the frame a driver published). `draw`
+runs once per frame with a recording `vui`; returning `false` reports that the
+overlay wants nothing this frame, and the editor then keeps the viewport — and
+its own hints — to itself.
+
+It is **screen space**, not world space: every primitive is measured in pixels
+from the viewport's top-left corner, and `vui.size()` is the viewport's size. The
+overlay is therefore a canvas the extension lays out itself — a tile grid, a HUD,
+a debug drawing.
+
+| Member | Description |
+| --- | --- |
+| `vui.size()` | The viewport's `{ width, height }`, in pixels. |
+| `vui.pointer()` | `{ x, y, inside, down, clicked, right_down, right_clicked, wheel, dx, dy, shift, ctrl, alt }`; `x`/`y` are viewport pixels, `dx`/`dy` the movement this frame, `clicked`/`right_clicked` edge-triggered. |
+| `vui.capture()` | Claim the pointer for the frame: the editor skips its own camera navigation, gizmo handling and click-to-select. |
+| `vui.rect(x, y, w, h, color, filled?)` | A rectangle, filled unless `filled` is `false`. |
+| `vui.stroke(x, y, w, h, color, thickness?)` | A rectangle's outline. |
+| `vui.line(x1, y1, x2, y2, color, thickness?)` | A line segment. |
+| `vui.text(x, y, text, color, size?)` | Text anchored at its top-left. |
+
+A colour is `"#rrggbb"`, `"#rrggbbaa"`, `"#rgb"` or `[r, g, b, a]` with 0-255
+channels. The ops are clipped to the viewport and painted in registration order,
+after the scene and before the editor's own overlay chrome. A `draw` that throws
+is logged against its extension and skipped for that frame.
+
+The overlay is **JavaScript-only** for now; the WASM ABI (see the WASM panels)
+does not expose it.
+
+#### A note on object literals
+
+Slag's whole-literal shape cache (`crux::map::Map::set_composite_child`, reached
+from `Step::ObjectFast`) inserts a shape map with **no write barrier**, so a
+literal shape whose first evaluation lands *after* a minor collection leaves an
+unrecorded old→young edge in the heap. The engine's verifier is on in a debug
+build, so an extension that allocates enough to force a collection panics the
+editor with `write-barrier miss`; in a release build the shape can instead be
+collected while that cache still points at it.
+
+Two places warm their shapes at load to stay clear of it, both before any
+collection can promote the shared canonical map: `ExtensionHost` builds one of
+every object the bootstrap's panel and viewport recorders make (`WARMUP` in
+`editor::extension`), and an extension that allocates heavily in a hot path
+builds its own (the level editor in `examples/reverie` does — see its
+`warm_shapes`, which also fills long-lived objects in place rather than replacing
+them, since a *fresh* object stored into a long-lived one is the same hazard).
+The regression guard is
+`editor::window::tests::the_reverie_level_editor_paints_and_validates_a_project_level`,
+which drives the shipped overlay for two hundred frames.
+
+The real fix is one line in Slag — a `write_barrier_handle(self, child)` call in
+`set_composite_child` — in the pinned revision.
 
 ## WASM extensions
 
@@ -346,7 +434,9 @@ explicit `--extensions` limits the search set.
 
 ## Safety and limits
 
-- **No `fs`** in the JS engine; JS gets no path. Assets are opaque names.
+- **No `fs`** in the JS engine; JS gets no path. Assets are opaque names, and a
+  declared project file is a **slot** the host resolves against the project —
+  JavaScript still names no path (`noctis.files`).
 - The loader refuses a relative path that escapes the extension directory and
   caps the manifest (`256 KiB`), an entry (`4 MiB`), and an asset (`64 MiB`).
 - A `.zip` extension is read into memory under the same rules, with a per-entry
@@ -398,7 +488,12 @@ the loader reads through; relative-path validation and the archive caps live her
   `noctis_alloc`/`noctis_ui` + `ui_activated`/`ui_value`).
 - `editor::window` — the windowed UI: panels rendered as egui windows (buttons,
   checkboxes and sliders are live), the `"update"` hook each frame, a console
-  with a scrollback, and an Extensions screen whose toggles write the config.
+  with a scrollback, an Extensions screen whose toggles write the config, and the
+  extensions' **viewport overlays** painted in the central panel (a `captured`
+  overlay also suppresses the editor's own camera navigation and picking).
+- `editor::extension` — the `noctis.files` channel: a manifest's `files` slots
+  resolved against the open project's store (reads and writes), so an extension
+  can edit project data without seeing a path.
 - `editor` CLI — `--extensions`, `--no-extensions`, `--run`, `--watch`.
 - A fixture at `examples/extensions/`.
 
@@ -418,6 +513,10 @@ the loader reads through; relative-path validation and the archive caps live her
    *(shipped)*
 7. **Per-extension contexts**: one Slag context (realm) each, host-level built-ins
    and panel-id offsets. *(shipped; a worker-thread host remains open)*
+8. **Viewport overlays and project files**: `noctis.ui.viewport` (a screen-space
+   overlay in the central panel, with pointer input and a capture flag) and
+   `noctis.files` (manifest-declared project slots the host reads and writes).
+   *(shipped, JavaScript-only; the WASM ABI exposes neither yet)*
 
 ## Contexts and threads
 

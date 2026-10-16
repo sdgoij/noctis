@@ -55,3 +55,12 @@ noctis editor --extensions examples/extensions --watch
 An extension is found by default in `$NOCTIS_EXTENSIONS`, `extensions/` beside
 the executable, `extensions/` in the working directory, and a project's
 `[extensions].dirs`. The `--extensions` flag replaces that set.
+
+## Another worked example
+
+`examples/reverie/extensions/level-editor` is a larger one: a tile editor for that
+game's `levels/*.txt` that paints a grid in the **central viewport**
+(`noctis.ui.viewport`, with pointer input and `capture`), reads and writes the
+project's files by slot (`noctis.files`), and validates the level as you paint —
+including re-running the game's own movement integrator as a reachability search,
+advanced a slice per frame. See the [`examples/reverie` README](../reverie/README.md#level-editor).

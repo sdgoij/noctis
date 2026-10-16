@@ -69,15 +69,16 @@ pub fn delegate(project: &Project, args: &[String]) -> Result<i32, String> {
     Ok(status.code().unwrap_or(1))
 }
 
-/// Whether `run` should build its plugin tool optimized.
+/// Whether `run` or `editor` should build its plugin tool optimized.
 ///
-/// `run` plays the game, and a game wants an optimized plugin, so it is built in
-/// release when the outer binary is already optimized — `cargo run -r -- run …`
-/// releases `noctis`, and the plugin follows — or when `--release` is passed.
-/// `--debug` opts back into the fast-to-build debug tool. `editor` and `build`
-/// keep their own defaults (debug for iteration, release for shipping).
+/// `run` plays the game and `editor` hosts an interactive session; both want an
+/// optimized plugin, so each is built in release when the outer binary is already
+/// optimized — `cargo run -r -- run …` (or `… -- editor …`) releases `noctis`, and
+/// the plugin follows — or when `--release` is passed. `--debug` opts back into
+/// the fast-to-build debug tool. `build` keeps its own default: it only
+/// orchestrates the client, whose profile the `build` command chooses itself.
 fn wants_release(args: &[String]) -> bool {
-    if args.first().map(String::as_str) != Some("run") {
+    if !matches!(args.first().map(String::as_str), Some("run" | "editor")) {
         return false;
     }
     if args.iter().any(|arg| arg == "--debug") {
@@ -1202,7 +1203,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_prefers_a_release_plugin_tool() {
+    fn a_run_or_editor_prefers_a_release_plugin_tool() {
         let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
         // An explicit `--release` asks for it, and `--debug` refuses it.
@@ -1210,11 +1211,16 @@ mod tests {
         assert!(!wants_release(&args(&["run", "--debug"])));
         assert!(!wants_release(&args(&["run", "--release", "--debug"])));
 
-        // Other subcommands keep their own defaults.
-        assert!(!wants_release(&args(&["editor", "--release"])));
+        // An editor session is optimized the same way: its validation runs on the
+        // UI thread, and a debug tool keeps the debug-only panic watchdogs armed.
+        assert!(wants_release(&args(&["editor", "--release"])));
+        assert!(!wants_release(&args(&["editor", "--debug"])));
+
+        // `build` keeps its own default; it only orchestrates the client.
         assert!(!wants_release(&args(&["build", "--release"])));
 
         // With no flag, it follows the profile `noctis` itself was built with.
         assert_eq!(wants_release(&args(&["run"])), !cfg!(debug_assertions));
+        assert_eq!(wants_release(&args(&["editor"])), !cfg!(debug_assertions));
     }
 }

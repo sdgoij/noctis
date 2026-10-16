@@ -30,6 +30,21 @@ pub struct Asset {
     pub bytes: Vec<u8>,
 }
 
+/// A declared project file an extension may read and write from JavaScript.
+///
+/// Unlike an [`Asset`], the file is *not* read here: it lives in the open
+/// project, not the extension directory, and the host resolves and does the I/O
+/// through the project's store. `path` is project-relative and validated, so a
+/// slot can never reach outside the project — and JavaScript still only ever
+/// names the `slot`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileSlot {
+    /// The logical slot name the extension uses from JavaScript.
+    pub slot: String,
+    /// The project-relative path the slot resolves to.
+    pub path: String,
+}
+
 /// A compiled extension module.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WasmModule {
@@ -64,6 +79,8 @@ pub struct Manifest {
     pub wasm: Option<WasmModule>,
     /// The declared assets.
     pub assets: Vec<Asset>,
+    /// The declared project files, resolved against the open project.
+    pub files: Vec<FileSlot>,
     /// The extension's directory, or the archive it was read from.
     pub dir: PathBuf,
 }
@@ -96,6 +113,8 @@ struct RawManifest {
     wasm: Option<RawWasm>,
     #[serde(default)]
     assets: BTreeMap<String, String>,
+    #[serde(default)]
+    files: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +188,27 @@ pub(crate) fn load(store: &dyn Store, origin: PathBuf) -> Result<Manifest, Strin
         });
     }
 
+    // Declared project files are resolved later, against the open project, so
+    // only the names are validated here (a path that escapes the project is
+    // refused at load, not at first use).
+    let mut files = Vec::new();
+    for (slot, path) in &raw.files {
+        if slot.trim().is_empty() {
+            return Err("a file slot name is empty".into());
+        }
+        let path = vfs::validate_relative(path).map_err(|error| match error {
+            StoreError::Invalid(message) => format!("file {slot:?}: {message}"),
+            other => format!("file {slot:?}: {other}"),
+        })?;
+        if path.is_empty() {
+            return Err(format!("file {slot:?} has an empty path"));
+        }
+        files.push(FileSlot {
+            slot: slot.clone(),
+            path,
+        });
+    }
+
     Ok(Manifest {
         id: raw.id,
         name: raw.name,
@@ -181,6 +221,7 @@ pub(crate) fn load(store: &dyn Store, origin: PathBuf) -> Result<Manifest, Strin
         entry_source,
         wasm,
         assets,
+        files,
         dir: origin,
     })
 }
@@ -247,6 +288,7 @@ mod tests {
         assert!(manifest.entry.is_none());
         assert!(manifest.wasm.is_none());
         assert!(manifest.assets.is_empty());
+        assert!(manifest.files.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -272,6 +314,66 @@ mod tests {
         assert_eq!(manifest.assets.len(), 1);
         assert_eq!(manifest.assets[0].name, "ext:com.example.full:grid");
         assert_eq!(manifest.assets[0].bytes, b"payload");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn declared_project_files_are_named_but_not_read() {
+        let dir = temp_dir("files");
+        write(
+            &dir.join(MANIFEST),
+            r#"{
+              "id": "com.example.levels", "name": "Levels", "version": "1.0.0", "api": 1,
+              "files": { "level1": "levels/level1.txt", "level2": "levels/level2.txt" }
+            }"#,
+        );
+
+        // The files do not exist in (or beside) the extension directory: they are
+        // project files, so a manifest that declares them still loads.
+        let manifest = load(&dir).expect("loads");
+        assert_eq!(
+            manifest.files,
+            vec![
+                FileSlot {
+                    slot: "level1".into(),
+                    path: "levels/level1.txt".into(),
+                },
+                FileSlot {
+                    slot: "level2".into(),
+                    path: "levels/level2.txt".into(),
+                },
+            ]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_slot_that_escapes_the_project_is_refused() {
+        let dir = temp_dir("file-escape");
+        write(
+            &dir.join(MANIFEST),
+            r#"{
+              "id": "a", "name": "A", "version": "1", "api": 1,
+              "files": { "up": "../outside.txt" }
+            }"#,
+        );
+        let error = load(&dir).unwrap_err();
+        assert!(error.contains("escapes"), "{error}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_slot_path_is_normalized() {
+        let dir = temp_dir("file-normalize");
+        write(
+            &dir.join(MANIFEST),
+            r#"{
+              "id": "a", "name": "A", "version": "1", "api": 1,
+              "files": { "level": ".\\levels\\level1.txt" }
+            }"#,
+        );
+        let manifest = load(&dir).expect("loads");
+        assert_eq!(manifest.files[0].path, "levels/level1.txt");
         std::fs::remove_dir_all(&dir).ok();
     }
 

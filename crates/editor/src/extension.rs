@@ -18,15 +18,21 @@
 //! another's realm. The host keeps the ordering and the cross-cutting built-ins
 //! (`help`, `extensions`) and iterates the contexts for the per-frame work.
 //!
-//! JS gets no filesystem: an extension can only touch the editor through
-//! `noctis.edit` (an `EditorCommand` batch) and the read snapshots. It cannot
-//! corrupt the scene in a way `undo` cannot reverse.
+//! JS gets no ambient filesystem: an extension can only touch the editor
+//! through `noctis.edit` (an `EditorCommand` batch) and the read snapshots, so
+//! it cannot corrupt the scene in a way `undo` cannot reverse. Two narrow
+//! channels reach further, both mediated entirely by Rust: `noctis.files` reads
+//! and writes the **project files its manifest declares by slot** (the host does
+//! the I/O through the project's own store, and JavaScript never sees a path),
+//! and `noctis.ui.viewport` paints an overlay in the central viewport.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use ecs::scene::SceneMode;
-use extensions::{Loader, Manifest};
+use extensions::{Loader, MAX_ASSET_BYTES, Manifest};
+use vfs::Store;
 
 use crate::Editor;
 use crate::info::EntityDto;
@@ -62,7 +68,7 @@ use wasm::WasmHost;
 pub use watch::{ExtensionReload, ExtensionWatch};
 
 /// The `noctis` global, defined in JavaScript. See the module docs.
-const BOOTSTRAP: &str = r#"
+const BOOTSTRAP: &str = r##"
 (function () {
   "use strict";
   var RESERVED = ["help", "extensions", "run", "quit", "exit"];
@@ -70,6 +76,12 @@ const BOOTSTRAP: &str = r#"
   var frozen = false;
   var commands = {};
   var hooks = {};
+  var viewports = [];
+  // This extension's id, for the calls that must name their owner (the file
+  // channel). `noctis.extension` is set by the host before the entry is run, so
+  // it is available to every verb and hook, long after `freeze` cleared
+  // `current`.
+  var extension_id = function () { return noctis.extension ? noctis.extension.id : ""; };
 
   var noctis = {
     api: 1,
@@ -110,6 +122,22 @@ const BOOTSTRAP: &str = r#"
           if (list[i].name === name) { return list[i].entity; }
         }
         return undefined;
+      }
+    },
+    // Declared project files. A slot is resolved by the manifest to a
+    // project-relative path and the host does the I/O through the project's own
+    // store, so JavaScript never sees a path. `read` is undefined when the slot
+    // is undeclared or the file is missing; `write` reports success.
+    files: {
+      read: function (slot) {
+        var text = __host_file_read(extension_id(), String(slot));
+        return (text === undefined) ? undefined : text;
+      },
+      write: function (slot, text) {
+        return __host_file_write(extension_id(), String(slot), String(text)) !== 0;
+      },
+      slots: function () {
+        return JSON.parse(__host_file_slots(extension_id()));
       }
     }
   };
@@ -180,6 +208,16 @@ const BOOTSTRAP: &str = r#"
     menu: function (menu, label, run) {
       if (frozen) { throw new Error("registration is closed"); }
       panels.push({ title: String(menu), draw: function (ui) { if (ui.button(label)) { run(); } } });
+    },
+    // A viewport overlay: `draw(vui)` runs each frame while the central viewport
+    // is drawn. `vui` paints in viewport pixels (origin top-left) and reads the
+    // pointer; `vui.capture()` claims the pointer for the frame, so the editor
+    // skips its own camera navigation and click-to-select. Returning `false`
+    // reports that the overlay wants nothing this frame (the editor then keeps
+    // the viewport to itself).
+    viewport: function (draw) {
+      if (frozen) { throw new Error("registration is closed"); }
+      viewports.push(draw);
     }
   };
 
@@ -220,8 +258,71 @@ const BOOTSTRAP: &str = r#"
       __host_panel(String(panels[p].title), JSON.stringify(ops));
     }
   };
+
+  // A colour: "#rrggbb", "#rrggbbaa", "#rgb" or [r, g, b, a] (0-255). Normalized
+  // to a flat [r, g, b, a] the host parses.
+  function channel(value, fallback) {
+    var n = Number(value);
+    if (n !== n) { return fallback; }
+    return n < 0 ? 0 : (n > 255 ? 255 : Math.round(n));
+  }
+
+  function parse_color(value) {
+    if (typeof value === "string") {
+      var text = value.trim();
+      if (text.charAt(0) === "#") { text = text.slice(1); }
+      if (text.length === 3) {
+        text = text.charAt(0) + text.charAt(0) + text.charAt(1) + text.charAt(1) + text.charAt(2) + text.charAt(2);
+      }
+      if (text.length === 6) { text = text + "ff"; }
+      if (text.length !== 8 || !/^[0-9a-fA-F]{8}$/.test(text)) { return [255, 255, 255, 255]; }
+      var n = parseInt(text, 16);
+      return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    }
+    if (Object.prototype.toString.call(value) === "[object Array]") {
+      return [
+        channel(value[0], 255), channel(value[1], 255), channel(value[2], 255),
+        value[3] === undefined ? 255 : channel(value[3], 255)
+      ];
+    }
+    return [255, 255, 255, 255];
+  }
+
+  globalThis.__noctis_draw_viewport = function () {
+    if (viewports.length === 0) { return; }
+    var input = JSON.parse(__host_viewport_input());
+    for (var v = 0; v < viewports.length; v++) {
+      var ops = [];
+      var claimed = false;
+      var vui = {
+        size: function () { return { width: input.width, height: input.height }; },
+        pointer: function () { return input; },
+        capture: function () { claimed = true; },
+        rect: function (x, y, w, h, color, filled) {
+          ops.push({ kind: "rect", x: Number(x), y: Number(y), w: Number(w), h: Number(h),
+                     c: parse_color(color), filled: filled !== false, t: 1 });
+        },
+        stroke: function (x, y, w, h, color, thickness) {
+          ops.push({ kind: "rect", x: Number(x), y: Number(y), w: Number(w), h: Number(h),
+                     c: parse_color(color), filled: false,
+                     t: thickness === undefined ? 1 : Number(thickness) });
+        },
+        line: function (x1, y1, x2, y2, color, thickness) {
+          ops.push({ kind: "line", x1: Number(x1), y1: Number(y1), x2: Number(x2), y2: Number(y2),
+                     c: parse_color(color), t: thickness === undefined ? 1 : Number(thickness) });
+        },
+        text: function (x, y, text, color, size) {
+          ops.push({ kind: "text", x: Number(x), y: Number(y), text: String(text),
+                     c: parse_color(color), size: size === undefined ? 12 : Number(size) });
+        }
+      };
+      try { if (viewports[v](vui) === false) { continue; } }
+      catch (e) { __host_log("viewport threw: " + e); }
+      __host_viewport(JSON.stringify(ops), claimed ? 1 : 0);
+    }
+  };
 })();
-"#;
+"##;
 
 /// One widget a panel recorded this frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -297,6 +398,111 @@ pub struct Interactions {
     pub values: Vec<((usize, usize), f64)>,
 }
 
+/// What the pointer did over the viewport this frame, in viewport pixels.
+///
+/// `x`/`y` are measured from the viewport rect's top-left corner and are the
+/// pointer's last position whether or not it is inside; `inside` says whether it
+/// is. `wheel` is the scroll delta this frame and `dx`/`dy` the movement while a
+/// button is held. `clicked`/`right_clicked` are edge-triggered.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewportInput {
+    /// The viewport's width, in pixels.
+    pub width: f32,
+    /// The viewport's height, in pixels.
+    pub height: f32,
+    /// The pointer's x, from the viewport's left edge.
+    pub x: f32,
+    /// The pointer's y, from the viewport's top edge.
+    pub y: f32,
+    /// Whether the pointer is over the viewport.
+    pub inside: bool,
+    /// Whether the primary button is held.
+    pub down: bool,
+    /// Whether the primary button was pressed this frame.
+    pub clicked: bool,
+    /// Whether the secondary button is held.
+    pub right_down: bool,
+    /// Whether the secondary button was pressed this frame.
+    pub right_clicked: bool,
+    /// The scroll wheel's delta this frame.
+    pub wheel: f32,
+    /// The pointer's x movement this frame.
+    pub dx: f32,
+    /// The pointer's y movement this frame.
+    pub dy: f32,
+    /// Whether Shift is held.
+    pub shift: bool,
+    /// Whether Ctrl (or Command) is held.
+    pub ctrl: bool,
+    /// Whether Alt is held.
+    pub alt: bool,
+}
+
+/// One thing a viewport overlay paints, in viewport-pixel space (origin at the
+/// viewport's top-left). Colours are straight 8-bit RGBA.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ViewportOp {
+    /// A rectangle, filled or outlined.
+    Rect {
+        /// Left edge.
+        x: f32,
+        /// Top edge.
+        y: f32,
+        /// Width.
+        w: f32,
+        /// Height.
+        h: f32,
+        /// Its colour.
+        color: [u8; 4],
+        /// Whether it is filled (otherwise its border is stroked).
+        filled: bool,
+        /// The border's width, when outlined.
+        thickness: f32,
+    },
+    /// A line segment.
+    Line {
+        /// The start x.
+        x1: f32,
+        /// The start y.
+        y1: f32,
+        /// The end x.
+        x2: f32,
+        /// The end y.
+        y2: f32,
+        /// Its colour.
+        color: [u8; 4],
+        /// Its width.
+        thickness: f32,
+    },
+    /// A line of text, anchored at its top-left corner.
+    Text {
+        /// The left edge.
+        x: f32,
+        /// The top edge.
+        y: f32,
+        /// The text.
+        text: String,
+        /// Its colour.
+        color: [u8; 4],
+        /// Its height, in points.
+        size: f32,
+    },
+}
+
+/// One frame's viewport overlay: what to paint, and whether an extension claimed
+/// the pointer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ViewportFrame {
+    /// Whether any extension registered a viewport overlay at all. The editor
+    /// then leaves the viewport to the extension instead of drawing its hints.
+    pub registered: bool,
+    /// Whether an extension claimed the pointer this frame, so the editor skips
+    /// its own camera navigation and click-to-select.
+    pub capture: bool,
+    /// The ops to paint, in draw order.
+    pub ops: Vec<ViewportOp>,
+}
+
 /// One piece of work a callback queued, replayed after the call in order.
 enum Queued {
     /// An `EditorCommand` batch (JSON text).
@@ -330,6 +536,20 @@ struct Bridge {
     /// The global index of the context currently drawing; a context's panel-local
     /// `ui` ids are offset by it (see [`ExtensionHost::draw_panels`]).
     panel_base: usize,
+    /// The viewport ops recorded this frame, in load order.
+    viewport: Vec<ViewportOp>,
+    /// Whether any context registered a viewport overlay.
+    viewport_registered: bool,
+    /// Whether a viewport claimed the pointer this frame.
+    viewport_capture: bool,
+    /// The pointer state handed to the viewport draws this frame.
+    viewport_input: ViewportInput,
+    /// Declared project files: `(extension id, slot) -> project-relative path`.
+    file_slots: BTreeMap<(String, String), String>,
+    /// The open project's store, for the `noctis.files` channel. `None` headless
+    /// or without a project, in which case a read is `undefined` and a write is
+    /// reported as failed.
+    store: Option<Box<dyn Store>>,
 }
 
 /// One extension's JavaScript realm.
@@ -396,6 +616,17 @@ impl ExtensionHost {
         std::mem::take(&mut self.bridge.borrow_mut().logs)
     }
 
+    /// Give the host the open project's store — the channel `noctis.files` reads
+    /// and writes through.
+    ///
+    /// The store is a second handle to the same project data
+    /// ([`Store::duplicate`]), so a write here is visible to the editor's own
+    /// reads. Without a project the channel stays closed: a read is `undefined`
+    /// and a write is reported as failed.
+    pub fn set_project(&mut self, store: Box<dyn Store>) {
+        self.bridge.borrow_mut().store = Some(store);
+    }
+
     /// Load every extension in `loader` for which `enabled` is true.
     ///
     /// Each JavaScript entry gets its own context, evaluated inside a private
@@ -420,6 +651,19 @@ impl ExtensionHost {
             .iter()
             .map(|manifest| manifest.id.clone())
             .collect();
+
+        // Declare the project files the enabled extensions name. Reading and
+        // writing them happens later, through the store `set_project` hands us.
+        {
+            let mut bridge = self.bridge.borrow_mut();
+            for manifest in &manifests {
+                for file in &manifest.files {
+                    bridge
+                        .file_slots
+                        .insert((manifest.id.clone(), file.slot.clone()), file.path.clone());
+                }
+            }
+        }
 
         for manifest in &manifests {
             if let Some(source) = &manifest.entry_source
@@ -446,6 +690,9 @@ impl ExtensionHost {
         let mut context = slag::Context::new().map_err(|error| error.to_string())?;
         install(&mut context, Rc::clone(&self.bridge))?;
         context.eval(BOOTSTRAP).map_err(|error| error.to_string())?;
+        // The bootstrap's own recorder shapes, before the extension's code (and its
+        // allocations) can promote the shared shape map.
+        context.eval(WARMUP).map_err(|error| error.to_string())?;
         let register = format!(
             "__noctis_register_extension({}, {});",
             json_literal(&manifest.id),
@@ -589,6 +836,37 @@ impl ExtensionHost {
     /// Apply any work a panel draw (or `noctis.run`) queued.
     pub fn apply_pending(&mut self, editor: &mut Editor) -> Vec<String> {
         self.apply_queued(editor)
+    }
+
+    /// Draw the viewport overlays for this frame with `input`, and return the ops.
+    ///
+    /// Like [`ExtensionHost::draw_panels`], this runs each context's registered
+    /// draw once per frame. A context that registered no viewport records nothing,
+    /// so `registered` stays false and the editor keeps the viewport to itself.
+    pub fn draw_viewport(&mut self, editor: &Editor, input: ViewportInput) -> ViewportFrame {
+        self.snapshot(editor);
+        {
+            let mut bridge = self.bridge.borrow_mut();
+            bridge.viewport.clear();
+            bridge.viewport_registered = false;
+            bridge.viewport_capture = false;
+            bridge.viewport_input = input;
+        }
+        for index in 0..self.extensions.len() {
+            if let Err(error) = self.extensions[index]
+                .context
+                .eval("__noctis_draw_viewport();")
+            {
+                let id = self.extensions[index].id.clone();
+                self.errors.push(format!("{id}: viewport: {error}"));
+            }
+        }
+        let mut bridge = self.bridge.borrow_mut();
+        ViewportFrame {
+            registered: bridge.viewport_registered,
+            capture: bridge.viewport_capture,
+            ops: std::mem::take(&mut bridge.viewport),
+        }
     }
 
     /// Copy the editor reads the API exposes into the bridge.
@@ -762,8 +1040,188 @@ fn install(context: &mut slag::Context, bridge: Rc<RefCell<Bridge>>) -> Result<(
         }),
     )?;
 
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_viewport_input",
+        0,
+        Box::new(move |_call| {
+            let input = b.borrow().viewport_input;
+            let value = serde_json::json!({
+                "width": input.width,
+                "height": input.height,
+                "x": input.x,
+                "y": input.y,
+                "inside": input.inside,
+                "down": input.down,
+                "clicked": input.clicked,
+                "right_down": input.right_down,
+                "right_clicked": input.right_clicked,
+                "wheel": input.wheel,
+                "dx": input.dx,
+                "dy": input.dy,
+                "shift": input.shift,
+                "ctrl": input.ctrl,
+                "alt": input.alt,
+            });
+            Ok(slag::JsValue::string(value.to_string()))
+        }),
+    )?;
+
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_viewport",
+        2,
+        Box::new(move |call| {
+            let ops = arg_string(call, 0).unwrap_or_default();
+            let claimed = arg_number(call, 1).unwrap_or(0.0) != 0.0;
+            let mut bridge = b.borrow_mut();
+            bridge.viewport_registered = true;
+            bridge.viewport_capture |= claimed;
+            bridge.viewport.extend(parse_viewport_ops(&ops));
+            Ok(slag::JsValue::undefined())
+        }),
+    )?;
+
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_file_read",
+        2,
+        Box::new(move |call| {
+            let id = arg_string(call, 0).unwrap_or_default();
+            let slot = arg_string(call, 1).unwrap_or_default();
+            let result = {
+                let bridge = b.borrow();
+                match bridge
+                    .file_slots
+                    .get(&(id.clone(), slot.clone()))
+                    .zip(bridge.store.as_ref())
+                {
+                    Some((path, store)) => match store.read_capped(path, MAX_ASSET_BYTES) {
+                        Ok(bytes) => match String::from_utf8(bytes) {
+                            Ok(text) => Ok(text),
+                            Err(_) => Err(format!("file {id}:{slot} is not UTF-8")),
+                        },
+                        Err(error) => Err(format!("file {id}:{slot} ({path}): {error}")),
+                    },
+                    None => return Ok(slag::JsValue::undefined()),
+                }
+            };
+            match result {
+                Ok(text) => Ok(slag::JsValue::string(text)),
+                Err(message) => {
+                    b.borrow_mut().logs.push(message);
+                    Ok(slag::JsValue::undefined())
+                }
+            }
+        }),
+    )?;
+
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_file_write",
+        3,
+        Box::new(move |call| {
+            let id = arg_string(call, 0).unwrap_or_default();
+            let slot = arg_string(call, 1).unwrap_or_default();
+            let text = arg_string(call, 2).unwrap_or_default();
+            let path = {
+                b.borrow()
+                    .file_slots
+                    .get(&(id.clone(), slot.clone()))
+                    .cloned()
+            };
+            let Some(path) = path else {
+                b.borrow_mut()
+                    .logs
+                    .push(format!("file {id}:{slot}: no such slot"));
+                return Ok(slag::JsValue::number(0.0));
+            };
+            let written = {
+                let mut bridge = b.borrow_mut();
+                match bridge.store.as_mut() {
+                    Some(store) => store.write(&path, text.as_bytes()).is_ok(),
+                    None => false,
+                }
+            };
+            if !written {
+                b.borrow_mut().logs.push(format!(
+                    "file {id}:{slot} ({path}): no open project to write to"
+                ));
+            }
+            Ok(slag::JsValue::number(if written { 1.0 } else { 0.0 }))
+        }),
+    )?;
+
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_file_slots",
+        1,
+        Box::new(move |call| {
+            let id = arg_string(call, 0).unwrap_or_default();
+            let slots: Vec<String> = b
+                .borrow()
+                .file_slots
+                .keys()
+                .filter(|(owner, _)| owner == &id)
+                .map(|(_, slot)| slot.clone())
+                .collect();
+            let text = serde_json::to_string(&slots).unwrap_or_else(|_| "[]".into());
+            Ok(slag::JsValue::string(text))
+        }),
+    )?;
+
     Ok(())
 }
+
+/// Build one of every object shape the bootstrap's panel and viewport recorders
+/// evaluate, once, at load.
+///
+/// Slag caches an object literal's whole shape on the shared canonical empty map
+/// and that insert (`crux::map::Map::set_composite_child`) takes no write barrier,
+/// so a shape first built *after* a minor collection leaves an unrecorded
+/// old→young edge — which Slag's own verifier (on in a debug build) reports as a
+/// "write-barrier miss". A panel is drawn and a viewport is painted every frame,
+/// and the op objects they record are built lazily on the first draw, so without
+/// this a long-running editor panics on whichever op it built first afterwards.
+/// Warming them here, while the heap is still young, leaves the cache complete.
+/// The real fix is one line in Slag — a `write_barrier_handle(self, child)` call
+/// in `set_composite_child`; see `.notes/extensions.md`.
+const WARMUP: &str = r##"
+(function () {
+  "use strict";
+  // The recording handles the host passes to a `panel`/`viewport` draw, and one
+  // of every op each of them can record, with the same key order the bootstrap
+  // builds them in.
+  var ui = {
+    text: null, label: null, heading: null, separator: null,
+    button: null, checkbox: null, slider: null
+  };
+  var vui = {
+    size: null, pointer: null, capture: null,
+    rect: null, stroke: null, line: null, text: null
+  };
+  return [
+    { kind: "label", text: "" },
+    { kind: "heading", text: "" },
+    { kind: "separator" },
+    { kind: "button", id: 0, label: "" },
+    { kind: "checkbox", id: 0, label: "", value: 0 },
+    { kind: "slider", id: 0, label: "", value: 0, min: 0, max: 0 },
+    { kind: "rect", x: 0, y: 0, w: 0, h: 0, c: null, filled: true, t: 1 },
+    { kind: "line", x1: 0, y1: 0, x2: 0, y2: 0, c: null, t: 1 },
+    { kind: "text", x: 0, y: 0, text: "", c: null, size: 0 },
+    { width: 0, height: 0 },
+    { title: "", draw: null },
+    ui,
+    vui
+  ];
+})();
+"##;
 
 /// Register one host function on `context`.
 fn register(
@@ -812,6 +1270,58 @@ fn parse_ops(json: &str) -> Vec<Widget> {
             _ => None,
         })
         .collect()
+}
+
+/// Parse the ops a viewport overlay recorded into [`ViewportOp`]s.
+fn parse_viewport_ops(json: &str) -> Vec<ViewportOp> {
+    let Ok(serde_json::Value::Array(ops)) = serde_json::from_str(json) else {
+        return Vec::new();
+    };
+    ops.iter()
+        .filter_map(|op| {
+            let color = parse_color(op.get("c")?)?;
+            match op.get("kind")?.as_str()? {
+                "rect" => Some(ViewportOp::Rect {
+                    x: op.get("x")?.as_f64()? as f32,
+                    y: op.get("y")?.as_f64()? as f32,
+                    w: op.get("w")?.as_f64()? as f32,
+                    h: op.get("h")?.as_f64()? as f32,
+                    color,
+                    filled: op.get("filled")?.as_bool()?,
+                    thickness: op.get("t")?.as_f64()? as f32,
+                }),
+                "line" => Some(ViewportOp::Line {
+                    x1: op.get("x1")?.as_f64()? as f32,
+                    y1: op.get("y1")?.as_f64()? as f32,
+                    x2: op.get("x2")?.as_f64()? as f32,
+                    y2: op.get("y2")?.as_f64()? as f32,
+                    color,
+                    thickness: op.get("t")?.as_f64()? as f32,
+                }),
+                "text" => Some(ViewportOp::Text {
+                    x: op.get("x")?.as_f64()? as f32,
+                    y: op.get("y")?.as_f64()? as f32,
+                    text: op.get("text")?.as_str()?.to_string(),
+                    color,
+                    size: op.get("size")?.as_f64()? as f32,
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// A `[r, g, b, a]` array of 0-255 numbers, as the bootstrap normalizes a colour.
+fn parse_color(value: &serde_json::Value) -> Option<[u8; 4]> {
+    let list = value.as_array()?;
+    if list.len() != 4 {
+        return None;
+    }
+    let mut color = [255u8; 4];
+    for (index, channel) in list.iter().enumerate() {
+        color[index] = channel.as_f64()?.clamp(0.0, 255.0) as u8;
+    }
+    Some(color)
 }
 
 fn arg_string(call: &slag::FunctionCall<'_>, index: usize) -> Option<String> {
@@ -1811,6 +2321,236 @@ mod tests {
         assert_eq!(
             host.dispatch(&mut editor, "extensions").unwrap(),
             "ok extensions: com.example.alpha, com.example.beta"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Write an extension directory whose manifest is given verbatim.
+    fn write_manifest_extension(root: &std::path::Path, dir_name: &str, manifest: &str, js: &str) {
+        let dir = root.join(dir_name);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("extension.json"), manifest).expect("manifest");
+        std::fs::write(dir.join("extension.js"), js).expect("entry");
+    }
+
+    #[test]
+    fn a_viewport_overlay_records_primitives_and_reads_the_pointer() {
+        let root = temp_dir("viewport");
+        write_extension(
+            &root,
+            "overlay",
+            "com.example.overlay",
+            r##"
+            noctis.ui.viewport(function (vui) {
+              var p = vui.pointer();
+              if (p.clicked) { vui.capture(); }
+              vui.rect(0, 0, p.width, p.height, "#101010");
+              vui.stroke(4, 4, 16, 16, [255, 0, 0, 128], 2);
+              vui.line(0, 0, 10, 10, "#fff", 3);
+              vui.text(4, 6, "hi " + Math.round(p.x), "#ffffff", 14);
+            });
+            "##,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        let editor = Editor::new();
+
+        let mut input = ViewportInput {
+            width: 100.0,
+            height: 50.0,
+            x: 3.4,
+            y: 8.0,
+            inside: true,
+            clicked: true,
+            ..ViewportInput::default()
+        };
+        let frame = host.draw_viewport(&editor, input);
+        assert!(frame.registered, "the overlay registered itself");
+        assert!(frame.capture, "a click claims the pointer");
+        assert_eq!(
+            frame.ops,
+            vec![
+                ViewportOp::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 50.0,
+                    color: [16, 16, 16, 255],
+                    filled: true,
+                    thickness: 1.0,
+                },
+                ViewportOp::Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    w: 16.0,
+                    h: 16.0,
+                    color: [255, 0, 0, 128],
+                    filled: false,
+                    thickness: 2.0,
+                },
+                ViewportOp::Line {
+                    x1: 0.0,
+                    y1: 0.0,
+                    x2: 10.0,
+                    y2: 10.0,
+                    color: [255, 255, 255, 255],
+                    thickness: 3.0,
+                },
+                ViewportOp::Text {
+                    x: 4.0,
+                    y: 6.0,
+                    text: "hi 3".into(),
+                    color: [255, 255, 255, 255],
+                    size: 14.0,
+                },
+            ]
+        );
+
+        // A frame with no click leaves the pointer to the editor.
+        input.clicked = false;
+        let frame = host.draw_viewport(&editor, input);
+        assert!(frame.registered);
+        assert!(!frame.capture);
+        assert_eq!(frame.ops.len(), 4, "the overlay redraws every frame");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_extension_without_a_viewport_leaves_the_editor_its_viewport() {
+        let root = temp_dir("no-viewport");
+        write_extension(
+            &root,
+            "panels-only",
+            "com.example.panels",
+            "noctis.ui.panel('P', function () {});",
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let editor = Editor::new();
+
+        let frame = host.draw_viewport(&editor, ViewportInput::default());
+        assert!(!frame.registered);
+        assert!(!frame.capture);
+        assert!(frame.ops.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_viewport_that_declines_leaves_the_editor_its_viewport() {
+        let root = temp_dir("declining-viewport");
+        write_extension(
+            &root,
+            "hidden",
+            "com.example.hidden",
+            "noctis.ui.viewport(function (vui) {
+              if (vui.pointer().inside) {
+                vui.rect(0, 0, 10, 10, \"#ffffff\");
+                return;
+              }
+              return false;
+            });",
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        let editor = Editor::new();
+
+        // The pointer is outside: the draw declined, so the editor keeps its own.
+        let frame = host.draw_viewport(&editor, ViewportInput::default());
+        assert!(!frame.registered);
+        assert!(frame.ops.is_empty());
+
+        // The pointer is inside: the overlay paints.
+        let inside = ViewportInput {
+            inside: true,
+            ..ViewportInput::default()
+        };
+        let frame = host.draw_viewport(&editor, inside);
+        assert!(frame.registered);
+        assert_eq!(frame.ops.len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A level editor in miniature: a project file read and written by slot.
+    ///
+    /// `root` is the directory discovery scans; the extension lands in
+    /// `root/levels-ext` and the project in `root/project`.
+    fn project_files_extension(root: &std::path::Path) -> std::path::PathBuf {
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("levels")).expect("project dir");
+        std::fs::write(project.join("levels/level1.txt"), "name: One\n").expect("level");
+
+        write_manifest_extension(
+            root,
+            "levels-ext",
+            r#"{ "id": "com.example.levels", "name": "Levels", "version": "1.0.0", "api": 1,
+                "entry": "extension.js", "files": { "level1": "levels/level1.txt" } }"#,
+            r#"
+            noctis.command("read", function () {
+              var text = noctis.files.read("level1");
+              return "ok " + (text === undefined ? "missing" : JSON.stringify(text));
+            });
+            noctis.command("missing", function () {
+              return "ok " + (noctis.files.read("nope") === undefined);
+            });
+            noctis.command("slots", function () { return "ok " + JSON.stringify(noctis.files.slots()); });
+            noctis.command("write", function (parts) {
+              return "ok " + noctis.files.write("level1", "name: " + parts[1] + "\n");
+            });
+            "#,
+        );
+        project
+    }
+
+    #[test]
+    fn project_files_are_read_and_written_through_a_declared_slot() {
+        let root = temp_dir("project-files");
+        let project = project_files_extension(&root);
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        assert!(host.errors().is_empty(), "{:?}", host.errors());
+        host.set_project(Box::new(vfs::DirStore::new(project.clone())));
+        let mut editor = Editor::new();
+
+        assert_eq!(
+            host.dispatch(&mut editor, "slots").unwrap(),
+            "ok [\"level1\"]"
+        );
+        assert_eq!(
+            host.dispatch(&mut editor, "read").unwrap(),
+            "ok \"name: One\\n\""
+        );
+        // An undeclared slot is `undefined` — not an error.
+        assert_eq!(host.dispatch(&mut editor, "missing").unwrap(), "ok true");
+
+        // The write goes through the project's own store to the real file.
+        assert_eq!(host.dispatch(&mut editor, "write Two").unwrap(), "ok true");
+        assert_eq!(
+            std::fs::read_to_string(project.join("levels/level1.txt")).unwrap(),
+            "name: Two\n"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_write_without_a_project_is_refused_and_reported() {
+        let root = temp_dir("no-project");
+        let _ = project_files_extension(&root);
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().unwrap();
+        host.load(&loader, |_| true);
+        // No `set_project`: the channel is closed.
+        let mut editor = Editor::new();
+
+        assert_eq!(host.dispatch(&mut editor, "write Two").unwrap(), "ok false");
+        let logs = host.take_logs();
+        assert!(
+            logs.iter().any(|log| log.contains("no open project")),
+            "{logs:?}"
         );
         std::fs::remove_dir_all(&root).ok();
     }

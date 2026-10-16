@@ -118,9 +118,12 @@ so it compiles the plugin's component types in.
 A `run` wants a playable frame rate, so its tool is built **optimized** whenever
 `noctis` itself is a release build (`cargo run -r -- run …`, an installed release
 binary) or `--release` is passed; the plugin is a separate cargo workspace, so
-without this its debug build would run the game at ~25 fps. `--debug` opts back
-into the fast-to-build debug tool. `noctis editor` stays a debug build (fast
-iteration), and `noctis build` follows its `[build] profile` as before.
+without this its debug build would run the game at ~25 fps. An `editor` session
+follows the same rule: its validation runs on the UI thread, and a debug tool is
+slow enough to stall a frame (and keeps the debug-only panic watchdogs — epaint's
+lock watchdog, Slag's verifier — armed). `--debug` opts either back into the
+fast-to-build debug tool, and `noctis build` follows its `[build] profile` as
+before.
 
 **How a plugin project builds.** `noctis build --project <game>` (dispatched to the
 plugin-aware tool) resolves the scene, bundles the referenced files — including a

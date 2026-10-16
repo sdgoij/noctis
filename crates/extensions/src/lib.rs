@@ -7,9 +7,11 @@
 //! unit-testable with no window and no Slag.
 //!
 //! An **extension** is a directory holding an `extension.json` (see
-//! [`Manifest`]), optionally an `extension.js` and/or `extension.wasm`, and
-//! declared assets. JavaScript never sees a path: a declared asset is read into
-//! memory here and re-exposed under an opaque name (`ext:<id>:<slot>`).
+//! [`Manifest`]), optionally an `extension.js` and/or `extension.wasm`,
+//! declared assets, and declared project files. JavaScript never sees a path: a
+//! declared asset is read into memory here and re-exposed under an opaque name
+//! (`ext:<id>:<slot>`), and a declared project file (see [`FileSlot`]) is named
+//! by slot and read or written by the host through the project's own store.
 //!
 //! The whole design is `.notes/extensions.md`.
 
@@ -26,7 +28,7 @@ use std::path::PathBuf;
 use vfs::{DirStore, Store, StoreError, ZipStore, is_zip};
 
 pub use config::{ExtensionConfig, config_dir, default_config_path};
-pub use manifest::{Asset, Manifest, WasmModule};
+pub use manifest::{Asset, FileSlot, Manifest, WasmModule};
 
 /// The `noctis` API major this build understands. A manifest targeting another
 /// major is refused rather than loaded halfway.
