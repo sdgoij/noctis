@@ -252,6 +252,22 @@ const BOOTSTRAP: &str = r##"
           var current = (v === v) ? v : Number(value);
           ops.push({ kind: "slider", id: id, label: String(label), value: current, min: Number(min), max: Number(max) });
           return current;
+        },
+        // A menu of `options`: the value is the chosen index, or 0 for an empty
+        // list. The chosen option's text is the menu's own label.
+        select: function (label, value, options) {
+          var id = n++;
+          var v = __host_value(p, id);
+          var list = [];
+          for (var o = 0; o < options.length; o++) {
+            list.push(String(options[o]));
+          }
+          var current = (v === v) ? v : Number(value);
+          if (!(current >= 0 && current < list.length)) {
+            current = 0;
+          }
+          ops.push({ kind: "select", id: id, label: String(label), value: current, options: list });
+          return current;
         }
       };
       try { panels[p].draw(ui); } catch (e) { __host_log("panel '" + panels[p].title + "' threw: " + e); }
@@ -361,6 +377,17 @@ pub enum Widget {
         min: f64,
         /// Its upper bound.
         max: f64,
+    },
+    /// A menu of choices, `index` is the widget's position within the panel.
+    Select {
+        /// The menu's index (its value id).
+        index: usize,
+        /// The menu's label.
+        label: String,
+        /// The chosen option's index.
+        value: f64,
+        /// The options, in order.
+        options: Vec<String>,
     },
 }
 
@@ -1199,7 +1226,7 @@ const WARMUP: &str = r##"
   // builds them in.
   var ui = {
     text: null, label: null, heading: null, separator: null,
-    button: null, checkbox: null, slider: null
+    button: null, checkbox: null, slider: null, select: null
   };
   var vui = {
     size: null, pointer: null, capture: null,
@@ -1212,6 +1239,7 @@ const WARMUP: &str = r##"
     { kind: "button", id: 0, label: "" },
     { kind: "checkbox", id: 0, label: "", value: 0 },
     { kind: "slider", id: 0, label: "", value: 0, min: 0, max: 0 },
+    { kind: "select", id: 0, label: "", value: 0, options: null },
     { kind: "rect", x: 0, y: 0, w: 0, h: 0, c: null, filled: true, t: 1 },
     { kind: "line", x1: 0, y1: 0, x2: 0, y2: 0, c: null, t: 1 },
     { kind: "text", x: 0, y: 0, text: "", c: null, size: 0 },
@@ -1266,6 +1294,17 @@ fn parse_ops(json: &str) -> Vec<Widget> {
                 value: op.get("value")?.as_f64()?,
                 min: op.get("min")?.as_f64()?,
                 max: op.get("max")?.as_f64()?,
+            }),
+            "select" => Some(Widget::Select {
+                index: op.get("id")?.as_u64()? as usize,
+                label: op.get("label")?.as_str()?.to_string(),
+                value: op.get("value")?.as_f64()?,
+                options: op
+                    .get("options")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|option| option.as_str().map(str::to_string))
+                    .collect(),
             }),
             _ => None,
         })
@@ -1602,7 +1641,8 @@ mod tests {
             noctis.ui.panel("Tune", function (ui) {
               var on = ui.checkbox("Enable", false);
               var gain = ui.slider("Gain", 0, 0, 10);
-              ui.label("enable " + on + " gain " + gain);
+              var track = ui.select("Track", 1, ["one", "two", "three"]);
+              ui.label("enable " + on + " gain " + gain + " track " + track);
             });
             "#,
         );
@@ -1631,13 +1671,22 @@ mod tests {
                 max: 10.0,
             }
         );
+        assert_eq!(
+            panels[0].widgets[2],
+            Widget::Select {
+                index: 2,
+                label: "Track".into(),
+                value: 1.0,
+                options: vec!["one".into(), "two".into(), "three".into()],
+            }
+        );
 
         // A change fed back on the next draw is what the panel reads and draws.
         let panels = host.draw_panels(
             &editor,
             &Interactions {
                 activations: Vec::new(),
-                values: vec![((0, 0), 1.0), ((0, 1), 5.0)],
+                values: vec![((0, 0), 1.0), ((0, 1), 5.0), ((0, 2), 2.0)],
             },
         );
         assert_eq!(
@@ -1658,12 +1707,40 @@ mod tests {
                 max: 10.0,
             }
         );
+        assert_eq!(
+            panels[0].widgets[2],
+            Widget::Select {
+                index: 2,
+                label: "Track".into(),
+                value: 2.0,
+                options: vec!["one".into(), "two".into(), "three".into()],
+            }
+        );
         assert!(
             panels[0].widgets.iter().any(
-                |widget| matches!(widget, Widget::Label(text) if text == "enable true gain 5")
+                |widget| matches!(widget, Widget::Label(text) if text == "enable true gain 5 track 2")
             ),
             "{:?}",
             panels[0].widgets
+        );
+
+        // A menu always names one of its options: an index fed back out of range
+        // (a shorter list than the one that produced it) falls back to the first.
+        let panels = host.draw_panels(
+            &editor,
+            &Interactions {
+                activations: Vec::new(),
+                values: vec![((0, 2), 9.0)],
+            },
+        );
+        assert_eq!(
+            panels[0].widgets[2],
+            Widget::Select {
+                index: 2,
+                label: "Track".into(),
+                value: 0.0,
+                options: vec!["one".into(), "two".into(), "three".into()],
+            }
         );
         std::fs::remove_dir_all(&root).ok();
     }

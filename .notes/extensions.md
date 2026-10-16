@@ -262,7 +262,8 @@ noctis.ui.panel("Scatter", (ui) => {
   if (ui.button("Scatter 5")) noctis.run("scatter 5");
   const on = ui.checkbox("Enabled", true);
   const n = ui.slider("Count", 5, 1, 20);
-  ui.label(`enabled ${on}, count ${n}`);
+  const shape = ui.select("Shape", 0, ["cone", "box", "sphere"]);
+  ui.label(`enabled ${on}, count ${n}, shape ${shape}`);
 });
 noctis.ui.menu("Tools", "Scatter", () => noctis.run("scatter 5"));
 ```
@@ -271,13 +272,16 @@ noctis.ui.menu("Tools", "Scatter", () => noctis.run("scatter 5"));
 places in a dock, through a status-bar button; it opens in the bottom dock when it
 first appears. Its stable view id is `"{extension_id}:{title}"`, so two extensions
 may share a title, and a title change is a new panel. `draw` receives a recording
-`ui` handle — `text`/`label`, `heading`, `separator`, `button`, `checkbox` and
-`slider`. `ui.button(label)` is live: it returns true the frame after the click.
-`ui.checkbox(label, value)` and `ui.slider(label, value, min, max)` are stateful:
-the host renders them and the next frame returns the value the user set, falling
-back to the passed default. `noctis.ui.menu(menu, label, run)` is a one-button
-panel. Panels are windowed-only; a headless run never calls `draw`. The WASM
-equivalent is the `ui_panel` import (§ WASM panels). The dock layout is designed in
+`ui` handle — `text`/`label`, `heading`, `separator`, `button`, `checkbox`,
+`slider` and `select`. `ui.button(label)` is live: it returns true the frame after
+the click. `ui.checkbox(label, value)`, `ui.slider(label, value, min, max)` and
+`ui.select(label, index, options)` are stateful: the host renders them and the next
+frame returns the value the user set, falling back to the passed default — a menu
+returns the chosen option's *index*, and falls back to the first option when the
+index it is given is out of the list's range (a shorter list than the one that
+produced it). `noctis.ui.menu(menu, label, run)` is a one-button panel. Panels are
+windowed-only; a headless run never calls `draw`. The WASM equivalent is the
+`ui_panel` import (§ WASM panels). The dock layout is designed in
 [`.notes/editor-ui.md`](editor-ui.md).
 
 ### The viewport overlay (windowed)
@@ -366,7 +370,7 @@ once per frame, and reads the results out of the same memory.
 | `run` | `(ptr, len)` | Dispatch a verb line. |
 | `ui_panel` | `(ptr, len) -> i32` | Register a dockable panel titled by those bytes; returns its module-local id (idempotent by title). Its view id is `"{extension_id}:{title}"`. |
 | `ui_activated` | `(panel, widget) -> i32` | Whether that button was clicked this frame. |
-| `ui_value` | `(panel, widget) -> f64` | The value a checkbox/slider was set to, or NaN when none. |
+| `ui_value` | `(panel, widget) -> f64` | The value a checkbox/slider/menu was set to, or NaN when none. |
 
 **Exports**: `noctis_abi() -> i32`, `noctis_init() -> i32`,
 `noctis_update(ptr, count, dt) -> i32` (all three are required). A module that
@@ -389,8 +393,8 @@ host calls `noctis_alloc(cap)` for a buffer, then `noctis_ui(panel, ptr, cap)`,
 which writes the ops into that buffer and returns their byte length (`-2` when
 they do not fit, so the host retries with a larger buffer). The host parses the
 ops exactly as it parses a JavaScript panel's. Interaction state is pulled back
-through `ui_activated` and `ui_value`, so a button or slider reads its result the
-way the JS `ui` handle does. `ui_panel` ids are module-local; the host lays a
+through `ui_activated` and `ui_value`, so a button, slider or menu reads its result
+the way the JS `ui` handle does. `ui_panel` ids are module-local; the host lays a
 module's panels out contiguously after the JavaScript ones and offsets the
 arguments, so the ids the window uses are the frame's global ones.
 
@@ -487,7 +491,7 @@ the loader reads through; relative-path validation and the archive caps live her
   same ordered bridge as the JS host. It also draws WASM panels (`ui_panel` +
   `noctis_alloc`/`noctis_ui` + `ui_activated`/`ui_value`).
 - `editor::window` — the windowed UI: panels rendered as egui windows (buttons,
-  checkboxes and sliders are live), the `"update"` hook each frame, a console
+  checkboxes, sliders and menus are live), the `"update"` hook each frame, a console
   with a scrollback, an Extensions screen whose toggles write the config, and the
   extensions' **viewport overlays** painted in the central panel (a `captured`
   overlay also suppresses the editor's own camera navigation and picking).

@@ -737,6 +737,26 @@ impl EditorDriver {
                         values.push(((panel_index, *index), state));
                     }
                 }
+                Widget::Select {
+                    index,
+                    label,
+                    value,
+                    options,
+                } => {
+                    let selected = (*value as usize).min(options.len().saturating_sub(1));
+                    let text = options.get(selected).map(String::as_str).unwrap_or("—");
+                    let mut chosen = selected;
+                    egui::ComboBox::from_label(label)
+                        .selected_text(text)
+                        .show_ui(ui, |ui| {
+                            for (choice, option) in options.iter().enumerate() {
+                                ui.selectable_value(&mut chosen, choice, option);
+                            }
+                        });
+                    if chosen != selected {
+                        values.push(((panel_index, *index), chosen as f64));
+                    }
+                }
             }
         }
         self.pending_interactions.activations.extend(clicks);
@@ -3064,7 +3084,15 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("extension.js"),
-            r#"noctis.ui.panel("PanelTools", function (ui) { ui.label("panel-body-sentinel"); });"#,
+            r#"noctis.ui.panel("PanelTools", function (ui) {
+              ui.heading("PanelHeading");
+              ui.label("panel-body-sentinel");
+              ui.checkbox("PanelToggle", true);
+              ui.slider("PanelSlider", 3, 0, 10);
+              ui.select("PanelMenu", 1, ["alpha", "beta", "gamma"]);
+              ui.separator();
+            });
+            "#,
         )
         .unwrap();
 
@@ -3089,6 +3117,20 @@ mod tests {
                 .any(|text| text.contains("panel-body-sentinel")),
             "the extension panel drew in its dock: {texts:?}"
         );
+        // Every widget kind the panel can record draws: the label, the checkbox
+        // and slider labels, and the menu, which shows the option it holds.
+        for drawn in [
+            "PanelHeading",
+            "PanelToggle",
+            "PanelSlider",
+            "PanelMenu",
+            "beta",
+        ] {
+            assert!(
+                texts.iter().any(|text| text.contains(drawn)),
+                "{drawn} drew in the panel: {texts:?}"
+            );
+        }
         // It opened in the bottom dock as an `Extension` view.
         assert_eq!(driver.layout.bottom.open.len(), 1);
         assert!(matches!(
