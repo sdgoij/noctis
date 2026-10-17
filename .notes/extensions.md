@@ -255,6 +255,39 @@ when no project is open (`write` then fails and logs why). A write is
 **immediate**: it is not an `EditorCommand`, so it is not undoable and not part of
 an edit batch.
 
+### Project functions
+
+```js
+noctis.calls()                 // the names the project's plugin exposes
+noctis.call(name, args)        // the function's own text, or undefined (and a log)
+```
+
+A project whose plugin has work only Rust can do well — the level editor's
+reachability search, which has to run the *game's* integrator — returns a table
+from `Plugin::extension_functions`:
+
+```rust
+// ecs::app
+pub type ExtensionFn = fn(&str) -> Result<String, String>;
+
+fn extension_functions(&self) -> &'static [(&'static str, ExtensionFn)] { &[] }
+```
+
+The argument and the result are opaque to the engine: both are JSON text (or any
+text the extension chooses), so the contract is the project's own. `args` is
+`JSON.stringify`-ed by the bootstrap, so the function receives `"null"` for no
+argument. A missing name, or a function that returns `Err`, is a log line and
+`undefined` — never a thrown exception — and `calls()` lets an extension
+feature-detect without provoking one. The table is a slice of plain function
+pointers, so it is `'static` and cheap to hold; a project that needs state across
+calls keeps it in a `static` (the level editor's validator uses a
+`Mutex<Option<Job>>` to run its search on a worker thread with `start`/`poll`).
+
+Whether the project's functions are available depends on the binary the editor is
+running as: the per-project tool links the plugin, so `noctis editor --project …`
+has them, while the stock `noctis` binary and the WASM extension host do not. An
+extension is expected to check `noctis.calls()` and fall back.
+
 ### UI (windowed)
 
 ```js

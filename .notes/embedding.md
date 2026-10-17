@@ -87,6 +87,11 @@ impl Plugin for MyGame {
             }
         });
     }
+    // Optional: functions the project's editor extensions may call by name
+    // (`noctis.call`); see `.notes/extensions.md` § Project functions.
+    fn extension_functions(&self) -> &'static [(&'static str, ExtensionFn)] {
+        &[("mygame.simulate", simulate)]
+    }
 }
 ```
 

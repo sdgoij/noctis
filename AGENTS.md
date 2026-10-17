@@ -231,8 +231,12 @@ needed.
   root holds a `Cargo.toml` — the plugin crate itself, or a virtual workspace that
   names it as the first default member — a library crate whose type is marked
   `#[noctis::plugin]` (exporting the `noctis_plugin` symbol); there is no manifest
-  table. `noctis run`/`editor` generate a per-project **tool** under the project's
-  gitignored `.noctis/tool/` that links it and dispatches the same CLI, and
+  table. A plugin may also return named functions its editor extensions call
+  (`Plugin::extension_functions`, reached from JavaScript as `noctis.call`) — the
+  seam that lets the reverie level editor run its validator natively over the
+  game's own parser and integrator. `noctis run`/`editor` generate a per-project
+  **tool** under the project's gitignored `.noctis/tool/` that links it and
+  dispatches the same CLI, and
   `noctis build` generates a plugin-linked **client** under `.noctis/client/`
   (runtime + plugin, no editor) to ship, baking scripts in for a release build. A
   registered custom component's asset references are bundled. The `Component`

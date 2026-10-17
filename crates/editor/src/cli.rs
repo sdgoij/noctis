@@ -171,7 +171,7 @@ fn run(args: &[String], plugin: &dyn Plugin) -> Result<String, CliError> {
 
     // Extensions run after the scene and any command batch, and before `--out`,
     // so an extension's edits (`--run`, a `"ready"` hook) are saved too.
-    let _ = attach_extensions(&mut editor, &options, project.as_ref())?;
+    let _ = attach_extensions(&mut editor, &options, project.as_ref(), plugin)?;
     finalize(&mut editor, &options, project.as_mut())?;
 
     let entities = editor.list_entities();
@@ -296,8 +296,15 @@ fn attach_extensions(
     editor: &mut Editor,
     options: &Options,
     project: Option<&Project>,
+    plugin: &dyn Plugin,
 ) -> Result<Option<LoadedExtensions>, CliError> {
-    attach_extensions_with_config(editor, options, project, extensions::default_config_path())
+    attach_extensions_with_config(
+        editor,
+        options,
+        project,
+        plugin,
+        extensions::default_config_path(),
+    )
 }
 
 /// [`attach_extensions`] with an explicit config path (a seam for tests).
@@ -305,6 +312,7 @@ fn attach_extensions_with_config(
     editor: &mut Editor,
     options: &Options,
     project: Option<&Project>,
+    plugin: &dyn Plugin,
     config_path: PathBuf,
 ) -> Result<Option<LoadedExtensions>, CliError> {
     if options.no_extensions {
@@ -351,6 +359,9 @@ fn attach_extensions_with_config(
     let mut host = ExtensionHost::new().map_err(|error| {
         CliError::Message(format!("failed to start the extension host: {error}"))
     })?;
+    // The project's own Rust functions (`noctis.call`) — the validator, for a
+    // project that has one.
+    host.set_extension_functions(plugin.extension_functions());
     host.load(&loader, enabled);
     // `noctis.files` reads and writes the open project through its own store, so
     // an extension never names a path. Without a project the channel is closed.
@@ -617,7 +628,7 @@ fn run_windowed(options: &Options, plugin: &dyn Plugin) -> Result<(), CliError> 
     } else {
         resolve_scene(options, project.as_ref())
     };
-    let extensions = attach_extensions(&mut editor, options, project.as_ref())?;
+    let extensions = attach_extensions(&mut editor, options, project.as_ref(), plugin)?;
     finalize(&mut editor, options, project.as_mut())?;
     let config = window_config(project.as_ref());
 
@@ -961,7 +972,7 @@ mod tests {
             ..Options::default()
         };
         let mut editor = build_editor(&options, None, &NullPlugin).expect("build");
-        attach_extensions(&mut editor, &options, None).expect("attach");
+        attach_extensions(&mut editor, &options, None, &NullPlugin).expect("attach");
         assert!(editor.find_by_name("Made").is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -990,9 +1001,10 @@ mod tests {
             ..Options::default()
         };
         let mut editor = build_editor(&options, None, &NullPlugin).expect("build");
-        let loaded = attach_extensions_with_config(&mut editor, &options, None, config_path)
-            .expect("attach")
-            .expect("the host is kept while an extension is disabled");
+        let loaded =
+            attach_extensions_with_config(&mut editor, &options, None, &NullPlugin, config_path)
+                .expect("attach")
+                .expect("the host is kept while an extension is disabled");
         assert!(
             loaded
                 .host

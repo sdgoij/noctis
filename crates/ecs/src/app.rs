@@ -307,7 +307,24 @@ pub trait Plugin {
     fn register(&self, _components: &mut crate::reflect::ComponentRegistry) {}
     /// Add systems and resources to the app.
     fn build(&self, _app: &mut App) {}
+    /// The functions this project's editor extensions may call, by name.
+    ///
+    /// The editor exposes them to JavaScript as `noctis.call(name, args)` and
+    /// lists them with `noctis.calls()`. This is the seam for work only the
+    /// project's own Rust can do well — a level validator that reuses the game's
+    /// own parser and integrator, say — without marshalling it through a script.
+    /// A project that has none returns the default empty table.
+    fn extension_functions(&self) -> &'static [(&'static str, ExtensionFn)] {
+        &[]
+    }
 }
+
+/// A function a project's editor extensions may call by name.
+///
+/// The argument and the result are JSON text; the engine never interprets either.
+/// It is a plain function pointer so the host can hold it for the life of the
+/// process: a project that needs state across calls keeps it in a `static`.
+pub type ExtensionFn = fn(&str) -> Result<String, String>;
 
 /// The plugin for an application that has none.
 #[derive(Clone, Copy, Debug, Default)]

@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use ecs::app::ExtensionFn;
 use ecs::scene::SceneMode;
 use extensions::{Loader, MAX_ASSET_BYTES, Manifest};
 use vfs::Store;
@@ -139,6 +140,21 @@ const BOOTSTRAP: &str = r##"
       slots: function () {
         return JSON.parse(__host_file_slots(extension_id()));
       }
+    },
+    // The project's own Rust functions (`Plugin::extension_functions`), JSON text in
+    // and JSON text out. `call` returns the function's own text, or undefined (with
+    // a log line) when the project did not register that name; `calls` lets an
+    // extension feature-detect without provoking an error.
+    call: function (name, args) {
+      var reply = JSON.parse(__host_call(String(name), JSON.stringify(args === undefined ? null : args)));
+      if (!reply.ok) {
+        __host_log("call '" + name + "' failed: " + reply.error);
+        return undefined;
+      }
+      return reply.value;
+    },
+    calls: function () {
+      return JSON.parse(__host_calls());
     }
   };
   globalThis.noctis = noctis;
@@ -577,6 +593,9 @@ struct Bridge {
     /// or without a project, in which case a read is `undefined` and a write is
     /// reported as failed.
     store: Option<Box<dyn Store>>,
+    /// The project's own functions, for `noctis.call` (see
+    /// [`Plugin::extension_functions`](ecs::app::Plugin::extension_functions)).
+    functions: &'static [(&'static str, ExtensionFn)],
 }
 
 /// One extension's JavaScript realm.
@@ -652,6 +671,16 @@ impl ExtensionHost {
     /// and a write is reported as failed.
     pub fn set_project(&mut self, store: Box<dyn Store>) {
         self.bridge.borrow_mut().store = Some(store);
+    }
+
+    /// Give the host the functions the project's plugin exposes to extensions
+    /// (`Plugin::extension_functions`), reachable from JavaScript as
+    /// `noctis.call(name, args)`.
+    ///
+    /// A project without a plugin, or a plugin without functions, passes nothing —
+    /// the table is then empty and a call is reported as unknown.
+    pub fn set_extension_functions(&mut self, functions: &'static [(&'static str, ExtensionFn)]) {
+        self.bridge.borrow_mut().functions = functions;
     }
 
     /// Load every extension in `loader` for which `enabled` is true.
@@ -1202,6 +1231,59 @@ fn install(context: &mut slag::Context, bridge: Rc<RefCell<Bridge>>) -> Result<(
         }),
     )?;
 
+    // The project's own functions (`Plugin::extension_functions`). The argument and
+    // the result are opaque JSON text to the engine; the reply envelope tells the
+    // bootstrap whether the call worked, so a missing name is a log line rather
+    // than a thrown exception.
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_call",
+        2,
+        Box::new(move |call| {
+            let name = arg_string(call, 0).unwrap_or_default();
+            let args = arg_string(call, 1).unwrap_or_default();
+            let function = b
+                .borrow()
+                .functions
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|(_, function)| *function);
+            let reply = match function {
+                Some(function) => match function(&args) {
+                    Ok(value) => serde_json::json!({ "ok": true, "value": value }),
+                    Err(error) => serde_json::json!({ "ok": false, "error": error }),
+                },
+                None => {
+                    let names: Vec<&str> =
+                        b.borrow().functions.iter().map(|(name, _)| *name).collect();
+                    let have = if names.is_empty() {
+                        "none".to_string()
+                    } else {
+                        names.join(", ")
+                    };
+                    serde_json::json!({
+                        "ok": false,
+                        "error": format!("no extension function '{name}' (have: {have})"),
+                    })
+                }
+            };
+            Ok(slag::JsValue::string(reply.to_string()))
+        }),
+    )?;
+
+    let b = Rc::clone(&bridge);
+    register(
+        context,
+        "__host_calls",
+        0,
+        Box::new(move |_call| {
+            let names: Vec<&str> = b.borrow().functions.iter().map(|(name, _)| *name).collect();
+            let text = serde_json::to_string(&names).unwrap_or_else(|_| "[]".into());
+            Ok(slag::JsValue::string(text))
+        }),
+    )?;
+
     Ok(())
 }
 
@@ -1423,6 +1505,66 @@ mod tests {
         let reply = host.dispatch(&mut editor, "box Thing").expect("dispatch");
         assert_eq!(reply, "ok box Thing");
         assert!(editor.find_by_name("Thing").is_some());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Two functions a test project exposes (`Plugin::extension_functions`).
+    fn echo_function(args: &str) -> Result<String, String> {
+        Ok(format!("echo:{args}"))
+    }
+
+    fn refuse_function(_args: &str) -> Result<String, String> {
+        Err("nope".to_string())
+    }
+
+    const TEST_FUNCTIONS: &[(&str, ExtensionFn)] = &[
+        ("test.echo", echo_function),
+        ("test.refuse", refuse_function),
+    ];
+
+    /// A project's Rust function is reachable from JavaScript, and a call it cannot
+    /// answer is a log line rather than a thrown exception.
+    #[test]
+    fn a_plugin_function_is_callable_from_an_extension() {
+        let root = temp_dir("plugin-call");
+        write_extension(
+            &root,
+            "caller",
+            "com.example.caller",
+            r#"
+            noctis.command("call", function () {
+              var names = noctis.calls();
+              var echoed = noctis.call("test.echo", { n: 1 });
+              var missing = noctis.call("test.none", null);
+              var refused = noctis.call("test.refuse", null);
+              return "ok " + names.join(",") + " | " + echoed + " | " +
+                String(missing) + " | " + String(refused);
+            });
+            "#,
+        );
+        let loader = Loader::discover(std::slice::from_ref(&root));
+        let mut host = ExtensionHost::new().expect("host");
+        host.set_extension_functions(TEST_FUNCTIONS);
+        host.load(&loader, |_| true);
+        let mut editor = Editor::new();
+
+        let reply = host.dispatch(&mut editor, "call").expect("dispatch");
+        assert!(reply.contains("test.echo,test.refuse"), "{reply}");
+        assert!(reply.contains("echo:{\"n\":1}"), "{reply}");
+        assert!(
+            reply.contains("undefined | undefined"),
+            "a missing or failing call is undefined: {reply}"
+        );
+        let logs = host.take_logs();
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("no extension function 'test.none'")),
+            "a missing name says so: {logs:?}"
+        );
+        assert!(
+            logs.iter().any(|line| line.contains("nope")),
+            "a refused call reports its error: {logs:?}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
