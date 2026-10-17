@@ -56,8 +56,9 @@ use crate::error::RenderError;
 use crate::gizmo::{GizmoGeometry, GizmoVertex};
 use crate::gpu::ibl_gpu::IblGpu;
 use crate::gpu::pipelines::{
-    BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, SkinBindings, create_layouts,
-    create_pipelines, create_present_pipeline, pick_surface_format,
+    BindGroupLayouts, FrameBindings, ObjectBindings, Pipelines, SkinBindings,
+    backend_supports_ssao, create_layouts, create_pipelines, create_present_pipeline,
+    pick_surface_format,
 };
 use crate::gpu::reflection::Reflection;
 use crate::gpu::resources::ResourceCache;
@@ -349,11 +350,23 @@ async fn open_device(
         .request_adapter(&options)
         .await
         .map_err(|_| RenderError::NoAdapter)?;
+    // Ask for what the adapter actually supports. The default limits assume
+    // capabilities a WebGL2 device does not have (storage buffers, for one), so
+    // requesting them would fail device creation on the browser fallback.
+    let info = adapter.get_info();
+    log::info!(
+        "render: adapter \"{}\" (backend {:?})",
+        info.name,
+        info.backend
+    );
+    if info.backend == wgpu::Backend::Gl {
+        log::info!("render: GL backend (WebGL2 in the browser); SSAO is disabled");
+    }
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("noctis.render.device"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_limits: adapter.limits(),
             ..Default::default()
         })
         .await
@@ -369,9 +382,14 @@ impl Renderer {
     /// startup on its event loop. Returns [`RenderError::NoAdapter`] when no
     /// graphics adapter is available.
     pub async fn headless_async(config: RendererConfig) -> Result<Renderer, RenderError> {
-        let instance = wgpu::Instance::default();
-        let (_adapter, device, queue) = open_device(&instance, None).await?;
-        Ok(Self::build_core(device, queue, config))
+        let instance = Self::create_instance_async().await;
+        let (adapter, device, queue) = open_device(&instance, None).await?;
+        Ok(Self::build_core(
+            device,
+            queue,
+            config,
+            backend_supports_ssao(adapter.get_info().backend),
+        ))
     }
 
     /// Create a headless renderer rendering into offscreen textures.
@@ -384,7 +402,15 @@ impl Renderer {
 
     /// Shared GPU-resource construction, used by both the headless and the
     /// surface renderer. A surface is attached afterwards, if any.
-    fn build_core(device: wgpu::Device, queue: wgpu::Queue, config: RendererConfig) -> Renderer {
+    ///
+    /// `ssao` comes from [`backend_supports_ssao`]: a backend that cannot compile
+    /// the SSAO shader simply renders without the pass.
+    fn build_core(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: RendererConfig,
+        ssao: bool,
+    ) -> Renderer {
         let mut config = config;
         config.sample_count = pick_sample_count(config.sample_count, &device);
 
@@ -392,7 +418,7 @@ impl Renderer {
             RenderTargets::create(&device, config.width, config.height, config.sample_count);
         let shadow = ShadowResources::new(&device, 2048);
         let layouts = create_layouts(&device);
-        let pipelines = create_pipelines(&device, &layouts, config.sample_count);
+        let pipelines = create_pipelines(&device, &layouts, config.sample_count, ssao);
         let ibl = IblGpu::create(&device, &queue, &IblData::neutral());
         let reflection = Reflection::new(
             &device,
@@ -628,6 +654,18 @@ impl Renderer {
     /// Set the SSAO strength in `[0, 1]`.
     pub fn set_ssao_strength(&mut self, strength: f32) {
         self.ssao_strength = strength.clamp(0.0, 1.0);
+    }
+
+    /// The SSAO strength the shaders should apply.
+    ///
+    /// Zero when the backend has no SSAO pipeline (GL/WebGL2), so indirect light
+    /// is used unoccluded rather than sampling a target nothing wrote.
+    fn effective_ssao_strength(&self) -> f32 {
+        if self.pipelines.ssao.is_some() {
+            self.ssao_strength
+        } else {
+            0.0
+        }
     }
 
     /// Set the color the HDR target is cleared to (linear RGBA).
@@ -1041,7 +1079,7 @@ impl Renderer {
             camera_pos: view.eye4(),
             ambient: self.ambient,
             resolution: [width, height, 1.0 / width, 1.0 / height],
-            params: [self.ssao_strength, 0.0, 0.0, 0.0],
+            params: [self.effective_ssao_strength(), 0.0, 0.0, 0.0],
         };
         self.frame.write(
             &self.queue,
@@ -1211,7 +1249,7 @@ impl Renderer {
                     1.0 / reflected_width as f32,
                     1.0 / reflected_height as f32,
                 ],
-                params: [self.ssao_strength, 0.0, 0.0, 0.0],
+                params: [self.effective_ssao_strength(), 0.0, 0.0, 0.0],
             };
             self.reflection.write(
                 &self.queue,
@@ -1326,8 +1364,10 @@ impl Renderer {
             }
         }
 
-        // 4. SSAO.
-        {
+        // 4. SSAO. The GL backend cannot compile the pass (see
+        // `backend_supports_ssao`); the frame's SSAO strength is zero there, so
+        // the PBR shader leaves indirect light unoccluded.
+        if let Some(pipeline) = &self.pipelines.ssao {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ssao.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1344,7 +1384,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.ssao);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &self.ssao_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -1675,8 +1715,29 @@ impl Renderer {
     }
 
     /// Create a wgpu instance to build a surface from, for [`Renderer::for_surface`].
+    ///
+    /// Native-only: on the web the backend has to be probed asynchronously, so a
+    /// browser host uses [`Renderer::create_instance_async`] instead.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn create_instance() -> wgpu::Instance {
         wgpu::Instance::default()
+    }
+
+    /// Create a wgpu instance that prefers WebGPU and falls back to WebGL2 in a
+    /// browser where WebGPU is unavailable.
+    ///
+    /// Whether a browser has a usable WebGPU adapter has to be decided *before*
+    /// the instance is created: wgpu's instance drives either WebGPU or its GL
+    /// backend, and a canvas can only ever hold one context type. This awaits
+    /// that probe — navigator.gpu's presence is not enough, because a browser may
+    /// expose it and still fail to produce an adapter — and then builds the
+    /// instance from the answer. On native it is equivalent to
+    /// [`Renderer::create_instance`].
+    pub async fn create_instance_async() -> wgpu::Instance {
+        wgpu::util::new_instance_with_webgpu_detection(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+        )
+        .await
     }
 
     /// Create a renderer that presents to a window `surface`, awaiting adapter
@@ -1695,7 +1756,12 @@ impl Renderer {
         let format = pick_surface_format(&caps.formats)
             .ok_or_else(|| RenderError::Unsupported("surface advertises no formats".into()))?;
 
-        let mut renderer = Self::build_core(device, queue, config);
+        let mut renderer = Self::build_core(
+            device,
+            queue,
+            config,
+            backend_supports_ssao(adapter.get_info().backend),
+        );
         renderer.attach_surface(surface, &caps, format)?;
         Ok(renderer)
     }
@@ -3689,6 +3755,22 @@ mod tests {
         assert_eq!(choose_sample_count(4, |n| n == 1), 1);
         // Only the format's own answer decides; the policy never goes up.
         assert_eq!(choose_sample_count(4, |n| n != 2), 4);
+    }
+
+    #[test]
+    fn the_gl_backend_needs_no_ssao_pipeline() {
+        // The SSAO shader loads raw depth with `textureLoad`, which naga cannot
+        // translate to GLSL; the GL backend (and so the WebGL2 browser fallback)
+        // skips the pass instead. Every other backend compiles it.
+        assert!(!backend_supports_ssao(wgpu::Backend::Gl));
+        for backend in [
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::Metal,
+            wgpu::Backend::Dx12,
+            wgpu::Backend::BrowserWebGpu,
+        ] {
+            assert!(backend_supports_ssao(backend), "{backend:?}");
+        }
     }
 
     /// A white sphere on a black background: a bad case for aliasing, since the

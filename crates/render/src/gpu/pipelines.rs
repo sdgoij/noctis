@@ -203,9 +203,11 @@ pub fn create_layouts(device: &wgpu::Device) -> BindGroupLayouts {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX,
             ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                // A uniform block, not a storage buffer: WebGL2 (the browser
+                // fallback) has no storage buffers.
+                ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
-                min_binding_size: None,
+                min_binding_size: NonZeroU64::new(u64::from(MAX_SKIN_MATRICES) * 64),
             },
             count: None,
         }],
@@ -262,7 +264,10 @@ pub struct Pipelines {
     /// Depth-only for a skinned mesh.
     pub depth_skinned: wgpu::RenderPipeline,
     /// Ambient occlusion resolve.
-    pub ssao: wgpu::RenderPipeline,
+    ///
+    /// `None` on a backend whose shader language cannot express the pass (GL —
+    /// the WebGL2 browser fallback); see [`backend_supports_ssao`].
+    pub ssao: Option<wgpu::RenderPipeline>,
     /// Opaque PBR.
     pub pbr_opaque: wgpu::RenderPipeline,
     /// Alpha-blended PBR.
@@ -417,6 +422,17 @@ fn pipeline_layout(
     })
 }
 
+/// Whether `backend`'s shader language can express the SSAO pass.
+///
+/// The SSAO shader reads raw depth with `textureLoad`, which naga's GLSL backend
+/// cannot lower ("WGSL `textureLoad` from depth textures is not supported in
+/// GLSL"); GL/WebGL2 offers no other way to read a depth texture without a
+/// comparison sampler. The GL backend — including the browser's WebGL2 fallback
+/// — therefore renders without screen-space ambient occlusion.
+pub fn backend_supports_ssao(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::Gl
+}
+
 /// Create all render pipelines for a frame rendered at `sample_count` samples
 /// per pixel (`1` = no MSAA).
 ///
@@ -425,10 +441,15 @@ fn pipeline_layout(
 /// term, the LDR image). The pipelines that draw into the multisampled HDR target
 /// — opaque, transparent, gizmo and both text pipelines — declare the same
 /// sample count as that target, or the device rejects the pipeline/pass pairing.
+///
+/// `ssao` is false on a backend that cannot compile the SSAO shader (see
+/// [`backend_supports_ssao`]); the pipeline is then absent and the renderer
+/// skips the pass.
 pub fn create_pipelines(
     device: &wgpu::Device,
     layouts: &BindGroupLayouts,
     sample_count: u32,
+    ssao: bool,
 ) -> Pipelines {
     let samples = sample_count.max(1);
     let multisample = wgpu::MultisampleState {
@@ -437,7 +458,6 @@ pub fn create_pipelines(
     };
     let depth_shader =
         device.create_shader_module(wgpu::include_wgsl!("../shaders/depth_only.wgsl"));
-    let ssao_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/ssao.wgsl"));
     let pbr_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/pbr.wgsl"));
     let gizmo_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/gizmo.wgsl"));
     let tonemap_shader =
@@ -507,7 +527,8 @@ pub fn create_pipelines(
         })
     };
 
-    let ssao = {
+    let ssao = ssao.then(|| {
+        let ssao_shader = device.create_shader_module(wgpu::include_wgsl!("../shaders/ssao.wgsl"));
         let layout = pipeline_layout(device, "ssao.layout", &[&layouts.ssao]);
         let fragment = wgpu::FragmentState {
             module: &ssao_shader,
@@ -539,7 +560,7 @@ pub fn create_pipelines(
             multiview_mask: None,
             cache: None,
         })
-    };
+    });
 
     let make_pbr =
         |label: &str, blend: Option<wgpu::BlendState>, depth_write: bool, skinned: bool| {
@@ -1225,11 +1246,12 @@ fn make_object_bind_group(
 /// The largest joint count one skinned draw may have (one slot of matrices).
 pub const MAX_SKIN_MATRICES: u32 = 128;
 
-/// A growable storage buffer of joint matrices, one slot per skinned draw, bound
+/// A growable uniform buffer of joint matrices, one slot per skinned draw, bound
 /// with a dynamic offset.
 ///
 /// Each skinned mesh uploads its joints' skin matrices into one slot and binds the
-/// buffer at that slot's offset, so a herd of goats shares one buffer.
+/// buffer at that slot's offset, so a herd of goats shares one buffer. It is a
+/// uniform block (not a storage buffer) so the skinned path also runs on WebGL2.
 #[derive(Debug)]
 pub struct SkinBindings {
     buffer: wgpu::Buffer,
@@ -1246,13 +1268,13 @@ impl SkinBindings {
         layout: &wgpu::BindGroupLayout,
         capacity: u32,
     ) -> SkinBindings {
-        let alignment = device.limits().min_storage_buffer_offset_alignment.max(1);
+        let alignment = device.limits().min_uniform_buffer_offset_alignment.max(1);
         let stride = align_up(MAX_SKIN_MATRICES * 64, alignment);
         let capacity = capacity.max(1);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("skin.buffer"),
             size: u64::from(stride) * u64::from(capacity),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group =
@@ -1275,7 +1297,7 @@ impl SkinBindings {
         self.buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("skin.buffer"),
             size: u64::from(self.stride) * u64::from(new_capacity),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         self.bind_group = make_skin_bind_group(

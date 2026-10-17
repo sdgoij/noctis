@@ -18,3 +18,16 @@ pollster.workspace = true
 ab_glyph.workspace = true
 log.workspace = true
 half = { version = "2", features = ["bytemuck"] }
+
+# The browser uses WebGPU where it is available and falls back to WebGL2
+# (`.notes/web.md`). `webgl` enables wgpu's GLES backend on `wasm32`, where it
+# renders through a canvas's WebGL2 context. Native builds keep their existing
+# backends and pay nothing for the fallback.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgl"] }
+
+# `webgl2_shaders` translates every shader to GLSL ES 3.00, the language a
+# WebGL2 context compiles, so a shader the browser cannot receive fails here
+# rather than in a user's browser.
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }

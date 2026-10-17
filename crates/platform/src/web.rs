@@ -101,7 +101,7 @@ async fn start<D: AppDriver + 'static>(
     let window = web_sys::window().ok_or_else(|| host_err("no window"))?;
     let canvas = canvas(&window, &config)?;
 
-    let instance = Renderer::create_instance();
+    let instance = Renderer::create_instance_async().await;
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
         .map_err(|error| host_err(format!("failed to create the surface: {error}")))?;

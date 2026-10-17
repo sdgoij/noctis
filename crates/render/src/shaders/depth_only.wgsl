@@ -20,8 +20,10 @@ struct ObjectUniform {
 @group(0) @binding(0) var<uniform> view: ViewUniform;
 @group(1) @binding(0) var<uniform> object: ObjectUniform;
 // The joint matrices of a skinned draw, bound with a dynamic offset (group 2 in
-// this pass, where the PBR pass has it at group 3).
-@group(2) @binding(0) var<storage, read> skin: array<mat4x4<f32>>;
+// this pass, where the PBR pass has it at group 3). A uniform array rather than
+// a storage buffer because WebGL2, the browser fallback, has no storage buffers.
+const MAX_SKIN_MATRICES: u32 = 128u;
+@group(2) @binding(0) var<uniform> skin: array<mat4x4<f32>, MAX_SKIN_MATRICES>;
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {

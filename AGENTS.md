@@ -43,9 +43,9 @@ Rust are shipped (it extends the `ecs` core contract — a component registry �
 `.notes/core-api.md` records); script reflection is not yet built.
 
 Running the engine in a browser (WebAssembly) — the generic game client first, a
-`vfs` `Store` for files, a `platform-web` host, WebGPU-only rendering and
-JS-only scripting — is designed in [`.notes/web.md`](.notes/web.md). **Nothing is
-built yet.**
+`vfs` `Store` for files, a `platform-web` host, WebGPU rendering with a WebGL2
+fallback, and JS-only scripting — is designed in [`.notes/web.md`](.notes/web.md).
+The client and editor entries are shipped; Rust plugins stay native.
 
 The editor's windowed UI — a custom title bar, three docks (left, right, bottom)
 around a central viewport, and a status bar that opens and closes dockable views
@@ -138,7 +138,12 @@ needed.
   cannot sample a multisampled depth texture, so the single-sampled camera depth
   prepass SSAO reads cannot be the multisampled depth the forward passes write;
   because SSAO is then that prepass's only reader, under MSAA it renders at half
-  resolution. IBL is precomputed on the CPU at load time
+  resolution. **The browser build prefers WebGPU and falls back to WebGL2**
+  (`.notes/web.md`): the GL backend has no storage buffers (skinned meshes use a
+  uniform block for joints) and cannot compile the SSAO shader's raw-depth
+  `textureLoad`, so SSAO is off there (`backend_supports_ssao`), and the device
+  requests the adapter's limits rather than `Limits::default()`. IBL is
+  precomputed on the CPU at load time
   from the `[render] environment` a project names (a `.hdr` equirectangular map
   decoded into the `hdr` store) — there is no GPU precompute, no `.exr` decode,
   and no live re-bake, and an unset environment falls back to a neutral (fully

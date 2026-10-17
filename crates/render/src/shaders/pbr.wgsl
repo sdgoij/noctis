@@ -70,7 +70,11 @@ struct ObjectUniform {
 // The joint matrices for a skinned draw, one per joint of its skin. Bound with a
 // dynamic offset so several skinned meshes share the buffer; only `vs_skinned`
 // reads it, so an unskinned pipeline need not bind the group.
-@group(3) @binding(0) var<storage, read> skin: array<mat4x4<f32>>;
+//
+// A uniform array rather than a storage buffer: WebGL2, the browser fallback,
+// has no storage buffers. The size is `gpu::pipelines::MAX_SKIN_MATRICES`.
+const MAX_SKIN_MATRICES: u32 = 128u;
+@group(3) @binding(0) var<uniform> skin: array<mat4x4<f32>, MAX_SKIN_MATRICES>;
 
 @group(2) @binding(0) var base_color_tex: texture_2d<f32>;
 @group(2) @binding(1) var normal_tex: texture_2d<f32>;

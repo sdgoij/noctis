@@ -1,9 +1,10 @@
 # Noctis in the browser (WebAssembly)
 
 > **Status:** the design and contract for a browser target, now largely
-> **shipped** — a generic wasm client runs a project bundle on a WebGPU canvas.
-> This document records the decisions, the seams, and the phasing; update it
-> deliberately when the design changes, as with
+> **shipped** — a generic wasm client runs a project bundle on a WebGPU canvas,
+> falling back to WebGL2 where WebGPU is unavailable (the common case on Linux
+> browsers). This document records the decisions, the seams, and the phasing;
+> update it deliberately when the design changes, as with
 > [`.notes/project.md`](project.md) and [`.notes/extensions.md`](extensions.md).
 >
 > **Built so far:** `crates/vfs` exists — the `Store` trait with `DirStore`,
@@ -55,7 +56,7 @@ Two things make this tractable rather than a rewrite:
   `Source` (`Dir | Zip`) is already "read a tree from a directory *or* an
   in-memory archive" — exactly what a browser project needs.
 
-Nothing in this document is implemented; it is the plan and the contract.
+The phasing section at the end records what remains.
 
 ## Decisions
 
@@ -64,9 +65,15 @@ Nothing in this document is implemented; it is the plan and the contract.
    bundle — is the first target. It is a fraction of the surface (no outliner,
    inspector, gizmos or extension editing) and delivers the headline "play my
    game in the browser". The browser **editor** reuses the same web host.
-2. **WebGPU only, for now.** The renderer targets `wgpu`'s WebGPU backend. The
-   WebGL2 fallback stays *open* — behind `wgpu`'s `webgl` feature and a renderer
-   feature flag — but is not built until WebGPU reach proves insufficient.
+2. **WebGPU first, WebGL2 fallback.** The renderer prefers `wgpu`'s WebGPU
+   backend and falls back to its GLES backend on WebGL2 where WebGPU is
+   unavailable — the common case on Linux browsers, where WebGPU is still
+   behind a feature flag. The choice has to be made *before* the instance is
+   created (`wgpu::util::new_instance_with_webgpu_detection`), because an
+   instance drives one backend and a canvas can only ever hold one context
+   type; and because a browser can expose `navigator.gpu` yet fail to produce an
+   adapter, presence alone is not the test. The fallback is the same renderer,
+   with the capability differences listed below.
 3. **`noctis build` stays native; the browser only *runs*.** A project is compiled
    and packed by the native tool into a **bundle**; the browser fetches and runs
    the bundle. We do not run cargo (or any compiler) in the browser.
@@ -95,7 +102,7 @@ Nothing in this document is implemented; it is the plan and the contract.
 | --- | --- | --- |
 | Core sim | `math`, `ecs`, `physics` | **Clean.** No fs/thread/net; `rapier3d` has real `wasm32` builds. |
 | Asset decode | `render` (CPU side), `project` (parse) | **Clean if fed bytes.** `image`/`gltf`/`ab_glyph` and `toml` are pure Rust. |
-| GPU | `render` | wgpu has a WebGPU backend, and device init is now `await`-able: `Renderer::headless_async`/`for_surface_async` wrap the one `open_device` await point, and the native `headless`/`for_surface` block on them (`pollster::block_on`, `#[cfg(not(target_arch = "wasm32"))]`). |
+| GPU | `render` | wgpu's WebGPU backend, with the GLES/WebGL2 backend as a browser fallback (`wgpu`'s `webgl` feature on `wasm32`). Device init is `await`-able: `Renderer::headless_async`/`for_surface_async` wrap the one `open_device` await point, and the native `headless`/`for_surface` block on them (`pollster::block_on`, `#[cfg(not(target_arch = "wasm32"))]`). The web host awaits `Renderer::create_instance_async` so the backend is picked before the surface (and its context) exists. |
 | Window / input / UI | `platform` | A `web-sys` host (`platform/src/web.rs`, `cfg(wasm32)`) drives the same `AppDriver` seam on a `<canvas>` via `requestAnimationFrame`; the winit host is native-only. Input maps `KeyboardEvent.code` → `Key` (the same names winit uses). |
 | Scripting | `script` (Slag) | Slag builds for `wasm32-unknown-unknown` already; the **JIT is dropped** on web. |
 | Audio | `audio` (`rodio`→`cpal`) | **Shipped.** A `web-sys` WebAudio backend (`crates/audio/src/web.rs`, `cfg(wasm32)`) behind the same `AudioEngine`; it resumes the `AudioContext` on the first user gesture. Decoding from bytes is `audio::load_clip_bytes`. |
@@ -103,6 +110,33 @@ Nothing in this document is implemented; it is the plan and the contract.
 | Tooling | `noctis`, `client` build | `noctis build`/`pack`, Rust plugins and `--watch` stay native. |
 
 **One WGSL difference to watch:** the browser's WGSL validator (Tint) is stricter than naga — e.g. it rejects `dpdx`/`dpdy` after a divergent branch that naga accepts — so shaders must keep derivatives in uniform control flow (see `crates/render/src/shaders/ssao.wgsl`, where the position gradient is taken above the background early-out).
+
+**WebGL2 capability differences.** The fallback runs the same renderer, so a
+limited backend capability becomes a deliberately narrower feature set rather
+than a second rendering path:
+
+- **SSAO is off.** Its shader reads raw depth with `textureLoad`, which no GLSL
+  version can express without a comparison sampler (naga: "WGSL `textureLoad`
+  from depth textures is not supported in GLSL"). `backend_supports_ssao`
+  returns false for `wgpu::Backend::Gl`, so the pipeline is not created, the
+  pass is skipped, and the frame's SSAO strength is zero — indirect light is
+  simply unoccluded. Every other shader translates to GLSL ES 3.00.
+- **Skinned meshes use a uniform block, not a storage buffer** for their joint
+  matrices, because WebGL2 has no storage buffers. The block is 8 KiB (128
+  `mat4`s), inside the 16 KiB WebGL2 uniform-block minimum.
+- **The device requests `adapter.limits()`**, not `Limits::default()`: the
+  defaults assume storage buffers and limits a WebGL2 adapter does not have, so
+  requesting them would fail device creation.
+- **MSAA and formats degrade through the existing policy**: `pick_sample_count`
+  falls back to 1 when the adapter cannot sample the HDR and depth formats, and
+  the HDR target needs `EXT_color_buffer_float`, which current Linux browser
+  stacks expose.
+
+`crates/render/tests/webgl2_shaders.rs` translates every shader the GL backend
+builds to GLSL ES 3.00 on a normal host build, so a construct the browser could
+not compile fails CI instead of a user's browser. It also pins SSAO as the sole
+documented exception, so a naga upgrade that lifts the restriction prompts
+re-enabling the pass.
 
 **Verified on `wasm32-unknown-unknown`** (`cargo check -p <crate> --target wasm32-unknown-unknown`): **every crate on the client path compiles** — `math`, `ecs`, `physics`, `render`, `vfs`, `extensions`, `project`, `audio`, `platform`, `script`, `runtime`, `web`. `project`/`audio` needed `getrandom`'s `wasm_js` backend (reached via `rodio` → `rand_distr` → `rand`): `audio` enables the feature for the target and `.cargo/config.toml` selects it. `audio` uses a `web-sys` WebAudio backend (`src/web.rs`, `cfg(wasm32)`) with the rodio sink gated to native, so the web client plays once the context is resumed by a gesture. `script` drops the native-only `jit` feature on wasm, and `runtime` gates its native-only modules. `cargo build -p web --target wasm32-unknown-unknown` then links `web.wasm`, which `wasm-bindgen` turns into `web_bg.wasm` + `web.js`; `crates/web/web/index.html` hosts it. (This all became possible once Slag stopped compiling its `runtime::jit` module on 32-bit wasm — the pin is now `66078cd6`.)
 
@@ -327,14 +361,16 @@ Two viable build shapes; we prefer the first:
 Serve `noctis-web.wasm` + glue + an `index.html`; the bundle is a separate static
 `.zip`. Watch the usual wasm gotchas: `getrandom` needs its `js` feature on
 `wasm32-unknown-unknown` (check the transitive tree from `wgpu`/`rapier`/`rodio`),
-and `wgpu` should be built for `wasm32-unknown-unknown` with its default features
-(WebGPU); add its `webgl` feature only for the deferred fallback.
+and `render` enables `wgpu`'s `webgl` feature for `wasm32`, so one artifact
+carries both the WebGPU and WebGL2 backends (see the capability differences
+above).
 
 ## Non-goals
 
 - Running a Rust compiler or the Rust plugin seam in the browser.
 - `noctis build`, `--watch`, or any cargo/`std::process` step on the web.
-- WebGL2 as a first-class target (kept as an option, not built).
+- WebGL2 as a *first-class* target: it is a fallback for browsers without
+  WebGPU, with SSAO unavailable (see "WebGL2 capability differences").
 - A web-based *authoring* workflow in this phase (the editor follows the client).
 - wasm threads on the first cut (they gate on COOP/COEP hosting).
 
@@ -347,8 +383,9 @@ and `wgpu` should be built for `wasm32-unknown-unknown` with its default feature
 - **OPFS vs IndexedDB.** OPFS is the better model but newer; do we need both, or
   is IndexedDB enough to start? (Design: `Store` hides it; ship OPFS, keep IDB as
   the fallback.)
-- **WebGPU reach.** When do we pull the WebGL2 fallback in, and does the current
-  pipeline (soft shadows, SSAO, HDR) fit WebGL2's format limits? (Deferred.)
+- **WebGPU reach.** *(Resolved.)* WebGPU is still behind a feature flag on most
+  Linux browsers, so the GLES/WebGL2 fallback ships. It uses the same renderer
+  path: SSAO is off and skinned meshes use a uniform block for joints.
 - **Bundle layout.** Is `noctis.toml`-at-root enough, or does a bundle want a
   manifest that lists its parts (so a client can stream assets)? (Start with the
   plain zip.)
