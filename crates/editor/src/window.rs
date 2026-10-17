@@ -3695,6 +3695,134 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// The report a fake native validator answers with.
+    const NATIVE_REPORT: &str = r#"{"goal":true,"truncated":false,"states":42,"reached":[0,1,2,3],"coins":[],"route":{"xs":[],"ys":[]}}"#;
+
+    fn native_validate(_args: &str) -> std::result::Result<String, String> {
+        Ok(NATIVE_REPORT.to_string())
+    }
+
+    fn native_start(_args: &str) -> std::result::Result<String, String> {
+        Ok("started".to_string())
+    }
+
+    fn native_poll(_args: &str) -> std::result::Result<String, String> {
+        // The first poll is still running; the second delivers the report.
+        static POLLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return Ok(r#"{"running":true}"#.to_string());
+        }
+        Ok(format!(r#"{{"running":false,"report":{NATIVE_REPORT}}}"#))
+    }
+
+    /// The functions a project with the native validator registers.
+    const NATIVE_FUNCTIONS: &[(&str, ecs::app::ExtensionFn)] = &[
+        ("reverie.validate", native_validate),
+        ("reverie.validate.start", native_start),
+        ("reverie.poll", native_poll),
+    ];
+
+    /// With the project's native validator registered, the level editor takes its
+    /// verdict from it — the JavaScript sweep is not even started.
+    #[test]
+    fn a_native_validator_supplies_the_level_verdict() {
+        let root = extension_root("native-verdict");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.set_extension_functions(NATIVE_FUNCTIONS);
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+
+        let reply = host.dispatch(&mut editor, "level check").expect("check");
+        assert!(
+            reply.contains("over 42 states"),
+            "the verdict came from the native validator: {reply}"
+        );
+        assert!(
+            !reply.contains(" arcs"),
+            "the JavaScript sweep did not run: {reply}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The threaded path the windowed editor uses: `start` is issued when the level
+    /// changes, `poll` runs from the update hook, and the report becomes the verdict
+    /// without the JavaScript sweep ever running.
+    #[test]
+    fn a_threaded_native_validation_lands_in_the_verdict() {
+        let root = extension_root("native-thread");
+        let project_dir = root.join("project");
+        std::fs::create_dir_all(project_dir.join("levels")).unwrap();
+        std::fs::write(
+            project_dir.join("noctis.toml"),
+            "[project]\nname = \"Level Test\"\n",
+        )
+        .unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/levels/level1.txt"),
+            project_dir.join("levels/level1.txt"),
+        )
+        .unwrap();
+        let project = Project::open(&project_dir).expect("the project opens");
+        let dirs = vec![
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/reverie/extensions"),
+        ];
+        let loader = extensions::Loader::discover(&dirs);
+        let mut host = ExtensionHost::new().expect("host");
+        host.set_extension_functions(NATIVE_FUNCTIONS);
+        host.load(&loader, |_| true);
+        host.set_project(project.store().duplicate());
+        let mut editor = Editor::new();
+        host.ready(&mut editor);
+        let mut driver = EditorDriver::new(editor)
+            .with_project(Some(project))
+            .with_extensions(
+                host,
+                ExtensionConfig::default(),
+                root.join("extensions.toml"),
+                dirs,
+                Vec::new(),
+                None,
+            );
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        for _ in 0..6 {
+            driver.update(1.0 / 60.0);
+            texts = one_frame(&mut driver, &ctx);
+        }
+        // The fake report claims no coin cells, so every coin is out of reach — the
+        // JavaScript sweep finds them all, which is how this proves whose verdict it is.
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("13 coin(s) out of reach")),
+            "the polled report became the verdict: {texts:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// The level editor's music, background and size controls.
     ///
     /// The music and background are the names the game's own tables know (it

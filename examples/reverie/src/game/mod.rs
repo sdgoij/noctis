@@ -19,6 +19,10 @@ mod screen;
 mod stats;
 
 pub use input::Input;
+// The validator (see `src/validator.rs`) reuses the game's own rules, so the two
+// modules it needs are visible inside the crate.
+pub(crate) use level::{LevelDefinition, TILE_SIZE};
+pub(crate) use player::{HITBOX_HEIGHT, HITBOX_WIDTH, Player};
 
 use std::time::Duration;
 

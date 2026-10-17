@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 mod game;
+#[cfg(not(target_arch = "wasm32"))]
+mod validator;
 
 use std::time::Duration;
 
@@ -23,12 +25,33 @@ const START_LEVEL: usize = 0;
 /// The starting master volume, percent.
 const VOLUME: u8 = 100;
 
+/// The functions this project's editor extensions may call (`noctis.call`).
+///
+/// `reverie.validate` is the level editor's reachability search, run natively so
+/// it can use the game's own parser and integrator — see [`validator`]. `start` and
+/// `poll` are the same search on a worker thread, which is the one the editor uses:
+/// a couple of seconds of work off the frame rather than in it. The editor does not
+/// exist on the web, so the table is empty there (and the validator is not built).
+#[cfg(not(target_arch = "wasm32"))]
+const EXTENSION_FUNCTIONS: &[(&str, ExtensionFn)] = &[
+    ("reverie.validate", validator::validate),
+    ("reverie.validate.start", validator::start),
+    ("reverie.poll", validator::poll),
+];
+#[cfg(target_arch = "wasm32")]
+const EXTENSION_FUNCTIONS: &[(&str, ExtensionFn)] = &[];
+
 /// The project's plugin.
 #[noctis::plugin]
 #[derive(Default)]
 pub struct Reverie;
 
 impl Plugin for Reverie {
+    /// The level editor's native validator (see [`EXTENSION_FUNCTIONS`]).
+    fn extension_functions(&self) -> &'static [(&'static str, ExtensionFn)] {
+        EXTENSION_FUNCTIONS
+    }
+
     /// Install the one system that runs the game: it initialises the game on the
     /// first tick, folds the engine's input into the game's, advances it, and
     /// publishes the frame it renders.

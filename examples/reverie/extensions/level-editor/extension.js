@@ -18,18 +18,22 @@
 // The sweep is an *approximation*: it takes off from three points in a standing
 // cell and over a small set of jump holds and running speeds, and one arc holds a
 // single horizontal input from takeoff to landing, so it can miss a route that needs
-// frame-perfect timing or a mid-air reversal (a long, hand-made maze can read as
-// "no route found" when a player can still get through). Everything it *does*
-// accept is a trajectory the real game would produce, so a "playable" verdict and
-// every "unreachable coin" marker are trustworthy in that direction — and a "no
-// route found" that the sweep could not settle is checked against
-// [`coarse_estimate`], a deliberately unsound tile-level second opinion that
-// overstates what is possible. When the two disagree, the report says so instead of
-// letting the narrow model have the last word.
+// frame-perfect timing or a mid-air reversal. Everything it *does* accept is a
+// trajectory the real game would produce, so a "playable" verdict and every
+// "unreachable coin" marker are trustworthy in that direction — and a "no route
+// found" that the sweep could not settle is checked against [`coarse_estimate`], a
+// deliberately unsound tile-level second opinion that overstates what is possible.
 //
-// It is also not cheap: the editor's JavaScript engine runs the game's integrator
-// far slower than the game itself does, and a sweep of a 72x17 level simulates a
-// few thousand arcs (~200k frames). So the search is *incremental* — it is
+// When the project's plugin is loaded (it always is for this project) the sweep is
+// not used at all: the search runs in Rust, in `src/validator.rs`, and JavaScript
+// reaches it through `noctis.call("reverie.validate", ...)`. That search uses the
+// game's own parser and integrator and can express a mid-air reversal, which is
+// why `level3.txt` is playable there and not here. The JavaScript path below is
+// the fallback for a project without the plugin.
+//
+// The fallback is also not cheap: the editor's JavaScript engine runs the game's
+// integrator far slower than the game itself does, and a sweep of a 72x17 level
+// simulates a few thousand arcs (~200k frames). So the search is *incremental* — it is
 // advanced a few arcs per frame from the `"update"` hook (see `SEARCH.slice`),
 // which keeps the editor responsive while the verdict fills in — and it stops as
 // soon as the goal and every coin have been reached, which is the usual case.
@@ -1412,10 +1416,133 @@ function revalidate(level, search, change) {
 /// Run a search to completion (or `arcs` arcs), for a path with no frames to
 /// spread the work over.
 function search_eagerly(level, search, arcs) {
+  // The native search is a whole call, not a pump; it is already done or in flight.
+  if (search === null || search.native) {
+    return search;
+  }
   while (!search.done && search.spent < arcs) {
     advance_search(level, search, SEARCH.slice);
   }
   return search;
+}
+
+// ---------------------------------------------------------------------------
+// The native validator
+// ---------------------------------------------------------------------------
+
+/// The most nodes the native search may explore one call (it reports if it stops
+/// early). A node is a landing, so this is a few seconds of work at worst.
+var NATIVE_BUDGET = 40000;
+
+/// Whether the project exposes the native validator (`noctis.call`). Probed once:
+/// a project without the plugin's functions falls back to the JavaScript sweep.
+var NATIVE_AVAILABLE = null;
+
+/// The native search, filled in place.
+///
+/// Filled, not rebuilt, exactly like [`REPORT`] — a fresh map landing in a
+/// long-lived slot is what Slag's verifier reports as a write-barrier miss (see
+/// [`warm_shapes`]).
+var NATIVE_SEARCH = {
+  signature: null,
+  native: true,
+  width: 0,
+  height: 0,
+  at: [],
+  reached: [],
+  viaEntry: [],
+  viaArc: [],
+  entries: [],
+  queue: [],
+  head: 0,
+  seed: -1,
+  coins: [],
+  coinsLeft: 0,
+  goal: false,
+  goalEntry: -1,
+  goalArc: -1,
+  goalLen: 0,
+  route: null,
+  spent: 0,
+  seeded: false,
+  done: false,
+  truncated: false
+};
+
+/// Whether the project's Rust validator is reachable.
+function native_available() {
+  if (NATIVE_AVAILABLE === null) {
+    var names = typeof noctis.calls === "function" ? noctis.calls() : [];
+    NATIVE_AVAILABLE = names.indexOf("reverie.validate.start") >= 0;
+    if (NATIVE_AVAILABLE) {
+      noctis.log("reverie level: using the project's native validator");
+    }
+  }
+  return NATIVE_AVAILABLE;
+}
+
+/// Adopt a native report as the search the rest of the editor reads.
+function adopt_native(report) {
+  var level = state.level;
+  if (level === null) {
+    return;
+  }
+  var cells = level.width * level.height;
+  var search = NATIVE_SEARCH;
+  search.width = level.width;
+  search.height = level.height;
+  search.reached.length = 0;
+  search.coins.length = 0;
+  for (var i = 0; i < cells; i++) {
+    search.reached.push(0);
+    search.coins.push(0);
+  }
+  for (var r = 0; r < report.reached.length; r++) {
+    search.reached[report.reached[r]] = 1;
+  }
+  for (var c = 0; c < report.coins.length; c++) {
+    search.coins[report.coins[c]] = 1;
+  }
+  search.coinsLeft = level.coins.length;
+  for (var k = 0; k < level.coins.length; k++) {
+    var coin = level.coins[k];
+    if (search.coins[coin[1] * level.width + coin[0]] === 1) {
+      search.coinsLeft--;
+    }
+  }
+  // The route is reused in place too (see [`ROUTE`]).
+  ROUTE.xs.length = 0;
+  ROUTE.ys.length = 0;
+  var xs = report.route.xs;
+  var ys = report.route.ys;
+  for (var p = 0; p < xs.length; p++) {
+    ROUTE.xs.push(xs[p]);
+    ROUTE.ys.push(ys[p]);
+  }
+  search.route = xs.length > 0 ? ROUTE : null;
+  search.goal = report.goal === true;
+  search.truncated = report.truncated === true;
+  search.done = true;
+  search.seeded = true;
+  search.spent = report.states;
+  search.signature = state.signature;
+  state.search = search;
+}
+
+/// Run the native validator for `level` — threaded (`start`) or blocking.
+function native_validate(level, sync) {
+  var args = { level: serialize_level(level), budget: NATIVE_BUDGET };
+  state.search = null;
+  state.pending = true;
+  var reply = noctis.call(sync ? "reverie.validate" : "reverie.validate.start", args);
+  if (reply === undefined) {
+    state.pending = false;
+    return;
+  }
+  if (sync) {
+    state.pending = false;
+    adopt_native(JSON.parse(reply));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1546,6 +1673,10 @@ function coarse_note() {
   // second-guess about a level the game would refuse to load (and no spawn to
   // search from, which is itself an error).
   if (report.errors.length > 0) {
+    return null;
+  }
+  // The native search is not a narrow policy set, so it needs no second opinion.
+  if (report.search !== null && report.search.native === true) {
     return null;
   }
   var total = level.width * level.height;
@@ -1717,6 +1848,8 @@ var state = {
   level: null,
   report: null,
   search: null,
+  // A native validation is in flight (the threaded validator).
+  pending: false,
   signature: null, // the grid signature of the current grid
   dirty: false,
   // The size the panel's sliders hold, for `New level` and `Resize`, and the
@@ -1759,7 +1892,7 @@ function touch() {
 /// A grid change (see [`touch_at`]) re-validates the search in place — see
 /// [`revalidate`] — so painting does not replay the level. `force` (a load, a new
 /// level, a resize, or the panel's Recheck) restarts the sweep instead.
-function refresh_search(force) {
+function refresh_search(force, sync) {
   var level = state.level;
   if (level === null) {
     state.report = null;
@@ -1768,6 +1901,15 @@ function refresh_search(force) {
   }
   state.report = structural_report(level, state.report ? state.report.warnings : null);
   var signature = grid_signature(level);
+  // The project's native validator re-runs the whole search (it is cheap enough,
+  // and far more thorough, than a JavaScript re-derivation). `sync` is for a path
+  // with no frames to poll on — the CLI's `level check`.
+  if (native_available()) {
+    state.signature = signature;
+    CHANGE.any = false;
+    native_validate(level, sync === true);
+    return;
+  }
   var search = state.search;
   var incremental =
     !force &&
@@ -1786,11 +1928,35 @@ function refresh_search(force) {
   state.signature = signature;
 }
 
-/// Give the reachability search a slice of simulation.
+/// Give the reachability search a slice of simulation (the JavaScript sweep), or
+/// collect the native search's result.
 function pump_search(slice) {
   var level = state.level;
+  if (level === null) {
+    return;
+  }
+  if (native_available()) {
+    if (state.pending !== true) {
+      return;
+    }
+    var reply = noctis.call("reverie.poll", null);
+    if (reply === undefined) {
+      return;
+    }
+    var message = JSON.parse(reply);
+    if (message.running === true) {
+      return;
+    }
+    state.pending = false;
+    if (message.error !== undefined) {
+      noctis.log("reverie level: validation failed: " + message.error);
+      return;
+    }
+    adopt_native(message.report);
+    return;
+  }
   var search = state.search;
-  if (level === null || search === null) {
+  if (search === null) {
     return;
   }
   // An edit is re-validated when the stroke ends (`handle_pointer`); until then the
@@ -1894,8 +2060,9 @@ function search_phrase() {
     return "no spawn to search from";
   }
   var span = reached_span(search, level);
-  // The level's extent, so a sweep that only searched part of it *reads* as partial:
-  // "reached 64 of 3750 cells (x 0-29 of 0-124)" is not a proof of impossibility.
+  var native = search.native === true;
+  // The level's extent, so a search that only covered part of it *reads* as
+  // partial: "reached 64 of 3750 cells (x 0-29 of 0-124)" is not a proof.
   var where =
     "reached " +
     span.count +
@@ -1915,14 +2082,22 @@ function search_phrase() {
     (level.height - 1) +
     ") over " +
     search.spent +
-    " arcs";
+    (native ? " states" : " arcs");
   if (!search.done) {
     return "validating… " + where;
   }
   if (search.truncated) {
-    return "partial: the search hit its " + SEARCH.limit + "-arc budget — " + where;
+    return (
+      "partial: the " +
+      (native ? "native search" : "search") +
+      " hit its budget — " +
+      where
+    );
   }
   if (!search.goal) {
+    if (native) {
+      return "no route found to the goal — " + where;
+    }
     var note = coarse_note();
     return (
       "no route found to the goal (the sweep is a conservative approximation) — " +
@@ -1957,13 +2132,18 @@ function verdict_short() {
     return "partial verdict (search budget)";
   }
   if (!search.goal) {
-    // Name the coverage, not just the verdict: the sweep only searched what it
-    // reached, so a fractional "64/3750 cells" says at a glance that it is a miss,
-    // not a proof. The coarse estimate is the second opinion, when it has one.
+    // Name the coverage, not just the verdict: a fractional "64/3750 cells" says
+    // at a glance how much of the level was actually searched. The coarse estimate
+    // is the JavaScript sweep's second opinion, when it has one.
     var span = reached_span(search, level);
+    var which = search.native === true ? "native search" : "sweep";
     var noRoute =
-      "no route found (sweep reached " + span.count + "/" + level.width * level.height + " cells)";
-    if (COARSE_RESULT.signature === state.signature && COARSE_RESULT.route) {
+      "no route found (" + which + " reached " + span.count + "/" + level.width * level.height + " cells)";
+    if (
+      search.native !== true &&
+      COARSE_RESULT.signature === state.signature &&
+      COARSE_RESULT.route
+    ) {
       return noRoute + " — a coarse estimate finds one";
     }
     return noRoute;
@@ -2552,9 +2732,9 @@ noctis.command("level", function (parts) {
     return save_level();
   }
   if (arg === "check") {
-    // An explicit check earns a full sweep; a path with no frames to pump the
+    // An explicit check earns a full search; a path with no frames to pump the
     // search (the CLI) is why this runs it here rather than hinting to wait.
-    refresh_search(true);
+    refresh_search(true, true);
     search_eagerly(state.level, state.search, SEARCH.limit);
     return "ok " + status_line() + " | " + search_phrase() + unreachable_note();
   }

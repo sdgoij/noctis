@@ -75,63 +75,103 @@ drops something you placed. (`level new [<width> <height>]`,
   `#rrggbb` palette, exactly one spawn and one goal, only tile characters the
   parser knows, and a spawn or goal that is not buried in a tile. Flagged cells are
   outlined in red and the field's border turns red.
-- **Reachability** (a background sweep): it re-runs the game's own movement
-  integrator (`src/game/player.rs` — the same constants, collision resolution and
-  `1/60` step) as a search over jump arcs from the spawn, and reports whether the
-  goal and each coin can be reached. The cells it reached are tinted, the route it
-  found is drawn, and a coin it could not reach is crossed out.
+- **Reachability**: the search runs in the project's Rust — `src/validator.rs`, reached
+  from the extension as `noctis.call("reverie.validate", …)`. It reuses the game's own
+  `LevelDefinition::parse` and `Player::update`, so the editor validates the real
+  rules rather than a transcription of them, and it searches a *state space*: a node
+  is a place the player came to rest (in pixels, with the momentum it arrived with),
+  and an arc is one input program — direction, jump hold, and an optional mid-air
+  stop or reversal — simulated through the real integrator until it lands. The cells
+  the body covered are tinted, the route it found is drawn, and a coin it could not
+  reach is crossed out.
+- **Without the plugin** (the extension copied into a project that has no Rust) it
+  falls back to a JavaScript arc sweep of the same shape, which is the thing the
+  native validator replaced — see *The native validator* below for what that costs
+  and what it misses.
 - **A second opinion**, when the sweep gives up: a *deliberately unsound*,
   tile-level estimate (`coarse_estimate`) floods the tiles the body could occupy, with
   gravity and one bounded hop — no arc, no momentum, no timing. It overstates what is
   possible, so it never overrules a *playable* verdict; it only softens a *no route
   found* into "the sweep's model is too narrow", which is what it reports on
   `level3.txt` (the sweep routes 64 of 3750 cells, the estimate 2073).
-- **Incremental**: the sweep records what every arc it simulated *did* — where it
-  landed, the coins and goal it touched, and the box of tiles its body could have
-  read. An edit can only change the arcs whose box it touched (the grid is the only
-  input an arc reads), so painting re-simulates those few arcs and re-derives
-  reachability, the coins and the route from the records. A tile painted out of every
-  trajectory's way costs nothing at all; sealing the level off from the goal (which
-  *is* found, not missed) cost 122 arcs against the full sweep's 3502. The panel's
-  **Recheck reachability** and `level check` still restart the sweep from scratch —
-  the escape hatch if a re-validation ever looks wrong.
+- **Incremental** (the fallback only): the sweep records what every arc it simulated
+  *did* — where it landed, the coins and goal it touched, and the box of tiles its
+  body could have read. An edit can only change the arcs whose box it touched (the
+  grid is the only input an arc reads), so painting re-simulates those few arcs and
+  re-derives reachability, the coins and the route from the records. A tile painted
+  out of every trajectory's way costs nothing at all; sealing the level off from the
+  goal (which *is* found, not missed) cost 122 arcs against the full sweep's 3502.
+  The native validator has no incremental path — a whole search is a second or two,
+  and a new edit simply cancels the previous one — so this paragraph matters only
+  when the extension is used without the plugin.
 
 ### Limits, honestly
 
-- The sweep is a **conservative approximation**: it takes off from three points in
-  a standing cell and over a small set of jump holds and running speeds, and one arc
-  holds a single horizontal input from takeoff to landing. A route that needs
-  frame-perfect timing — or a mid-air reversal — can be missed. A verdict of
-  *playable*, and every *unreachable coin* marker, is trustworthy in that direction;
-  *no route found* is a hint, not a proof, so it reports how much of the level it
-  actually searched ("sweep reached 64/3750 cells"). The big hand-made maze of
-  `level3.txt` reads as *no route found* this way, and it is a **false negative**:
-  sampling harder does not rescue it. Measured, a maximally-sampled sweep — every
-  pixel of the body's footprint as a takeoff, every jump hold 0–26 frames, jumps
-  that start from rest, 27 x 191 = 5157 arcs per standing cell — exhausts 428,000
-  arcs (minutes in the editor's engine) and still reaches only 82 of the level's
-  3750 cells. Widening the default policy set instead is *worse*: doubling it to
-  ~2x the cost truncates `level2` against the arc budget and still does not help
-  `level3`. So the set stays small, the verdict stays honestly hedged, and the
-  coarse estimate above is what says when the model — not the level — is what gave up.
-- It is **not free, but it is paid once**: the editor's JavaScript engine runs the
-  integrator far slower than the game does, so the *first* sweep of a 72x17 level is
-  a few thousand arcs spread across frames (a couple per frame) — up to half a minute
-  of background work. Edits after that are re-validated around the change instead
-  (see *Incremental* above), so a session's cost is the first check plus a handful of
-  arcs per edit. The verdict fills in live, the editor stays responsive, the sweep
-  stops early once the goal and every coin have been reached, and it says so rather
-  than guessing if it hits its arc budget. `noctis editor --headless … --run "level check"`
-  runs a full sweep synchronously, for a script or a smoke test.
+- **The JavaScript fallback** is a **conservative approximation**, and only that: it
+  takes off from three points in a standing cell and over a small set of jump holds
+  and running speeds, and one arc holds a single horizontal input from takeoff to
+  landing. A route that needs frame-perfect timing — or a mid-air reversal — can be
+  missed. A verdict of *playable*, and every *unreachable coin* marker, is trustworthy
+  in that direction; *no route found* is a hint, not a proof, so it reports how much
+  of the level it actually searched ("sweep reached 64/3750 cells") and a coarse
+  tile-level estimate gives a second opinion. `level3.txt` is exactly the case that
+  drove the native validator: its maze needs a mid-air reversal, so the sweep read it
+  as *no route found* even after 428,000 arcs of maximally-sampled searching, while
+  the native search finds a route in ~2.8 s. **With the plugin loaded, this bullet
+  only describes the fallback.**
+- **Cost**: a native search is a second or two of a worker thread, and the frame
+  never waits for it — the verdict fills in when it lands. A level whose state space
+  is much larger than these three is bounded by the node budget, and then says
+  *partial* rather than guessing. (The fallback is slower: a few thousand arcs spread
+  two per frame, i.e. up to half a minute for a 72x17 level.)
+  `noctis editor --headless … --run "level check"` runs the blocking form
+  synchronously, for a script or a smoke test.
 - **Use `--release`** for a session in the level editor, as for the game itself
-  (`cargo run --release -- editor --project examples/reverie`). The sweep's
-  JavaScript is the whole cost, and a release tool runs it an order of magnitude
-  faster, which is what keeps a frame from hitching. `SEARCH.slice` in
-  `extension.js` is the knob if a session still hitches: it is the number of
-  trajectories simulated per frame.
+  (`cargo run --release -- editor --project examples/reverie`). The plugin tool is
+  built in debug otherwise, and the native validator is ~20x slower there (the game
+  loop too). `SEARCH.slice` in `extension.js` is the knob for the *fallback* — the
+  number of trajectories simulated per frame.
 - The game embeds `levels/*.txt` with `include_str!`, so a **save is picked up by
   the next build** of the game (written into `src/game/mod.rs`'s `LEVELS`).
   `noctis run` recompiles automatically when a level file changes.
+
+### The native validator
+
+The reachability search is the one thing the extension cannot do well in
+JavaScript, and the measurements say why. On a release build the JavaScript sweep
+runs at about **7–9k arcs/s** (a full `level1` sweep is 3502 arcs in ~0.5 s), so the
+language was not the bottleneck. Two other things were: the live panel only
+advances `SEARCH.slice` — two arcs per frame, about 120 arcs/s — so a few thousand
+arcs take up to half a minute of wall clock; and the arc model itself (one input
+held for a whole flight) cannot express a mid-air reversal.
+
+So the search lives in `src/validator.rs` now. It is a macro-action search over the
+game's own `LevelDefinition::parse` and `Player::update` — the editor validates the
+real rules, not a copy. A **node** is a place the player came to rest, in pixels and
+with the horizontal momentum it arrived with; an **arc** is one input program
+(direction, jump hold, and an optional mid-air stop or reversal) simulated through
+the real integrator until it lands. Keeping the landing position in pixels is what
+the JavaScript model lost by rounding to a tile.
+
+The extension reaches it through the engine's extension-function seam: the plugin
+returns `reverie.validate`, `reverie.validate.start` and `reverie.poll` from
+`Plugin::extension_functions` (`src/lib.rs`), and JavaScript calls them with
+`noctis.call(name, args)` / lists them with `noctis.calls()`. The editor uses the
+threaded pair — `start` hands the level to a worker and `poll` collects the report
+(it is called from the `"update"` hook) — so a couple of seconds of search never
+freezes the frame, and a new edit cancels the one before it. `level check` runs the
+blocking form, because a CLI has no frames to poll on.
+
+Measured in release: `level1` 4690 nodes / ~0.9 s, `level2` 10755 / ~1.8 s,
+`level3` 17509 / ~2.8 s. `level3` is also **playable** now — the verdict the
+JavaScript model could not reach even after 428,000 arcs — and a level sealed off by
+a full-height wall still reads as *no route found*. The node budget (`NATIVE_BUDGET`
+in the extension, `DEFAULT_BUDGET` in the validator) bounds a pathological level and
+the verdict says *partial* if it runs out.
+
+Without the plugin the extension keeps the JavaScript sweep as a fallback:
+`noctis.calls()` decides once, and the panel's **Recheck reachability** still
+restarts it.
 
 `level` in the console: `level <slot>`, `level new [<width> <height>]`,
 `level resize <width> <height>`, `level save`, `level reload`, `level check`,
